@@ -4,24 +4,32 @@ import React from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { getPresetById } from '../lib/userAvatarPresets';
-import { useUserAvatar } from '../store/userAvatarStore';
+import { parseProfileAvatar } from '../lib/profileAvatar';
+import { useProfile } from '../store/profileStore';
 
-const SIZES = { header: 70, profile: 152 } as const;
+/** `overlay` is ~20% smaller than the former header size for the global corner control. */
+const SIZES = { header: 70, overlay: 56, profile: 152 } as const;
 
 export type UserAvatarVariant = keyof typeof SIZES;
 
 type Props = {
   variant: UserAvatarVariant;
+  /** When set, render from this value (e.g. `profile.avatar`) instead of only the live store read. */
+  avatar?: string;
 };
 
-export function UserAvatar({ variant }: Props) {
-  const avatar = useUserAvatar();
+export function UserAvatar({ variant, avatar: avatarProp }: Props) {
+  const { avatar: storeAvatar } = useProfile();
+  const avatar = avatarProp ?? storeAvatar;
+  const parsed = parseProfileAvatar(avatar);
   const size = SIZES[variant];
   const radius = size / 2;
   const iconSize =
-    variant === 'header' ? Math.round(size * 0.4) : Math.round(size * 0.36);
+    variant === 'profile'
+      ? Math.round(size * 0.36)
+      : Math.round(size * 0.4);
 
-  if (avatar.mode === 'custom' && avatar.customUri) {
+  if (parsed.kind === 'custom') {
     return (
       <View
         style={[
@@ -34,7 +42,7 @@ export function UserAvatar({ variant }: Props) {
         ]}
       >
         <Image
-          source={{ uri: avatar.customUri }}
+          source={{ uri: parsed.uri }}
           style={{ width: size, height: size, borderRadius: radius }}
           contentFit="cover"
           transition={120}
@@ -43,7 +51,7 @@ export function UserAvatar({ variant }: Props) {
     );
   }
 
-  const preset = getPresetById(avatar.presetId);
+  const preset = getPresetById(parsed.id);
   return (
     <View
       style={[
@@ -57,7 +65,6 @@ export function UserAvatar({ variant }: Props) {
       ]}
     >
       <Ionicons
-        // Preset icons are validated against Ionicons at build time in presets file.
         name={preset.icon as React.ComponentProps<typeof Ionicons>['name']}
         size={iconSize}
         color="#FFFFFF"

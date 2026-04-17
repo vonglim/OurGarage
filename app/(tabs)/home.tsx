@@ -3,7 +3,6 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ui } from '@/constants/appUi';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ProfileNavButton } from '../components/ProfileNavButton';
 
 export default function Home() {
   const router = useRouter();
@@ -11,9 +10,6 @@ export default function Home() {
 
   return (
     <View style={styles.outer}>
-      <View style={[styles.topBar, { paddingTop: 8 + insets.top }]}>
-        <ProfileNavButton />
-      </View>
       <View style={[styles.container, { paddingBottom: 24 + insets.bottom }]}>
         <Text style={styles.title}>OurGarage</Text>
 
@@ -46,13 +42,6 @@ const styles = StyleSheet.create({
   outer: {
     flex: 1,
     backgroundColor: '#FFFFFF',
-  },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    paddingHorizontal: 16,
-    width: '100%',
   },
   container: {
     flex: 1,

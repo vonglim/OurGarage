@@ -22,7 +22,6 @@ import { addOffer } from '../store/offersStore';
 import { getRequests } from '../store/requestsStore';
 import { ui } from '@/constants/appUi';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ProfileNavButton } from '../components/ProfileNavButton';
 
 type SortOption = 'newest' | 'oldest' | 'distance';
 
@@ -138,11 +137,7 @@ export default function Browse() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.titleRow}>
-          <View style={styles.titleSide} />
           <Text style={styles.screenTitle}>Local Requests</Text>
-          <View style={[styles.titleSide, styles.titleSideRight]}>
-            <ProfileNavButton />
-          </View>
         </View>
 
         <Text style={styles.sortLabel}>Sort by</Text>
@@ -295,22 +290,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   content: {
-    paddingHorizontal: 24,
+    paddingLeft: 24,
+    paddingRight: 56,
   },
   titleRow: {
-    flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 20,
   },
-  titleSide: {
-    width: 44,
-  },
-  titleSideRight: {
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-  },
   screenTitle: {
-    flex: 1,
     fontSize: 28,
     fontWeight: '700',
     color: '#000',

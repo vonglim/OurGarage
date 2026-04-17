@@ -41,7 +41,6 @@ import {
 import { coordinatesFromLocationField } from '../lib/zipCoordinates';
 import { ui } from '@/constants/appUi';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ProfileNavButton } from '../components/ProfileNavButton';
 
 const whenOptions = ['Today', 'This Weekend', 'Flexible'];
 
@@ -101,11 +100,7 @@ export default function Requests() {
       keyboardShouldPersistTaps="handled"
     >
       <View style={styles.titleRow}>
-        <View style={styles.titleSide} />
         <Text style={styles.title}>Request A Tool</Text>
-        <View style={[styles.titleSide, styles.titleSideRight]}>
-          <ProfileNavButton />
-        </View>
       </View>
 
       {/* Tool Input */}
@@ -549,22 +544,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF', // White background for the full screen
   },
   scrollContent: {
-    paddingHorizontal: 24,
+    paddingLeft: 24,
+    paddingRight: 56,
   },
   titleRow: {
-    flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 30,
   },
-  titleSide: {
-    width: 44,
-  },
-  titleSideRight: {
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-  },
   title: {
-    flex: 1,
     fontSize: 28,
     fontWeight: '700',
     color: '#000',

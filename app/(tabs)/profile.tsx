@@ -1,9 +1,8 @@
-import Ionicons from '@expo/vector-icons/Ionicons';
-import * as ImagePicker from 'expo-image-picker';
+import { useFocusEffect } from '@react-navigation/native';
+import { useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import {
   Alert,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,12 +11,11 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { UserAvatar } from './components/UserAvatar';
-import { USER_AVATAR_PRESETS, type UserAvatarPreset } from './lib/userAvatarPresets';
-import {
-  setUserAvatarCustom,
-  setUserAvatarPreset,
-} from './store/userAvatarStore';
+import { UserAvatar } from '../components/UserAvatar';
+import { PresetAvatarModal } from '../components/PresetAvatarModal';
+import { formatPresetAvatar } from '../lib/profileAvatar';
+import { pickProfileImageFromLibrary } from '../lib/pickProfileImage';
+import { getProfile, updateProfile, type UserProfile } from '../store/profileStore';
 
 function placeholder(title: string) {
   return () => {
@@ -50,8 +48,17 @@ function ProfileRow({
 }
 
 export default function ProfileScreen() {
+  const router = useRouter();
   const insets = useSafeAreaInsets();
+  const [profile, setProfile] = useState<UserProfile>(() => getProfile());
   const [presetModalOpen, setPresetModalOpen] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      const data = getProfile();
+      setProfile(data);
+    }, [])
+  );
 
   const openAvatarOptions = useCallback(() => {
     Alert.alert('Profile photo', undefined, [
@@ -62,33 +69,20 @@ export default function ProfileScreen() {
       {
         text: 'Upload photo',
         onPress: () => {
-          void pickFromLibrary();
+          void (async () => {
+            const uri = await pickProfileImageFromLibrary();
+            if (uri) await updateProfile({ avatar: uri });
+          })();
         },
       },
       { text: 'Cancel', style: 'cancel' },
     ]);
   }, []);
 
-  const pickFromLibrary = async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert(
-        'Photos access',
-        'Allow photo library access in Settings to upload a profile picture.'
-      );
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.85,
-    });
-
-    if (result.canceled || !result.assets?.[0]?.uri) return;
-    await setUserAvatarCustom(result.assets[0].uri);
-  };
+  const displayName =
+    profile.name.trim().length > 0 ? profile.name.trim() : 'Your name';
+  const displayBio =
+    profile.bio.trim().length > 0 ? profile.bio.trim() : 'Add a short bio';
 
   return (
     <>
@@ -115,9 +109,25 @@ export default function ProfileScreen() {
           <Text style={styles.avatarHint}>Tap to change photo</Text>
         </Pressable>
 
+        <View style={styles.identityCard}>
+          <Text style={styles.displayName}>{displayName}</Text>
+          <Text
+            style={[
+              styles.displayBio,
+              profile.bio.trim().length === 0 && styles.displayBioPlaceholder,
+            ]}
+          >
+            {displayBio}
+          </Text>
+        </View>
+
         <Text style={[styles.sectionTitle, styles.sectionFirst]}>Account</Text>
         <View style={styles.sectionCard}>
-          <ProfileRow label="Edit Profile" onPress={placeholder('Edit Profile')} isLast />
+          <ProfileRow
+            label="Edit Profile"
+            onPress={() => router.push('/edit-profile')}
+            isLast
+          />
         </View>
 
         <Text style={styles.sectionTitle}>Activity</Text>
@@ -138,67 +148,16 @@ export default function ProfileScreen() {
         </View>
       </ScrollView>
 
-      <Modal
+      <PresetAvatarModal
         visible={presetModalOpen}
-        animationType="fade"
-        transparent
-        onRequestClose={() => setPresetModalOpen(false)}
-      >
-        <Pressable
-          style={styles.modalBackdrop}
-          onPress={() => setPresetModalOpen(false)}
-        >
-          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.modalTitle}>Choose an avatar</Text>
-            <View style={styles.presetGrid}>
-              {USER_AVATAR_PRESETS.map((preset: UserAvatarPreset) => (
-                <Pressable
-                  key={preset.id}
-                  style={({ pressed }) => [
-                    styles.presetCell,
-                    pressed && styles.presetCellPressed,
-                  ]}
-                  onPress={() => {
-                    void setUserAvatarPreset(preset.id);
-                    setPresetModalOpen(false);
-                  }}
-                >
-                  <View
-                    style={[
-                      styles.presetCircle,
-                      { backgroundColor: preset.color },
-                    ]}
-                  >
-                    <Ionicons
-                      name={
-                        preset.icon as React.ComponentProps<
-                          typeof Ionicons
-                        >['name']
-                      }
-                      size={28}
-                      color="#FFFFFF"
-                    />
-                  </View>
-                </Pressable>
-              ))}
-            </View>
-            <Pressable
-              style={({ pressed }) => [
-                styles.modalClose,
-                pressed && styles.modalClosePressed,
-              ]}
-              onPress={() => setPresetModalOpen(false)}
-            >
-              <Text style={styles.modalCloseText}>Cancel</Text>
-            </Pressable>
-          </Pressable>
-        </Pressable>
-      </Modal>
+        onClose={() => setPresetModalOpen(false)}
+        onSelectPreset={(id) => {
+          void updateProfile({ avatar: formatPresetAvatar(id) });
+        }}
+      />
     </>
   );
 }
-
-const PRESET_CELL = 72;
 
 const styles = StyleSheet.create({
   screen: {
@@ -233,6 +192,33 @@ const styles = StyleSheet.create({
   avatarHint: {
     fontSize: 14,
     color: '#6D6D72',
+  },
+  identityCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    marginBottom: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E5E5EA',
+    alignItems: 'center',
+  },
+  displayName: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#000',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  displayBio: {
+    fontSize: 16,
+    lineHeight: 22,
+    color: '#3A3A3C',
+    textAlign: 'center',
+  },
+  displayBioPlaceholder: {
+    color: '#8E8E93',
+    fontStyle: 'italic',
   },
   sectionTitle: {
     fontSize: 13,
@@ -279,59 +265,5 @@ const styles = StyleSheet.create({
     color: '#C7C7CC',
     fontWeight: '300',
     marginLeft: 8,
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    justifyContent: 'center',
-    paddingHorizontal: 28,
-  },
-  modalCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 20,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
-  },
-  modalTitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#000',
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  presetGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    gap: 14,
-    marginBottom: 8,
-  },
-  presetCell: {
-    borderRadius: PRESET_CELL / 2,
-  },
-  presetCellPressed: {
-    opacity: 0.85,
-    transform: [{ scale: 0.97 }],
-  },
-  presetCircle: {
-    width: PRESET_CELL,
-    height: PRESET_CELL,
-    borderRadius: PRESET_CELL / 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalClose: {
-    marginTop: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  modalClosePressed: {
-    opacity: 0.7,
-  },
-  modalCloseText: {
-    fontSize: 17,
-    color: '#007AFF',
-    fontWeight: '500',
   },
 });
