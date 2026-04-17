@@ -28,6 +28,10 @@ export default function RootLayout() {
               name="match-summary"
               options={{ title: 'Match Summary', headerBackTitle: 'Back' }}
             />
+            <Stack.Screen
+              name="profile"
+              options={{ title: 'Profile', headerBackTitle: 'Back' }}
+            />
             <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
           </Stack>
           <StatusBar style="auto" />

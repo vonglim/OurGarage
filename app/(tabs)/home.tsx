@@ -3,45 +3,57 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ui } from '@/constants/appUi';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ProfileNavButton } from '../components/ProfileNavButton';
 
 export default function Home() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
   return (
-    <View
-      style={[
-        styles.container,
-        { paddingTop: 20 + insets.top, paddingBottom: 24 + insets.bottom },
-      ]}
-    >
-      <Text style={styles.title}>OurGarage</Text>
-
-      <View style={styles.focusSection}>
-        <TextInput
-          placeholder="What tool do you need?"
-          placeholderTextColor="#8E8E93"
-          style={styles.searchInput}
-          autoCapitalize="sentences"
-          autoCorrect
-        />
-        <Pressable
-          style={({ pressed }) => [
-            styles.primaryButton,
-            pressed && styles.primaryButtonPressed,
-          ]}
-          onPress={() => router.push('/requests')}
-        >
-          <Text style={styles.primaryButtonText}>Request A Tool</Text>
-        </Pressable>
+    <View style={styles.outer}>
+      <View style={[styles.topBar, { paddingTop: 8 + insets.top }]}>
+        <ProfileNavButton />
       </View>
+      <View style={[styles.container, { paddingBottom: 24 + insets.bottom }]}>
+        <Text style={styles.title}>OurGarage</Text>
 
-      <Text style={styles.secondaryText}>Have a tool? Rent it out</Text>
+        <View style={styles.focusSection}>
+          <TextInput
+            placeholder="What tool do you need?"
+            placeholderTextColor="#8E8E93"
+            style={styles.searchInput}
+            autoCapitalize="sentences"
+            autoCorrect
+          />
+          <Pressable
+            style={({ pressed }) => [
+              styles.primaryButton,
+              pressed && styles.primaryButtonPressed,
+            ]}
+            onPress={() => router.push('/requests')}
+          >
+            <Text style={styles.primaryButtonText}>Request A Tool</Text>
+          </Pressable>
+        </View>
+
+        <Text style={styles.secondaryText}>Have a tool? Rent it out</Text>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  outer: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 16,
+    width: '100%',
+  },
   container: {
     flex: 1,
     justifyContent: 'center',
