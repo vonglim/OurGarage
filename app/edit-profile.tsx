@@ -79,7 +79,7 @@ export default function EditProfileScreen() {
           accessibilityRole="button"
         >
           <View style={styles.avatarOuter}>
-            <UserAvatar variant="profile" />
+            <UserAvatar />
           </View>
           <Text style={styles.avatarHint}>Tap to change photo</Text>
         </Pressable>

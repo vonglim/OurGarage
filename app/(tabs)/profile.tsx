@@ -1,5 +1,6 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
+import { Image } from 'expo-image';
 import React, { useCallback, useState } from 'react';
 import {
   Alert,
@@ -8,14 +9,17 @@ import {
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { UserAvatar } from '../components/UserAvatar';
 import { PresetAvatarModal } from '../components/PresetAvatarModal';
-import { formatPresetAvatar } from '../lib/profileAvatar';
+import { formatPresetAvatar, parseProfileAvatar } from '../lib/profileAvatar';
 import { pickProfileImageFromLibrary } from '../lib/pickProfileImage';
 import { getProfile, updateProfile, type UserProfile } from '../store/profileStore';
+
+/** Profile hero height as fraction of window (30–35%). */
+const HERO_HEIGHT_RATIO = 0.33;
 
 function placeholder(title: string) {
   return () => {
@@ -50,6 +54,7 @@ function ProfileRow({
 export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const [profile, setProfile] = useState<UserProfile>(() => getProfile());
   const [presetModalOpen, setPresetModalOpen] = useState(false);
 
@@ -57,6 +62,7 @@ export default function ProfileScreen() {
     useCallback(() => {
       const data = getProfile();
       setProfile(data);
+      setPresetModalOpen(false);
     }, [])
   );
 
@@ -84,30 +90,74 @@ export default function ProfileScreen() {
   const displayBio =
     profile.bio.trim().length > 0 ? profile.bio.trim() : 'Add a short bio';
 
+  const parsedAvatar = parseProfileAvatar(profile.avatar);
+  const hasCustomImage = parsedAvatar.kind === 'custom';
+  const heroHeight = Math.round(windowHeight * HERO_HEIGHT_RATIO);
+
   return (
     <>
       <ScrollView
         style={styles.screen}
         contentContainerStyle={[
           styles.content,
-          { paddingBottom: 40 + insets.bottom },
+          {
+            paddingTop: 0,
+            paddingBottom: 40 + insets.bottom,
+          },
         ]}
         keyboardShouldPersistTaps="handled"
       >
-        <Pressable
-          onPress={openAvatarOptions}
-          style={({ pressed }) => [
-            styles.avatarBlock,
-            pressed && styles.avatarBlockPressed,
+        <View
+          style={[
+            styles.hero,
+            {
+              width: windowWidth,
+              height: heroHeight,
+              marginHorizontal: -20,
+            },
           ]}
-          accessibilityLabel="Change profile photo"
-          accessibilityRole="button"
         >
-          <View style={styles.avatarOuter}>
-            <UserAvatar variant="profile" />
-          </View>
-          <Text style={styles.avatarHint}>Tap to change photo</Text>
-        </Pressable>
+          <Pressable
+            onPress={openAvatarOptions}
+            accessibilityLabel="Change profile photo"
+            accessibilityRole="button"
+            style={({ pressed }) => [
+              styles.heroPress,
+              pressed && styles.heroPressPressed,
+            ]}
+          >
+            {hasCustomImage ? (
+              <Image
+                source={{ uri: parsedAvatar.uri }}
+                style={StyleSheet.absoluteFillObject}
+                contentFit="cover"
+                transition={200}
+              />
+            ) : (
+              <View style={[StyleSheet.absoluteFillObject, styles.heroPlaceholder]} />
+            )}
+            {!hasCustomImage ? (
+              <View style={styles.heroHintWrap} pointerEvents="none">
+                <Text style={styles.heroHint}>Tap to change photo</Text>
+              </View>
+            ) : null}
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="View reviews"
+            onPress={() => router.push('/(tabs)/reviews')}
+            style={({ pressed }) => [
+              styles.ratingOverlay,
+              pressed && styles.ratingOverlayPressed,
+            ]}
+          >
+            <View style={styles.ratingRowInner}>
+              <Text style={styles.ratingSegLight}>⭐ 4.8 </Text>
+              <Text style={styles.ratingSegGold}>★★★★☆</Text>
+            </View>
+          </Pressable>
+        </View>
 
         <View style={styles.identityCard}>
           <Text style={styles.displayName}>{displayName}</Text>
@@ -132,8 +182,15 @@ export default function ProfileScreen() {
 
         <Text style={styles.sectionTitle}>Activity</Text>
         <View style={styles.sectionCard}>
-          <ProfileRow label="Renter Reviews" onPress={placeholder('Renter Reviews')} />
-          <ProfileRow label="Rentee Reviews" onPress={placeholder('Rentee Reviews')} isLast />
+          <ProfileRow
+            label="Manage Rentals"
+            onPress={() => router.push('/rentals-management')}
+          />
+          <ProfileRow
+            label="Manage Requests"
+            onPress={() => router.push('/requests-management')}
+            isLast
+          />
         </View>
 
         <Text style={styles.sectionTitle}>Payments & Subscription</Text>
@@ -166,32 +223,71 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: 20,
-    paddingTop: 12,
   },
-  avatarBlock: {
-    alignItems: 'center',
-    marginBottom: 8,
-    paddingVertical: 12,
+  hero: {
+    overflow: 'hidden',
+    marginBottom: 16,
+    backgroundColor: '#000',
   },
-  avatarBlockPressed: {
+  heroPress: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  heroPressPressed: {
     opacity: 0.92,
   },
-  avatarOuter: {
-    padding: 10,
-    borderRadius: 999,
-    backgroundColor: '#FFFFFF',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 3,
-    marginBottom: 10,
+  heroPlaceholder: {
+    backgroundColor: '#C7CCD4',
   },
-  avatarHint: {
-    fontSize: 14,
-    color: '#6D6D72',
+  heroHintWrap: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  heroHint: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.35)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  ratingOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 14,
+    zIndex: 2,
+    alignItems: 'center',
+    paddingHorizontal: 16,
+  },
+  ratingOverlayPressed: {
+    opacity: 0.88,
+    transform: [{ scale: 0.98 }],
+  },
+  ratingRowInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexWrap: 'nowrap',
+  },
+  ratingSegLight: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    textShadowColor: 'rgba(0,0,0,0.72)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 5,
+  },
+  ratingSegGold: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#F9A825',
+    letterSpacing: 1,
+    textShadowColor: 'rgba(0,0,0,0.72)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 5,
   },
   identityCard: {
     backgroundColor: '#FFFFFF',

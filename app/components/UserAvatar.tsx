@@ -7,27 +7,19 @@ import { getPresetById } from '../lib/userAvatarPresets';
 import { parseProfileAvatar } from '../lib/profileAvatar';
 import { useProfile } from '../store/profileStore';
 
-/** `overlay` is ~20% smaller than the former header size for the global corner control. */
-const SIZES = { header: 70, overlay: 56, profile: 152 } as const;
-
-export type UserAvatarVariant = keyof typeof SIZES;
+const SIZE = 152;
+const ICON_SIZE = Math.round(SIZE * 0.36);
 
 type Props = {
-  variant: UserAvatarVariant;
-  /** When set, render from this value (e.g. `profile.avatar`) instead of only the live store read. */
+  /** When set, render from this value instead of only the live store read. */
   avatar?: string;
 };
 
-export function UserAvatar({ variant, avatar: avatarProp }: Props) {
+export function UserAvatar({ avatar: avatarProp }: Props) {
   const { avatar: storeAvatar } = useProfile();
   const avatar = avatarProp ?? storeAvatar;
   const parsed = parseProfileAvatar(avatar);
-  const size = SIZES[variant];
-  const radius = size / 2;
-  const iconSize =
-    variant === 'profile'
-      ? Math.round(size * 0.36)
-      : Math.round(size * 0.4);
+  const radius = SIZE / 2;
 
   if (parsed.kind === 'custom') {
     return (
@@ -35,15 +27,15 @@ export function UserAvatar({ variant, avatar: avatarProp }: Props) {
         style={[
           styles.clip,
           {
-            width: size,
-            height: size,
+            width: SIZE,
+            height: SIZE,
             borderRadius: radius,
           },
         ]}
       >
         <Image
           source={{ uri: parsed.uri }}
-          style={{ width: size, height: size, borderRadius: radius }}
+          style={{ width: SIZE, height: SIZE, borderRadius: radius }}
           contentFit="cover"
           transition={120}
         />
@@ -57,8 +49,8 @@ export function UserAvatar({ variant, avatar: avatarProp }: Props) {
       style={[
         styles.presetCircle,
         {
-          width: size,
-          height: size,
+          width: SIZE,
+          height: SIZE,
           borderRadius: radius,
           backgroundColor: preset.color,
         },
@@ -66,7 +58,7 @@ export function UserAvatar({ variant, avatar: avatarProp }: Props) {
     >
       <Ionicons
         name={preset.icon as React.ComponentProps<typeof Ionicons>['name']}
-        size={iconSize}
+        size={ICON_SIZE}
         color="#FFFFFF"
       />
     </View>

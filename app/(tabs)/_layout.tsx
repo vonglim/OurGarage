@@ -58,6 +58,13 @@ export default function TabLayout() {
           ),
         }}
       />
+      <Tabs.Screen
+        name="reviews"
+        options={{
+          title: 'Reviews',
+          href: null,
+        }}
+      />
     </Tabs>
   );
 }

@@ -1,3 +1,4 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { formatHowDisplay } from '../lib/deliveryFormat';
@@ -12,7 +13,12 @@ import { ui } from '@/constants/appUi';
 
 const CARD_BORDER = '#E5E5EA';
 const CARD_PADDING = 14;
+/** Placeholder poster avatar (until backend provides URLs). */
+const POSTER_AVATAR_SIZE = 32;
+/** Mock renter rating for cards (no backend yet). */
+const MOCK_CARD_RATING = 4.5;
 const GAP_AFTER_TITLE = 4;
+const GAP_USER_TO_TITLE = 6;
 const GAP_PRICE_TO_DELIVERY = 8;
 /** Space above bottom row (distance/time [+ Offer]). */
 const BOTTOM_ROW_MARGIN_TOP = 9;
@@ -110,9 +116,18 @@ export function RequestListCardInner({
     timeAgoText != null && timeAgoText !== '' ? timeCompact(timeAgoText) : null;
   const leftFooter = timePart != null ? `${dist} • ${timePart}` : dist;
 
+  const ratingLabel = `${MOCK_CARD_RATING.toFixed(1)}★`;
+
   return (
     <View style={styles.root}>
       <View style={styles.contentColumn}>
+        <View style={styles.userRow}>
+          <View style={styles.posterAvatar}>
+            <Ionicons name="person" size={18} color="#8E8E93" />
+          </View>
+          <Text style={styles.posterRating}>{ratingLabel}</Text>
+        </View>
+
         <View style={styles.topRow}>
           <Text style={styles.toolName} numberOfLines={2}>
             {title}
@@ -173,6 +188,29 @@ const styles = StyleSheet.create({
   contentColumn: {
     flexDirection: 'column',
     alignItems: 'stretch',
+  },
+  userRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: GAP_USER_TO_TITLE,
+  },
+  posterAvatar: {
+    width: POSTER_AVATAR_SIZE,
+    height: POSTER_AVATAR_SIZE,
+    borderRadius: POSTER_AVATAR_SIZE / 2,
+    backgroundColor: '#ECECF0',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D1D1D6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  posterRating: {
+    marginLeft: 8,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#3A3A3C',
+    letterSpacing: 0.2,
   },
   topRow: {
     flexDirection: 'row',

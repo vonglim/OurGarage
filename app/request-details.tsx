@@ -1,10 +1,26 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
 import { RequestMetaLines } from './components/RequestMetaLines';
 import { getOffersForRequest } from './store/offersStore';
-import { acceptOfferForRequest, getRequestByTimestamp } from './store/requestsStore';
+import {
+  acceptOfferForRequest,
+  getRequestByTimestamp,
+  isLeaveReviewEligible,
+  markRequestRentalComplete,
+  showMarkRentalComplete,
+} from './store/requestsStore';
+import { useUserReviews } from './store/userReviewsStore';
 import { formatUsd, getNumericOfferPrice } from './lib/money';
 import { ui } from '@/constants/appUi';
 
@@ -22,10 +38,19 @@ function getTimeAgo(timestamp: number): string {
 }
 
 export default function RequestDetailsScreen() {
-  const params = useLocalSearchParams<{ requestId?: string | string[] }>();
+  const insets = useSafeAreaInsets();
+  const params = useLocalSearchParams<{
+    requestId?: string | string[];
+    viewer?: string | string[];
+  }>();
   const rawId = params.requestId;
   const requestIdStr = Array.isArray(rawId) ? rawId[0] : rawId;
+  const rawViewer = params.viewer;
+  const viewerRaw = Array.isArray(rawViewer) ? rawViewer[0] : rawViewer;
+  const viewerOffer = viewerRaw === 'offer';
+
   const [tick, setTick] = useState(0);
+  const userReviews = useUserReviews();
 
   useFocusEffect(
     useCallback(() => {
@@ -48,6 +73,10 @@ export default function RequestDetailsScreen() {
   }, [requestIdStr, tick]);
 
   const matched = !!request?.matched;
+  const requestTs = request?.timestamp;
+  const reviewed =
+    requestTs != null && userReviews.some((r) => r.requestTimestamp === requestTs);
+  const reviewType = viewerOffer ? 'rentee' : 'renter';
 
   if (!requestIdStr || !Number.isFinite(Number(requestIdStr))) {
     return (
@@ -65,74 +94,172 @@ export default function RequestDetailsScreen() {
     );
   }
 
-  return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      keyboardShouldPersistTaps="handled"
-    >
-      <Text style={styles.toolName}>{request.toolName || 'No name'}</Text>
-      {matched && <Text style={styles.statusMatched}>Matched</Text>}
-      {matched && (
-        <Text style={styles.acceptedPriceBanner}>
-          Accepted total for entire duration: {formatUsd(request.acceptedPrice)}
-        </Text>
-      )}
-      <Text style={styles.detail}>When: {request.when || 'N/A'}</Text>
-      <RequestMetaLines req={request} detailStyle={styles.detail} />
+  const onEditRequest = () => {
+    if (request.timestamp == null || matched || viewerOffer) return;
+    router.push({
+      pathname: '/(tabs)/requests',
+      params: { editTimestamp: String(request.timestamp) },
+    });
+  };
 
-      <Text style={styles.sectionTitle}>Offers</Text>
-      {offers.length === 0 ? (
-        <Text style={styles.muted}>No offers yet</Text>
-      ) : (
-        offers.map((offer) => (
-          <View key={offer.timestamp} style={styles.offerCard}>
-            <Text style={styles.offerLabel}>Offer received</Text>
-            <Text style={styles.offerPriceLine}>
-              Their total for entire duration: {formatUsd(getNumericOfferPrice(offer))}
-            </Text>
-            <Text style={styles.offerTime}>{getTimeAgo(offer.timestamp)}</Text>
+  const onMarkCompleted = () => {
+    if (request.timestamp == null) return;
+    markRequestRentalComplete(request.timestamp);
+    setTick((t) => t + 1);
+    Alert.alert('Updated', 'This rental is marked as completed.');
+  };
+
+  const onLeaveReview = () => {
+    if (request.timestamp == null) return;
+    router.push(
+      `/leave-review?requestTimestamp=${encodeURIComponent(String(request.timestamp))}&type=${reviewType}`
+    );
+  };
+
+  return (
+    <View style={styles.screen}>
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
+          <Text style={styles.backLabel}>‹ Back</Text>
+        </Pressable>
+        <Text style={styles.headerTitle}>Request details</Text>
+      </View>
+
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: 40 + insets.bottom },
+        ]}
+        keyboardShouldPersistTaps="handled"
+      >
+        <Text style={styles.toolName}>{request.toolName || 'No name'}</Text>
+        {request.timestamp != null ? (
+          <Text style={styles.detailMuted}>Posted {getTimeAgo(request.timestamp)}</Text>
+        ) : null}
+        {matched ? <Text style={styles.statusMatched}>Matched</Text> : null}
+        {matched && (
+          <Text style={styles.acceptedPriceBanner}>
+            Accepted total for entire duration: {formatUsd(request.acceptedPrice)}
+          </Text>
+        )}
+        <Text style={styles.detail}>When: {request.when || 'N/A'}</Text>
+        <RequestMetaLines req={request} detailStyle={styles.detail} />
+
+        {!viewerOffer && !matched ? (
+          <Pressable
+            onPress={onEditRequest}
+            style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
+          >
+            <Text style={styles.secondaryBtnText}>Edit Request</Text>
+          </Pressable>
+        ) : null}
+
+        {showMarkRentalComplete(request) ? (
+          <Pressable
+            onPress={onMarkCompleted}
+            style={({ pressed }) => [styles.primaryOutlineBtn, pressed && styles.primaryOutlinePressed]}
+          >
+            <Text style={styles.primaryOutlineBtnText}>Mark as Completed</Text>
+          </Pressable>
+        ) : null}
+
+        {isLeaveReviewEligible(request) ? (
+          reviewed ? (
+            <Text style={styles.reviewedNote}>Review submitted</Text>
+          ) : (
             <Pressable
-              style={({ pressed }) => [
-                styles.acceptButton,
-                matched && styles.acceptButtonDisabled,
-                pressed && !matched && styles.acceptButtonPressed,
-              ]}
-              disabled={matched}
-              onPress={() => {
-                acceptOfferForRequest(
-                  request.timestamp,
-                  offer.timestamp,
-                  getNumericOfferPrice(offer)
-                );
-                setTick((t) => t + 1);
-                router.push({
-                  pathname: '/match-summary',
-                  params: { requestId: String(request.timestamp) },
-                });
-              }}
+              onPress={onLeaveReview}
+              style={({ pressed }) => [styles.leaveReviewBtn, pressed && styles.leaveReviewBtnPressed]}
             >
-              <Text
-                style={[styles.acceptButtonText, matched && styles.acceptButtonTextDisabled]}
-              >
-                Accept Offer
-              </Text>
+              <Text style={styles.leaveReviewBtnText}>Leave Review</Text>
             </Pressable>
-          </View>
-        ))
-      )}
-    </ScrollView>
+          )
+        ) : null}
+
+        <Text style={styles.sectionTitle}>Offers</Text>
+        {viewerOffer ? (
+          <Text style={styles.viewerHint}>
+            You are viewing this request as someone who submitted an offer. Only the requester can
+            accept an offer.
+          </Text>
+        ) : null}
+        {offers.length === 0 ? (
+          <Text style={styles.muted}>No offers yet</Text>
+        ) : (
+          offers.map((offer) => (
+            <View key={offer.timestamp} style={styles.offerCard}>
+              <Text style={styles.offerLabel}>Offer received</Text>
+              <Text style={styles.offerPriceLine}>
+                Their total for entire duration: {formatUsd(getNumericOfferPrice(offer))}
+              </Text>
+              <Text style={styles.offerTime}>{getTimeAgo(offer.timestamp)}</Text>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.acceptButton,
+                  matched && styles.acceptButtonDisabled,
+                  pressed && !matched && styles.acceptButtonPressed,
+                ]}
+                disabled={matched || viewerOffer}
+                onPress={() => {
+                  acceptOfferForRequest(
+                    request.timestamp,
+                    offer.timestamp,
+                    getNumericOfferPrice(offer)
+                  );
+                  setTick((t) => t + 1);
+                  router.push({
+                    pathname: '/match-summary',
+                    params: { requestId: String(request.timestamp) },
+                  });
+                }}
+              >
+                <Text
+                  style={[styles.acceptButtonText, matched && styles.acceptButtonTextDisabled]}
+                >
+                  Accept Offer
+                </Text>
+              </Pressable>
+            </View>
+          ))
+        )}
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: '#F2F2F7',
+  },
+  header: {
+    paddingHorizontal: 20,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E5EA',
+    backgroundColor: '#F2F2F7',
+  },
+  backHit: {
+    alignSelf: 'flex-start',
+    marginBottom: 4,
+  },
+  backLabel: {
+    fontSize: 17,
+    fontWeight: '500',
+    color: ui.primary,
+  },
+  headerTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#000',
+  },
   container: {
     flex: 1,
     backgroundColor: '#FFFFFF',
   },
   content: {
     padding: 24,
-    paddingBottom: 40,
   },
   centered: {
     flex: 1,
@@ -145,7 +272,12 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '700',
     color: '#111',
-    marginBottom: 8,
+    marginBottom: 6,
+  },
+  detailMuted: {
+    fontSize: 14,
+    color: '#6D6D72',
+    marginBottom: 10,
   },
   statusMatched: {
     fontSize: 15,
@@ -169,12 +301,76 @@ const styles = StyleSheet.create({
     color: '#404040',
     marginBottom: 6,
   },
+  secondaryBtn: {
+    marginTop: 18,
+    alignSelf: 'stretch',
+    paddingVertical: 12,
+    borderRadius: ui.radiusButton,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.primary,
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  secondaryBtnPressed: {
+    opacity: ui.pressOpacity,
+  },
+  secondaryBtnText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: ui.primary,
+  },
+  primaryOutlineBtn: {
+    marginTop: 12,
+    alignSelf: 'stretch',
+    paddingVertical: 12,
+    borderRadius: ui.radiusButton,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#C62828',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  primaryOutlinePressed: {
+    opacity: 0.88,
+  },
+  primaryOutlineBtnText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#C62828',
+  },
+  leaveReviewBtn: {
+    marginTop: 12,
+    alignSelf: 'stretch',
+    paddingVertical: 12,
+    borderRadius: ui.radiusButton,
+    backgroundColor: ui.primary,
+    alignItems: 'center',
+  },
+  leaveReviewBtnPressed: {
+    opacity: ui.pressOpacity,
+  },
+  leaveReviewBtnText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  reviewedNote: {
+    marginTop: 14,
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#6D6D72',
+  },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '700',
     color: '#000',
     marginTop: 24,
     marginBottom: 12,
+  },
+  viewerHint: {
+    fontSize: 13,
+    color: '#6D6D72',
+    lineHeight: 18,
+    marginBottom: 10,
   },
   muted: {
     fontSize: 15,

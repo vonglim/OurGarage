@@ -8,8 +8,6 @@ import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
-import { GlobalProfileAvatarOverlay } from './components/GlobalProfileAvatarOverlay';
-
 export const unstable_settings = {
   anchor: '(tabs)',
 };
@@ -22,23 +20,17 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <View style={{ flex: 1 }}>
-            <Stack>
-              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-              <Stack.Screen
-                name="request-details"
-                options={{ title: 'Request Details', headerBackTitle: 'Back' }}
-              />
-              <Stack.Screen
-                name="match-summary"
-                options={{ title: 'Match Summary', headerBackTitle: 'Back' }}
-              />
-              <Stack.Screen
-                name="edit-profile"
-                options={{ title: 'Edit Profile', headerBackTitle: 'Back' }}
-              />
-              <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+            <Stack screenOptions={{ headerShown: false }}>
+              <Stack.Screen name="(tabs)" />
+              <Stack.Screen name="request-details" />
+              <Stack.Screen name="match-summary" />
+              <Stack.Screen name="edit-profile" />
+              <Stack.Screen name="rentals-management" />
+              <Stack.Screen name="requests-management" />
+              <Stack.Screen name="request-confirmation" />
+              <Stack.Screen name="leave-review" />
+              <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
             </Stack>
-            <GlobalProfileAvatarOverlay />
           </View>
           <StatusBar style="auto" />
         </ThemeProvider>

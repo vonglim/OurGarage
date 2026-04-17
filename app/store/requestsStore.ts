@@ -25,10 +25,28 @@ export function acceptOfferForRequest(
     return {
       ...r,
       matched: true,
+      fulfilled: false,
       acceptedOfferTimestamp,
       acceptedPrice: price,
     };
   });
+}
+
+/** Matched + not explicitly waiting on “Mark as Completed” (legacy rows have no `fulfilled`). */
+export function isLeaveReviewEligible(req: { matched?: boolean; fulfilled?: boolean }): boolean {
+  if (!req?.matched) return false;
+  if (req.fulfilled === false) return false;
+  return true;
+}
+
+export function showMarkRentalComplete(req: { matched?: boolean; fulfilled?: boolean }): boolean {
+  return !!req?.matched && req.fulfilled === false;
+}
+
+export function markRequestRentalComplete(requestTimestamp: number): void {
+  requests = requests.map((r) =>
+    r.timestamp === requestTimestamp && r.matched ? { ...r, fulfilled: true } : r
+  );
 }
 
 export function addRequest(request: any) {

@@ -290,8 +290,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   content: {
-    paddingLeft: 24,
-    paddingRight: 56,
+    paddingHorizontal: 24,
   },
   titleRow: {
     alignItems: 'center',

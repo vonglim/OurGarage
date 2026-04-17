@@ -1,5 +1,5 @@
 import { useFocusEffect } from '@react-navigation/native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useRef, useState } from 'react';
 import {
   Alert,
@@ -16,28 +16,17 @@ import {
   requestListCardSurface,
 } from '../components/RequestListCardInner';
 import { countOffersForRequest, removeOffersForRequest } from '../store/offersStore';
+import { getRequestEditFormValues } from '../lib/getRequestEditFormValues';
 import {
   addRequest,
+  getRequestByTimestamp,
   getRequests,
   removeRequest,
   updateRequest,
 } from '../store/requestsStore';
-import {
-  DELIVERY_OPTIONS,
-  isHowKey,
-  needsDeliveryFee,
-  type HowKey,
-} from '../lib/deliveryFormat';
-import {
-  DURATION_OPTIONS,
-  type DurationType,
-  isDurationType,
-} from '../lib/durationFormat';
-import {
-  getNumericTotalPrice,
-  parseMoneyToNumber,
-  sanitizeMoneyDigits,
-} from '../lib/money';
+import { DELIVERY_OPTIONS, needsDeliveryFee, type HowKey } from '../lib/deliveryFormat';
+import { DURATION_OPTIONS, type DurationType } from '../lib/durationFormat';
+import { parseMoneyToNumber, sanitizeMoneyDigits } from '../lib/money';
 import { coordinatesFromLocationField } from '../lib/zipCoordinates';
 import { ui } from '@/constants/appUi';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -64,6 +53,7 @@ function getTimeAgo(timestamp: number): string {
 
 export default function Requests() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ editTimestamp?: string | string[] }>();
   const insets = useSafeAreaInsets();
 
   const [toolName, setToolName] = useState('');
@@ -81,13 +71,42 @@ export default function Requests() {
   const [editingTimestamp, setEditingTimestamp] = useState<number | null>(null);
   const swipeRefs = useRef(new Map<number, Swipeable>());
 
-  // Refresh requests on focus (ensure newest first)
+  const applyEditFormFromRequest = useCallback(
+    (req: ReturnType<typeof getRequests>[number]) => {
+      if (req.timestamp == null) return;
+      const v = getRequestEditFormValues(req);
+      setToolName(v.toolName);
+      setWhen(v.when);
+      setHow(v.how);
+      setPickupRadiusMiles(v.pickupRadiusMiles);
+      setDurationType(v.durationType);
+      setDurationDays(v.durationDays);
+      setDurationWeeks(v.durationWeeks);
+      setTotalPriceInput(v.totalPriceInput);
+      setDeliveryFeeInput(v.deliveryFeeInput);
+      setLocationInput(v.locationInput);
+      setEditingTimestamp(req.timestamp);
+    },
+    []
+  );
+
+  // Refresh requests on focus (ensure newest first); open editor when linked from request-details
   useFocusEffect(
     useCallback(() => {
       const reqs = getRequests();
-      // Already sorted by getRequests (newest first), but let's ensure it
       setRequests(reqs.sort((a, b) => b.timestamp - a.timestamp));
-    }, [])
+
+      const raw = params.editTimestamp;
+      const editTsStr = Array.isArray(raw) ? raw[0] : raw;
+      if (editTsStr == null || editTsStr === '') return;
+      const ts = Number(editTsStr);
+      if (!Number.isFinite(ts)) return;
+      const req = getRequestByTimestamp(ts);
+      if (req && !req.matched) {
+        applyEditFormFromRequest(req);
+      }
+      router.setParams({ editTimestamp: '' });
+    }, [params.editTimestamp, router, applyEditFormFromRequest])
   );
 
   return (
@@ -467,48 +486,7 @@ export default function Requests() {
                       onPress={() => {
                         if (req.timestamp == null) return;
                         swipeRefs.current.get(req.timestamp)?.close();
-                        setToolName(req.toolName ?? '');
-                        setWhen(req.when ?? null);
-                        setHow(isHowKey(req.how) ? req.how : null);
-                        setPickupRadiusMiles(
-                          req.pickupRadiusMiles != null &&
-                            Number.isFinite(Number(req.pickupRadiusMiles))
-                            ? String(Math.max(1, Math.round(Number(req.pickupRadiusMiles))))
-                            : '10'
-                        );
-                        setDurationType(
-                          isDurationType(req.durationType) ? req.durationType : null
-                        );
-                        setDurationDays(
-                          req.durationType === 'multiDay' &&
-                            req.durationValue != null &&
-                            Number.isFinite(Number(req.durationValue))
-                            ? String(Math.round(Number(req.durationValue)))
-                            : ''
-                        );
-                        setDurationWeeks(
-                          req.durationType === 'weekly' &&
-                            req.durationValue != null &&
-                            Number.isFinite(Number(req.durationValue))
-                            ? String(Math.round(Number(req.durationValue)))
-                            : ''
-                        );
-                        const tp = getNumericTotalPrice(req);
-                        setTotalPriceInput(
-                          tp != null && tp >= 0 ? sanitizeMoneyDigits(String(tp)) : ''
-                        );
-                        const df =
-                          typeof req.deliveryFee === 'number' &&
-                          Number.isFinite(req.deliveryFee)
-                            ? req.deliveryFee
-                            : parseMoneyToNumber(String(req.deliveryFee ?? ''));
-                        setDeliveryFeeInput(
-                          df != null && df >= 0 ? sanitizeMoneyDigits(String(df)) : ''
-                        );
-                        setLocationInput(
-                          req.location != null ? String(req.location) : ''
-                        );
-                        setEditingTimestamp(req.timestamp);
+                        applyEditFormFromRequest(req);
                       }}
                     >
                       <Text style={styles.editActionText}>Edit</Text>
@@ -544,8 +522,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF', // White background for the full screen
   },
   scrollContent: {
-    paddingLeft: 24,
-    paddingRight: 56,
+    paddingHorizontal: 24,
   },
   titleRow: {
     alignItems: 'center',
