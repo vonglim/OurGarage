@@ -1,5 +1,5 @@
 import { useFocusEffect } from '@react-navigation/native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Image } from 'expo-image';
 import React, { useCallback, useState } from 'react';
 import {
@@ -13,7 +13,13 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
 import { PresetAvatarModal } from '../components/PresetAvatarModal';
+import { UserActivityDot } from '../components/UserActivityDot';
+import {
+  getPublicProfileForView,
+  isOwnProfileUserId,
+} from '../lib/mockPublicProfiles';
 import { formatPresetAvatar, parseProfileAvatar } from '../lib/profileAvatar';
 import { pickProfileImageFromLibrary } from '../lib/pickProfileImage';
 import { getProfile, updateProfile, type UserProfile } from '../store/profileStore';
@@ -53,6 +59,15 @@ function ProfileRow({
 
 export default function ProfileScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ viewUserId?: string | string[] }>();
+  const rawView = params.viewUserId;
+  const viewUserIdParam = Array.isArray(rawView) ? rawView[0] : rawView;
+  const isViewingOther =
+    viewUserIdParam != null &&
+    viewUserIdParam !== '' &&
+    !isOwnProfileUserId(viewUserIdParam);
+  const viewPublic = isViewingOther ? getPublicProfileForView(viewUserIdParam) : null;
+
   const insets = useSafeAreaInsets();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const [profile, setProfile] = useState<UserProfile>(() => getProfile());
@@ -85,18 +100,28 @@ export default function ProfileScreen() {
     ]);
   }, []);
 
-  const displayName =
-    profile.name.trim().length > 0 ? profile.name.trim() : 'Your name';
-  const displayBio =
-    profile.bio.trim().length > 0 ? profile.bio.trim() : 'Add a short bio';
+  const displayName = isViewingOther
+    ? viewPublic!.name.trim()
+    : profile.name.trim().length > 0
+      ? profile.name.trim()
+      : 'Your name';
+  const displayBio = isViewingOther
+    ? viewPublic!.bio.trim()
+    : profile.bio.trim().length > 0
+      ? profile.bio.trim()
+      : 'Add a short bio';
 
-  const parsedAvatar = parseProfileAvatar(profile.avatar);
+  const avatarField = isViewingOther ? viewPublic!.avatar : profile.avatar;
+  const parsedAvatar = parseProfileAvatar(avatarField);
+  const ratingNumber = isViewingOther ? viewPublic!.ratingNumber : 4.8;
+  const ratingStarsDisplay = isViewingOther ? viewPublic!.ratingStars : '★★★★☆';
   const hasCustomImage = parsedAvatar.kind === 'custom';
   const heroHeight = Math.round(windowHeight * HERO_HEIGHT_RATIO);
 
   return (
     <>
-      <ScrollView
+      <KeyboardDismissScreen>
+        <ScrollView
         style={styles.screen}
         contentContainerStyle={[
           styles.content,
@@ -107,6 +132,16 @@ export default function ProfileScreen() {
         ]}
         keyboardShouldPersistTaps="handled"
       >
+        {isViewingOther ? (
+          <Pressable
+            onPress={() => router.back()}
+            hitSlop={12}
+            style={({ pressed }) => [styles.viewBackRow, { marginTop: insets.top + 8 }, pressed && styles.viewBackPressed]}
+          >
+            <Text style={styles.viewBackLabel}>‹ Back</Text>
+          </Pressable>
+        ) : null}
+
         <View
           style={[
             styles.hero,
@@ -117,31 +152,46 @@ export default function ProfileScreen() {
             },
           ]}
         >
-          <Pressable
-            onPress={openAvatarOptions}
-            accessibilityLabel="Change profile photo"
-            accessibilityRole="button"
-            style={({ pressed }) => [
-              styles.heroPress,
-              pressed && styles.heroPressPressed,
-            ]}
-          >
-            {hasCustomImage ? (
-              <Image
-                source={{ uri: parsedAvatar.uri }}
-                style={StyleSheet.absoluteFillObject}
-                contentFit="cover"
-                transition={200}
-              />
-            ) : (
-              <View style={[StyleSheet.absoluteFillObject, styles.heroPlaceholder]} />
-            )}
-            {!hasCustomImage ? (
-              <View style={styles.heroHintWrap} pointerEvents="none">
-                <Text style={styles.heroHint}>Tap to change photo</Text>
-              </View>
-            ) : null}
-          </Pressable>
+          {isViewingOther ? (
+            <View style={styles.heroPress}>
+              {hasCustomImage ? (
+                <Image
+                  source={{ uri: parsedAvatar.uri }}
+                  style={StyleSheet.absoluteFillObject}
+                  contentFit="cover"
+                  transition={200}
+                />
+              ) : (
+                <View style={[StyleSheet.absoluteFillObject, styles.heroPlaceholder]} />
+              )}
+            </View>
+          ) : (
+            <Pressable
+              onPress={openAvatarOptions}
+              accessibilityLabel="Change profile photo"
+              accessibilityRole="button"
+              style={({ pressed }) => [
+                styles.heroPress,
+                pressed && styles.heroPressPressed,
+              ]}
+            >
+              {hasCustomImage ? (
+                <Image
+                  source={{ uri: parsedAvatar.uri }}
+                  style={StyleSheet.absoluteFillObject}
+                  contentFit="cover"
+                  transition={200}
+                />
+              ) : (
+                <View style={[StyleSheet.absoluteFillObject, styles.heroPlaceholder]} />
+              )}
+              {!hasCustomImage ? (
+                <View style={styles.heroHintWrap} pointerEvents="none">
+                  <Text style={styles.heroHint}>Tap to change photo</Text>
+                </View>
+              ) : null}
+            </Pressable>
+          )}
 
           <Pressable
             accessibilityRole="button"
@@ -153,65 +203,90 @@ export default function ProfileScreen() {
             ]}
           >
             <View style={styles.ratingRowInner}>
-              <Text style={styles.ratingSegLight}>⭐ 4.8 </Text>
-              <Text style={styles.ratingSegGold}>★★★★☆</Text>
+              <Text style={styles.ratingSegLight}>⭐ {ratingNumber.toFixed(1)} </Text>
+              <Text style={styles.ratingSegGold}>{ratingStarsDisplay}</Text>
             </View>
           </Pressable>
         </View>
 
         <View style={styles.identityCard}>
-          <Text style={styles.displayName}>{displayName}</Text>
+          <View style={styles.identityNameRow}>
+            <UserActivityDot
+              lastActive={isViewingOther ? viewPublic!.lastActive : profile.lastActive}
+            />
+            <Text style={styles.displayName} numberOfLines={2}>
+              {displayName}
+            </Text>
+          </View>
           <Text
             style={[
               styles.displayBio,
-              profile.bio.trim().length === 0 && styles.displayBioPlaceholder,
+              !isViewingOther && profile.bio.trim().length === 0 && styles.displayBioPlaceholder,
             ]}
           >
             {displayBio}
           </Text>
         </View>
 
-        <Text style={[styles.sectionTitle, styles.sectionFirst]}>Account</Text>
-        <View style={styles.sectionCard}>
-          <ProfileRow
-            label="Edit Profile"
-            onPress={() => router.push('/edit-profile')}
-            isLast
-          />
-        </View>
+        {isViewingOther ? (
+          <>
+            <Text style={[styles.sectionTitle, styles.sectionFirst]}>Reviews</Text>
+            <View style={styles.sectionCard}>
+              <ProfileRow
+                label="See all reviews"
+                onPress={() => router.push('/(tabs)/reviews')}
+                isLast
+              />
+            </View>
+          </>
+        ) : (
+          <>
+            <Text style={[styles.sectionTitle, styles.sectionFirst]}>Account</Text>
+            <View style={styles.sectionCard}>
+              <ProfileRow
+                label="Edit Profile"
+                onPress={() => router.push('/edit-profile')}
+                isLast
+              />
+            </View>
 
-        <Text style={styles.sectionTitle}>Activity</Text>
-        <View style={styles.sectionCard}>
-          <ProfileRow
-            label="Manage Rentals"
-            onPress={() => router.push('/rentals-management')}
-          />
-          <ProfileRow
-            label="Manage Requests"
-            onPress={() => router.push('/requests-management')}
-            isLast
-          />
-        </View>
+            <Text style={styles.sectionTitle}>Activity</Text>
+            <View style={styles.sectionCard}>
+              <ProfileRow
+                label="Manage Rentals"
+                onPress={() => router.push('/rentals-management')}
+              />
+              <ProfileRow
+                label="Manage Requests"
+                onPress={() => router.push('/requests-management')}
+                isLast
+              />
+            </View>
 
-        <Text style={styles.sectionTitle}>Payments & Subscription</Text>
-        <View style={styles.sectionCard}>
-          <ProfileRow label="Subscription" onPress={placeholder('Subscription')} />
-          <ProfileRow label="Payment Methods" onPress={placeholder('Payment Methods')} isLast />
-        </View>
+            <Text style={styles.sectionTitle}>Payments & Subscription</Text>
+            <View style={styles.sectionCard}>
+              <ProfileRow label="Subscription" onPress={placeholder('Subscription')} />
+              <ProfileRow label="Payment Methods" onPress={placeholder('Payment Methods')} isLast />
+            </View>
 
-        <Text style={styles.sectionTitle}>Earnings</Text>
-        <View style={styles.sectionCard}>
-          <ProfileRow label="Earnings & History" onPress={placeholder('Earnings & History')} isLast />
-        </View>
+            <Text style={styles.sectionTitle}>Earnings</Text>
+            <View style={styles.sectionCard}>
+              <ProfileRow label="Earnings & History" onPress={placeholder('Earnings & History')} isLast />
+            </View>
+          </>
+        )}
       </ScrollView>
+      </KeyboardDismissScreen>
 
-      <PresetAvatarModal
-        visible={presetModalOpen}
-        onClose={() => setPresetModalOpen(false)}
-        onSelectPreset={(id) => {
-          void updateProfile({ avatar: formatPresetAvatar(id) });
-        }}
-      />
+      {!isViewingOther ? (
+        <PresetAvatarModal
+          visible={presetModalOpen}
+          onClose={() => setPresetModalOpen(false)}
+          onSelectPreset={(id) => {
+            void updateProfile({ avatar: formatPresetAvatar(id) });
+          }}
+        />
+      ) : null}
     </>
   );
 }
@@ -299,12 +374,21 @@ const styles = StyleSheet.create({
     borderColor: '#E5E5EA',
     alignItems: 'center',
   },
+  identityNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'stretch',
+    marginBottom: 8,
+    paddingHorizontal: 4,
+    minWidth: 0,
+  },
   displayName: {
+    flexShrink: 1,
     fontSize: 22,
     fontWeight: '700',
     color: '#000',
     textAlign: 'center',
-    marginBottom: 8,
   },
   displayBio: {
     fontSize: 16,
@@ -361,5 +445,19 @@ const styles = StyleSheet.create({
     color: '#C7C7CC',
     fontWeight: '300',
     marginLeft: 8,
+  },
+  viewBackRow: {
+    alignSelf: 'flex-start',
+    marginBottom: 6,
+    paddingVertical: 4,
+    paddingRight: 12,
+  },
+  viewBackPressed: {
+    opacity: 0.75,
+  },
+  viewBackLabel: {
+    fontSize: 17,
+    fontWeight: '500',
+    color: '#007AFF',
   },
 });

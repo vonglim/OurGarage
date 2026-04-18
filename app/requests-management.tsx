@@ -3,6 +3,7 @@ import React, { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
 import { getRequestCardUiStatus } from './lib/requestCardStatus';
 import { formatUsd, getNumericTotalPrice } from './lib/money';
 import { getRequests, isLeaveReviewEligible } from './store/requestsStore';
@@ -25,7 +26,7 @@ export default function RequestsManagementScreen() {
   );
 
   return (
-    <View style={styles.screen}>
+    <KeyboardDismissScreen style={styles.screen}>
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
@@ -65,7 +66,8 @@ export default function RequestsManagementScreen() {
                     : '—';
               const when = req.when != null ? String(req.when) : '—';
               const isLast = index === list.length - 1;
-              const completed = status.key === 'completed';
+              const completed =
+                status.key === 'completed' || status.key === 'active';
               const ts = req.timestamp;
               const canReview = completed && ts != null && isLeaveReviewEligible(req);
               const reviewed =
@@ -82,7 +84,7 @@ export default function RequestsManagementScreen() {
                       if (ts == null) return;
                       router.push({
                         pathname: '/request-details',
-                        params: { requestId: String(ts), viewer: 'poster' },
+                        params: { requestId: String(ts) },
                       });
                     }}
                   >
@@ -122,7 +124,7 @@ export default function RequestsManagementScreen() {
           </View>
         )}
       </ScrollView>
-    </View>
+    </KeyboardDismissScreen>
   );
 }
 

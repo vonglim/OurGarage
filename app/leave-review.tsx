@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
 import { getProfile } from './store/profileStore';
 import { addUserReview, type UserReviewType } from './store/userReviewsStore';
 
@@ -57,10 +58,11 @@ export default function LeaveReviewScreen() {
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
+    <KeyboardDismissScreen>
+      <KeyboardAvoidingView
+        style={styles.screen}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
@@ -105,6 +107,8 @@ export default function LeaveReviewScreen() {
           multiline
           textAlignVertical="top"
           maxLength={800}
+          returnKeyType="default"
+          blurOnSubmit={false}
         />
 
         <Pressable
@@ -117,7 +121,8 @@ export default function LeaveReviewScreen() {
           <Text style={styles.submitText}>Submit</Text>
         </Pressable>
       </ScrollView>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </KeyboardDismissScreen>
   );
 }
 

@@ -10,9 +10,11 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { KeyboardDismissScreen } from '@/app/components/KeyboardDismissScreen';
 import { ui } from '@/constants/appUi';
 import type { UserReview } from '@/app/store/userReviewsStore';
 import { useUserReviews } from '@/app/store/userReviewsStore';
+import { UserActivityDot } from '@/app/components/UserActivityDot';
 
 type ReviewType = 'renter' | 'rentee';
 
@@ -25,6 +27,7 @@ type MockReview = {
   rating: number;
   body: string;
   createdAt: number;
+  lastActive: number;
 };
 
 const MS_DAY = 24 * 60 * 60 * 1000;
@@ -43,6 +46,12 @@ function avatarColorForName(name: string): string {
   return AVATAR_PALETTE[Math.abs(h) % AVATAR_PALETTE.length];
 }
 
+function mockReviewerLastActive(id: string): number {
+  const n = Math.abs(id.split('').reduce((a, c) => a + c.charCodeAt(0), 0));
+  const minsAgo = [8, 180, 20, 400, 12, 90][n % 6];
+  return Date.now() - minsAgo * 60 * 1000;
+}
+
 function userReviewToMock(r: UserReview): MockReview {
   const name = r.reviewerName.trim() || 'You';
   const first = name.trim().slice(0, 1).toUpperCase();
@@ -57,10 +66,13 @@ function userReviewToMock(r: UserReview): MockReview {
     rating: r.rating,
     body,
     createdAt: r.timestamp,
+    lastActive: Date.now() - 7 * 60 * 1000,
   };
 }
 
-const MOCK_REVIEWS: MockReview[] = [
+type MockReviewSeed = Omit<MockReview, 'lastActive'>;
+
+const MOCK_REVIEWS: MockReviewSeed[] = [
   {
     id: '1',
     type: 'renter',
@@ -159,7 +171,10 @@ export default function ReviewsScreen() {
   const [pickerKind, setPickerKind] = useState<PickerKind | null>(null);
 
   const combined = useMemo(
-    () => [...storedReviews.map(userReviewToMock), ...MOCK_REVIEWS],
+    () => [
+      ...storedReviews.map(userReviewToMock),
+      ...MOCK_REVIEWS.map((r) => ({ ...r, lastActive: mockReviewerLastActive(r.id) })),
+    ],
     [storedReviews]
   );
 
@@ -198,7 +213,7 @@ export default function ReviewsScreen() {
   const closePicker = () => setPickerKind(null);
 
   return (
-    <View style={styles.screen}>
+    <KeyboardDismissScreen style={styles.screen}>
       <View style={[styles.navHeader, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
@@ -280,6 +295,7 @@ export default function ReviewsScreen() {
                 </View>
                 <View style={styles.reviewBody}>
                   <View style={styles.nameRow}>
+                    <UserActivityDot lastActive={item.lastActive} />
                     <Text style={styles.reviewerName}>{item.name}</Text>
                     <Text style={styles.roleTag}>
                       {item.type === 'renter' ? 'Renter' : 'Rentee'}
@@ -341,7 +357,7 @@ export default function ReviewsScreen() {
           </Pressable>
         </Pressable>
       </Modal>
-    </View>
+    </KeyboardDismissScreen>
   );
 }
 
@@ -581,10 +597,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 8,
+    columnGap: 8,
+    rowGap: 4,
     marginBottom: 4,
+    minWidth: 0,
   },
   reviewerName: {
+    flex: 1,
+    minWidth: 0,
     fontSize: 16,
     fontWeight: '700',
     color: '#000',

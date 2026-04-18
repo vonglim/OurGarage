@@ -1,7 +1,14 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useRouter } from 'expo-router';
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { formatHowDisplay } from '../lib/deliveryFormat';
+import {
+  getPublicProfileForView,
+  posterUserIdFromRequest,
+} from '../lib/mockPublicProfiles';
+import { parseProfileAvatar } from '../lib/profileAvatar';
+import { getPresetById } from '../lib/userAvatarPresets';
 import {
   formatDurationDisplay,
   type DurationType,
@@ -10,21 +17,24 @@ import { getRequestCardUiStatus } from '../lib/requestCardStatus';
 import { milesFromViewerToRequest } from '../lib/requestDistance';
 import { formatUsd, getNumericTotalPrice } from '../lib/money';
 import { ui } from '@/constants/appUi';
+import { UserActivityDot } from './UserActivityDot';
 
 const CARD_BORDER = '#E5E5EA';
 const CARD_PADDING = 14;
 /** Placeholder poster avatar (until backend provides URLs). */
 const POSTER_AVATAR_SIZE = 32;
-/** Mock renter rating for cards (no backend yet). */
-const MOCK_CARD_RATING = 4.5;
 const GAP_AFTER_TITLE = 4;
 const GAP_USER_TO_TITLE = 6;
 const GAP_PRICE_TO_DELIVERY = 8;
 /** Space above bottom row (distance/time [+ Offer]). */
 const BOTTOM_ROW_MARGIN_TOP = 9;
+/** Reserve space so poster name / title don’t run under the absolutely positioned status badge. */
+const STATUS_BADGE_SIDE_INSET = 14;
+const STATUS_BADGE_CLEARANCE = 88;
 
 export const requestListCardSurface = StyleSheet.create({
   card: {
+    position: 'relative',
     backgroundColor: '#FFFFFF',
     borderRadius: 14,
     padding: CARD_PADDING,
@@ -106,6 +116,7 @@ export function RequestListCardInner({
   timeAgoText,
   offerAction,
 }: Props) {
+  const router = useRouter();
   const status = getRequestCardUiStatus(req);
   const title = req.toolName?.trim() || 'No name';
   const duration = formatDurationDisplay(req);
@@ -116,26 +127,56 @@ export function RequestListCardInner({
     timeAgoText != null && timeAgoText !== '' ? timeCompact(timeAgoText) : null;
   const leftFooter = timePart != null ? `${dist} • ${timePart}` : dist;
 
-  const ratingLabel = `${MOCK_CARD_RATING.toFixed(1)}★`;
+  const posterId = posterUserIdFromRequest(req.timestamp ?? null);
+  const poster = getPublicProfileForView(posterId);
+  const posterParsed = parseProfileAvatar(poster.avatar);
+  const posterPreset =
+    posterParsed.kind === 'preset' ? getPresetById(posterParsed.id) : null;
+  const posterAvatarBg = posterPreset?.color ?? '#ECECF0';
 
   return (
     <View style={styles.root}>
-      <View style={styles.contentColumn}>
-        <View style={styles.userRow}>
-          <View style={styles.posterAvatar}>
-            <Ionicons name="person" size={18} color="#8E8E93" />
-          </View>
-          <Text style={styles.posterRating}>{ratingLabel}</Text>
+      <View style={styles.statusBadge}>
+        <View style={styles.statusWrap}>
+          <View style={[styles.statusDot, { backgroundColor: status.dotColor }]} />
+          <Text style={styles.statusLabel}>{status.label}</Text>
         </View>
+      </View>
+
+      <View style={styles.contentColumn}>
+        <Pressable
+          onPress={() =>
+            router.push({
+              pathname: '/(tabs)/profile',
+              params: { viewUserId: posterId },
+            })
+          }
+          style={({ pressed }) => [styles.userRow, pressed && styles.userRowPressed]}
+          accessibilityRole="button"
+          accessibilityLabel={`${poster.name}, open profile`}
+        >
+          <View style={[styles.posterAvatar, { backgroundColor: posterAvatarBg }]}>
+            <Ionicons
+              name={(posterPreset?.icon ?? 'person') as React.ComponentProps<typeof Ionicons>['name']}
+              size={18}
+              color="#FFFFFF"
+            />
+          </View>
+          <View style={styles.posterMeta}>
+            <View style={styles.posterNameRow}>
+              <UserActivityDot lastActive={poster.lastActive} />
+              <Text style={styles.posterName} numberOfLines={1}>
+                {poster.name}
+              </Text>
+            </View>
+            <Text style={styles.posterRating}>⭐ {poster.ratingNumber.toFixed(1)}</Text>
+          </View>
+        </Pressable>
 
         <View style={styles.topRow}>
           <Text style={styles.toolName} numberOfLines={2}>
             {title}
           </Text>
-          <View style={styles.statusWrap}>
-            <View style={[styles.statusDot, { backgroundColor: status.dotColor }]} />
-            <Text style={styles.statusLabel}>{status.label}</Text>
-          </View>
         </View>
 
         <Text style={styles.priceDurationRow} numberOfLines={2}>
@@ -185,6 +226,13 @@ const styles = StyleSheet.create({
   root: {
     alignItems: 'stretch',
   },
+  statusBadge: {
+    position: 'absolute',
+    top: STATUS_BADGE_SIDE_INSET,
+    right: STATUS_BADGE_SIDE_INSET,
+    zIndex: 1,
+    maxWidth: '55%',
+  },
   contentColumn: {
     flexDirection: 'column',
     alignItems: 'stretch',
@@ -193,20 +241,41 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: GAP_USER_TO_TITLE,
+    alignSelf: 'stretch',
+    paddingRight: STATUS_BADGE_CLEARANCE,
+  },
+  userRowPressed: {
+    opacity: 0.88,
   },
   posterAvatar: {
     width: POSTER_AVATAR_SIZE,
     height: POSTER_AVATAR_SIZE,
     borderRadius: POSTER_AVATAR_SIZE / 2,
-    backgroundColor: '#ECECF0',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#D1D1D6',
+    borderColor: 'rgba(0,0,0,0.06)',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
   },
+  posterMeta: {
+    flex: 1,
+    marginLeft: 10,
+    minWidth: 0,
+  },
+  posterNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 2,
+    minWidth: 0,
+  },
+  posterName: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1C1C1E',
+    minWidth: 0,
+  },
   posterRating: {
-    marginLeft: 8,
     fontSize: 13,
     fontWeight: '700',
     color: '#3A3A3C',
@@ -215,8 +284,6 @@ const styles = StyleSheet.create({
   topRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 10,
     marginBottom: GAP_AFTER_TITLE,
   },
   toolName: {
@@ -225,7 +292,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#111111',
     lineHeight: 22,
-    paddingRight: 4,
     textAlign: 'left',
   },
   statusWrap: {
@@ -233,8 +299,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 5,
     flexShrink: 0,
-    maxWidth: '46%',
-    paddingTop: 1,
   },
   statusDot: {
     width: 6,

@@ -14,7 +14,7 @@ function isRequestExpired(req: { timestamp?: number | null; when?: string | null
   return Date.now() >= req.timestamp + lifetimeMsForWhen(req.when);
 }
 
-export type RequestCardUiStatusKey = 'open' | 'pending' | 'completed' | 'archived';
+export type RequestCardUiStatusKey = 'open' | 'pending' | 'completed' | 'active' | 'archived';
 
 export type RequestCardUiStatus = {
   key: RequestCardUiStatusKey;
@@ -29,21 +29,27 @@ const STATUS: Record<
   open: { label: 'Open', dotColor: '#2E7D32' },
   pending: { label: 'Pending', dotColor: '#F9A825' },
   completed: { label: 'Completed', dotColor: '#C62828' },
+  active: { label: 'Active', dotColor: '#1565C0' },
   archived: { label: 'Archived', dotColor: '#9E9E9E' },
 };
 
 /**
  * Maps stored request + offers + expiry to a compact card status.
- * - Completed (red): matched
+ * - Active (blue): matched and rental started (handoff confirmed)
+ * - Completed (red): matched, rental not started yet
  * - Archived (gray): not matched and past listing lifetime
  * - Pending (yellow): active listing with at least one offer
  * - Open (green): active listing, no offers yet
  */
 export function getRequestCardUiStatus(req: {
   matched?: boolean;
+  rentalStart?: number | null;
   timestamp?: number | null;
   when?: string | null;
 }): RequestCardUiStatus {
+  if (req.matched && req.rentalStart != null) {
+    return { key: 'active', ...STATUS.active };
+  }
   if (req.matched) {
     return { key: 'completed', ...STATUS.completed };
   }

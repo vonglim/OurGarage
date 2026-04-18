@@ -1,7 +1,11 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Tabs } from 'expo-router';
 
+import { useUnreadNotificationCount } from '../store/notificationsStore';
+
 export default function TabLayout() {
+  const unread = useUnreadNotificationCount();
+
   return (
     <Tabs
       screenOptions={{
@@ -33,12 +37,26 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="requests"
+        name="activity"
         options={{
-          title: 'Request A Tool',
+          title: 'Activity',
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons
-              name={focused ? 'hammer' : 'hammer-outline'}
+              name={focused ? 'layers' : 'layers-outline'}
+              size={size}
+              color={color}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="notifications"
+        options={{
+          title: 'Notifications',
+          tabBarBadge: unread > 0 ? (unread > 99 ? '99+' : unread) : undefined,
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons
+              name={focused ? 'notifications' : 'notifications-outline'}
               size={size}
               color={color}
             />

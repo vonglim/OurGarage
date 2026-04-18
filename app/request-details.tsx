@@ -11,10 +11,11 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
 import { RequestMetaLines } from './components/RequestMetaLines';
-import { getOffersForRequest } from './store/offersStore';
+import { OfferOffererRow } from './components/OfferOffererRow';
+import { getOfferUserPreview, getOffersForRequest } from './store/offersStore';
 import {
-  acceptOfferForRequest,
   getRequestByTimestamp,
   isLeaveReviewEligible,
   markRequestRentalComplete,
@@ -39,15 +40,9 @@ function getTimeAgo(timestamp: number): string {
 
 export default function RequestDetailsScreen() {
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{
-    requestId?: string | string[];
-    viewer?: string | string[];
-  }>();
+  const params = useLocalSearchParams<{ requestId?: string | string[] }>();
   const rawId = params.requestId;
   const requestIdStr = Array.isArray(rawId) ? rawId[0] : rawId;
-  const rawViewer = params.viewer;
-  const viewerRaw = Array.isArray(rawViewer) ? rawViewer[0] : rawViewer;
-  const viewerOffer = viewerRaw === 'offer';
 
   const [tick, setTick] = useState(0);
   const userReviews = useUserReviews();
@@ -76,28 +71,28 @@ export default function RequestDetailsScreen() {
   const requestTs = request?.timestamp;
   const reviewed =
     requestTs != null && userReviews.some((r) => r.requestTimestamp === requestTs);
-  const reviewType = viewerOffer ? 'rentee' : 'renter';
+  const reviewType = 'renter';
 
   if (!requestIdStr || !Number.isFinite(Number(requestIdStr))) {
     return (
-      <View style={styles.centered}>
+      <KeyboardDismissScreen style={styles.centered}>
         <Text style={styles.muted}>Invalid request.</Text>
-      </View>
+      </KeyboardDismissScreen>
     );
   }
 
   if (!request) {
     return (
-      <View style={styles.centered}>
+      <KeyboardDismissScreen style={styles.centered}>
         <Text style={styles.muted}>Request not found.</Text>
-      </View>
+      </KeyboardDismissScreen>
     );
   }
 
   const onEditRequest = () => {
-    if (request.timestamp == null || matched || viewerOffer) return;
+    if (request.timestamp == null || matched) return;
     router.push({
-      pathname: '/(tabs)/requests',
+      pathname: '/request-a-tool',
       params: { editTimestamp: String(request.timestamp) },
     });
   };
@@ -117,7 +112,7 @@ export default function RequestDetailsScreen() {
   };
 
   return (
-    <View style={styles.screen}>
+    <KeyboardDismissScreen style={styles.screen}>
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
@@ -137,7 +132,14 @@ export default function RequestDetailsScreen() {
         {request.timestamp != null ? (
           <Text style={styles.detailMuted}>Posted {getTimeAgo(request.timestamp)}</Text>
         ) : null}
-        {matched ? <Text style={styles.statusMatched}>Matched</Text> : null}
+        {request.rentalStart != null ? (
+          <Text style={styles.statusActive}>Rental active</Text>
+        ) : matched ? (
+          <Text style={styles.statusMatched}>Matched</Text>
+        ) : null}
+        {request.rentalStart != null ? (
+          <Text style={styles.detailMuted}>Rental started {getTimeAgo(request.rentalStart)}</Text>
+        ) : null}
         {matched && (
           <Text style={styles.acceptedPriceBanner}>
             Accepted total for entire duration: {formatUsd(request.acceptedPrice)}
@@ -146,7 +148,7 @@ export default function RequestDetailsScreen() {
         <Text style={styles.detail}>When: {request.when || 'N/A'}</Text>
         <RequestMetaLines req={request} detailStyle={styles.detail} />
 
-        {!viewerOffer && !matched ? (
+        {!matched ? (
           <Pressable
             onPress={onEditRequest}
             style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
@@ -178,18 +180,25 @@ export default function RequestDetailsScreen() {
         ) : null}
 
         <Text style={styles.sectionTitle}>Offers</Text>
-        {viewerOffer ? (
-          <Text style={styles.viewerHint}>
-            You are viewing this request as someone who submitted an offer. Only the requester can
-            accept an offer.
-          </Text>
-        ) : null}
         {offers.length === 0 ? (
           <Text style={styles.muted}>No offers yet</Text>
         ) : (
-          offers.map((offer) => (
+          offers.map((offer) => {
+            const who = getOfferUserPreview(offer);
+            return (
             <View key={offer.timestamp} style={styles.offerCard}>
-              <Text style={styles.offerLabel}>Offer received</Text>
+              <OfferOffererRow
+                name={who.name}
+                rating={who.rating}
+                avatar={who.avatar}
+                lastActive={who.lastActive}
+                onPress={() =>
+                  router.push({
+                    pathname: '/(tabs)/profile',
+                    params: { viewUserId: who.userId },
+                  })
+                }
+              />
               <Text style={styles.offerPriceLine}>
                 Their total for entire duration: {formatUsd(getNumericOfferPrice(offer))}
               </Text>
@@ -200,17 +209,16 @@ export default function RequestDetailsScreen() {
                   matched && styles.acceptButtonDisabled,
                   pressed && !matched && styles.acceptButtonPressed,
                 ]}
-                disabled={matched || viewerOffer}
+                disabled={matched}
                 onPress={() => {
-                  acceptOfferForRequest(
-                    request.timestamp,
-                    offer.timestamp,
-                    getNumericOfferPrice(offer)
-                  );
-                  setTick((t) => t + 1);
+                  const priceNum = getNumericOfferPrice(offer);
                   router.push({
-                    pathname: '/match-summary',
-                    params: { requestId: String(request.timestamp) },
+                    pathname: '/rental-agreement',
+                    params: {
+                      requestId: String(request.timestamp),
+                      offerTimestamp: String(offer.timestamp),
+                      price: String(priceNum),
+                    },
                   });
                 }}
               >
@@ -221,10 +229,11 @@ export default function RequestDetailsScreen() {
                 </Text>
               </Pressable>
             </View>
-          ))
+            );
+          })
         )}
       </ScrollView>
-    </View>
+    </KeyboardDismissScreen>
   );
 }
 
@@ -284,6 +293,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#2E7D32',
     marginBottom: 8,
+  },
+  statusActive: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1565C0',
+    marginBottom: 4,
   },
   acceptedPriceBanner: {
     fontSize: 17,
@@ -366,12 +381,6 @@ const styles = StyleSheet.create({
     marginTop: 24,
     marginBottom: 12,
   },
-  viewerHint: {
-    fontSize: 13,
-    color: '#6D6D72',
-    lineHeight: 18,
-    marginBottom: 10,
-  },
   muted: {
     fontSize: 15,
     color: ui.textSubtle,
@@ -384,12 +393,6 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     borderWidth: 1,
     borderColor: ui.border,
-  },
-  offerLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#111',
-    marginBottom: 4,
   },
   offerPriceLine: {
     fontSize: 16,

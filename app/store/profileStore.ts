@@ -8,16 +8,22 @@ const STORAGE_KEY = '@ourgarage/profile_v1';
 const LEGACY_AVATAR_KEY = '@ourgarage/user_avatar_v1';
 
 export type UserProfile = {
+  /** Stable id for this device profile (offers, deep links). */
+  userId: string;
   name: string;
   bio: string;
   /** Preset: `preset:<id>`. Custom: image URI. */
   avatar: string;
+  /** Simulated “last seen” for activity dot (updated on key actions). */
+  lastActive: number;
 };
 
 const defaultProfile: UserProfile = {
+  userId: 'local-user',
   name: '',
   bio: '',
   avatar: formatPresetAvatar('person'),
+  lastActive: Date.now(),
 };
 
 let state: UserProfile = { ...defaultProfile };
@@ -43,11 +49,17 @@ function normalizeLoadedProfile(parsed: unknown): UserProfile {
     return { ...defaultProfile };
   }
   const p = parsed as Record<string, unknown>;
+  const userId =
+    typeof p.userId === 'string' && p.userId.trim().length > 0 ? p.userId.trim() : defaultProfile.userId;
   const name = typeof p.name === 'string' ? p.name : '';
   const bio = typeof p.bio === 'string' ? p.bio : '';
   const avatarRaw = typeof p.avatar === 'string' ? p.avatar : defaultProfile.avatar;
   const avatar = normalizeAvatarField(avatarRaw);
-  return { name, bio, avatar };
+  const lastActive =
+    typeof p.lastActive === 'number' && Number.isFinite(p.lastActive)
+      ? p.lastActive
+      : Date.now();
+  return { userId, name, bio, avatar, lastActive };
 }
 
 type LegacyAvatar = {
@@ -84,6 +96,7 @@ async function loadFromStorage() {
           if (legacy) {
             state = {
               ...defaultProfile,
+              lastActive: Date.now(),
               avatar:
                 legacy.mode === 'custom' && legacy.customUri
                   ? legacy.customUri
@@ -126,8 +139,18 @@ export function getProfile(): UserProfile {
   return { ...state };
 }
 
+export function touchLastActive(): void {
+  ensureLoad();
+  state = { ...state, lastActive: Date.now() };
+  emit();
+  void persist();
+}
+
 export async function updateProfile(data: Partial<UserProfile>): Promise<void> {
   ensureLoad();
+  if (data.userId !== undefined) {
+    state = { ...state, userId: data.userId.trim() || state.userId };
+  }
   if (data.name !== undefined) {
     state = { ...state, name: data.name };
   }
@@ -136,6 +159,11 @@ export async function updateProfile(data: Partial<UserProfile>): Promise<void> {
   }
   if (data.avatar !== undefined) {
     state = { ...state, avatar: normalizeAvatarField(data.avatar) };
+  }
+  if (data.lastActive !== undefined && Number.isFinite(data.lastActive)) {
+    state = { ...state, lastActive: data.lastActive };
+  } else {
+    state = { ...state, lastActive: Date.now() };
   }
   emit();
   await persist();

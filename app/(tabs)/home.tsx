@@ -1,7 +1,8 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
+  Keyboard,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,9 +13,13 @@ import {
 import { ui } from '@/constants/appUi';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
+import { MainTabFab, useMainTabFabBottomReserve } from '../components/MainTabFab';
 import { formatDurationDisplay } from '../lib/durationFormat';
 import { formatUsd, getNumericTotalPrice } from '../lib/money';
 import { milesFromViewerToRequest } from '../lib/requestDistance';
+import { getOnboardingTermsAccepted } from '../store/agreementsStore';
+import { touchLastActive } from '../store/profileStore';
 import { getRequests } from '../store/requestsStore';
 
 const MAX_RECENT = 5;
@@ -42,20 +47,45 @@ function distanceLine(req: { requestLat?: unknown; requestLng?: unknown }): stri
 export default function Home() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const fabBottomReserve = useMainTabFabBottomReserve();
   const [recent, setRecent] = useState<ReturnType<typeof getRequests>>([]);
+  /** Once terms are accepted, skip re-reading AsyncStorage on every tab focus. */
+  const onboardingOkRef = useRef<boolean | null>(null);
 
   useFocusEffect(
     useCallback(() => {
+      touchLastActive();
       setRecent(getRequests().slice(0, MAX_RECENT));
     }, [])
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      if (onboardingOkRef.current === true) return;
+      let cancelled = false;
+      (async () => {
+        const ok = await getOnboardingTermsAccepted();
+        if (cancelled) return;
+        if (ok) {
+          onboardingOkRef.current = true;
+          return;
+        }
+        router.replace('/onboarding-terms');
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [router])
+  );
+
   return (
-    <ScrollView
+    <KeyboardDismissScreen>
+      <View style={styles.screenInner}>
+      <ScrollView
       style={styles.outer}
       contentContainerStyle={[
         styles.scrollInner,
-        { paddingTop: 16 + insets.top, paddingBottom: 28 + insets.bottom },
+        { paddingTop: 16 + insets.top, paddingBottom: fabBottomReserve },
       ]}
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
@@ -70,13 +100,16 @@ export default function Home() {
             style={styles.searchInput}
             autoCapitalize="sentences"
             autoCorrect
+            returnKeyType="done"
+            blurOnSubmit
+            onSubmitEditing={() => Keyboard.dismiss()}
           />
           <Pressable
             style={({ pressed }) => [
               styles.primaryButton,
               pressed && styles.primaryButtonPressed,
             ]}
-            onPress={() => router.push('/requests')}
+            onPress={() => router.push('/request-a-tool')}
           >
             <Text style={styles.primaryButtonText}>Request A Tool</Text>
           </Pressable>
@@ -122,10 +155,16 @@ export default function Home() {
         <Text style={styles.secondaryText}>Have a tool? Rent it out</Text>
       </View>
     </ScrollView>
+      <MainTabFab />
+      </View>
+    </KeyboardDismissScreen>
   );
 }
 
 const styles = StyleSheet.create({
+  screenInner: {
+    flex: 1,
+  },
   outer: {
     flex: 1,
     backgroundColor: '#FFFFFF',

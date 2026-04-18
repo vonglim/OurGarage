@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { View } from 'react-native';
 import 'react-native-reanimated';
 
+import { NumberPadKeyboardAccessory } from './components/NumberPadKeyboardAccessory';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export const unstable_settings = {
@@ -20,10 +21,16 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <View style={{ flex: 1 }}>
+            <NumberPadKeyboardAccessory />
             <Stack screenOptions={{ headerShown: false }}>
+              <Stack.Screen name="onboarding-terms" />
               <Stack.Screen name="(tabs)" />
+              <Stack.Screen name="request-a-tool" />
+              <Stack.Screen name="list-my-tool" />
+              <Stack.Screen name="rental-agreement" />
               <Stack.Screen name="request-details" />
               <Stack.Screen name="match-summary" />
+              <Stack.Screen name="handoff-confirmation" />
               <Stack.Screen name="edit-profile" />
               <Stack.Screen name="rentals-management" />
               <Stack.Screen name="requests-management" />

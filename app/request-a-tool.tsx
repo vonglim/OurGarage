@@ -4,54 +4,33 @@ import React, { useCallback, useRef, useState } from 'react';
 import {
   Alert,
   Keyboard,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
-import { ScrollView, Swipeable } from 'react-native-gesture-handler';
-import {
-  RequestListCardInner,
-  requestListCardSurface,
-} from '../components/RequestListCardInner';
-import { countOffersForRequest, removeOffersForRequest } from '../store/offersStore';
-import { getRequestEditFormValues } from '../lib/getRequestEditFormValues';
+import { ScrollView } from 'react-native-gesture-handler';
+import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
+import { numberPadAccessoryProps } from './components/NumberPadKeyboardAccessory';
+import { getRequestEditFormValues } from './lib/getRequestEditFormValues';
 import {
   addRequest,
   getRequestByTimestamp,
-  getRequests,
-  removeRequest,
   updateRequest,
-} from '../store/requestsStore';
-import { DELIVERY_OPTIONS, needsDeliveryFee, type HowKey } from '../lib/deliveryFormat';
-import { DURATION_OPTIONS, type DurationType } from '../lib/durationFormat';
-import { parseMoneyToNumber, sanitizeMoneyDigits } from '../lib/money';
-import { coordinatesFromLocationField } from '../lib/zipCoordinates';
+} from './store/requestsStore';
+import { DELIVERY_OPTIONS, needsDeliveryFee, type HowKey } from './lib/deliveryFormat';
+import { DURATION_OPTIONS, type DurationType } from './lib/durationFormat';
+import { parseMoneyToNumber, sanitizeMoneyDigits } from './lib/money';
+import { coordinatesFromLocationField } from './lib/zipCoordinates';
 import { ui } from '@/constants/appUi';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const whenOptions = ['Today', 'This Weekend', 'Flexible'];
 
-function formatOffersReceived(n: number): string {
-  if (n === 1) return '1 offer received';
-  return `${n} offers received`;
-}
-
-function getTimeAgo(timestamp: number): string {
-  const diffMs = Date.now() - timestamp;
-  const seconds = Math.floor(diffMs / 1000);
-  const minutes = Math.floor(diffMs / (60 * 1000));
-  const hours = Math.floor(diffMs / (60 * 60 * 1000));
-  const days = Math.floor(diffMs / (24 * 60 * 60 * 1000));
-
-  if (seconds < 60) return 'Just now';
-  if (minutes < 60) return minutes === 1 ? '1 minute ago' : `${minutes} minutes ago`;
-  if (hours < 24) return hours === 1 ? '1 hour ago' : `${hours} hours ago`;
-  return days === 1 ? '1 day ago' : `${days} days ago`;
-}
-
-export default function Requests() {
+export default function RequestAToolScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ editTimestamp?: string | string[] }>();
   const insets = useSafeAreaInsets();
@@ -67,12 +46,48 @@ export default function Requests() {
   const [deliveryFeeInput, setDeliveryFeeInput] = useState('');
   const [locationInput, setLocationInput] = useState('');
 
-  const [requests, setRequests] = useState<any[]>([]);
   const [editingTimestamp, setEditingTimestamp] = useState<number | null>(null);
-  const swipeRefs = useRef(new Map<number, Swipeable>());
+
+  const refToolName = useRef<TextInput>(null);
+  const refLocation = useRef<TextInput>(null);
+  const refPickupRadius = useRef<TextInput>(null);
+  const refDurationDays = useRef<TextInput>(null);
+  const refDurationWeeks = useRef<TextInput>(null);
+  const refTotalPrice = useRef<TextInput>(null);
+  const refDeliveryFee = useRef<TextInput>(null);
+
+  const focusAfterLocation = useCallback(() => {
+    if (how === 'pickup_nearby') {
+      refPickupRadius.current?.focus();
+    } else if (durationType === 'multiDay') {
+      refDurationDays.current?.focus();
+    } else if (durationType === 'weekly') {
+      refDurationWeeks.current?.focus();
+    } else {
+      refTotalPrice.current?.focus();
+    }
+  }, [how, durationType]);
+
+  const focusAfterPickup = useCallback(() => {
+    if (durationType === 'multiDay') {
+      refDurationDays.current?.focus();
+    } else if (durationType === 'weekly') {
+      refDurationWeeks.current?.focus();
+    } else {
+      refTotalPrice.current?.focus();
+    }
+  }, [durationType]);
+
+  const focusAfterTotal = useCallback(() => {
+    if (needsDeliveryFee(how)) {
+      refDeliveryFee.current?.focus();
+    } else {
+      Keyboard.dismiss();
+    }
+  }, [how]);
 
   const applyEditFormFromRequest = useCallback(
-    (req: ReturnType<typeof getRequests>[number]) => {
+    (req: NonNullable<ReturnType<typeof getRequestByTimestamp>>) => {
       if (req.timestamp == null) return;
       const v = getRequestEditFormValues(req);
       setToolName(v.toolName);
@@ -90,12 +105,8 @@ export default function Requests() {
     []
   );
 
-  // Refresh requests on focus (ensure newest first); open editor when linked from request-details
   useFocusEffect(
     useCallback(() => {
-      const reqs = getRequests();
-      setRequests(reqs.sort((a, b) => b.timestamp - a.timestamp));
-
       const raw = params.editTimestamp;
       const editTsStr = Array.isArray(raw) ? raw[0] : raw;
       if (editTsStr == null || editTsStr === '') return;
@@ -110,39 +121,59 @@ export default function Requests() {
   );
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={[
-        styles.scrollContent,
-        { paddingTop: 24 + insets.top, paddingBottom: 40 + insets.bottom },
-      ]}
-      keyboardShouldPersistTaps="handled"
-    >
-      <View style={styles.titleRow}>
-        <Text style={styles.title}>Request A Tool</Text>
+    <KeyboardDismissScreen style={styles.screen}>
+      <KeyboardAvoidingView
+        style={styles.kav}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+      >
+      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
+          <Text style={styles.backLabel}>‹ Back</Text>
+        </Pressable>
+        <Text style={styles.screenTitle}>Request a tool</Text>
       </View>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingTop: 12, paddingBottom: 32 + insets.bottom },
+        ]}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.titleRow}>
+          <Text style={styles.title}>What do you need?</Text>
+        </View>
 
       {/* Tool Input */}
       <View style={styles.section}>
         <Text style={styles.label}>Tool Name</Text>
         <TextInput
+          ref={refToolName}
           placeholder="What tool do you need?"
           placeholderTextColor="#888"
           value={toolName}
           onChangeText={setToolName}
           style={styles.input}
+          returnKeyType="next"
+          blurOnSubmit
+          onSubmitEditing={() => refLocation.current?.focus()}
         />
       </View>
 
       <View style={styles.section}>
         <Text style={styles.label}>Your location (zip code or city)</Text>
         <TextInput
+          ref={refLocation}
           placeholder="e.g. 60614 or Chicago"
           placeholderTextColor="#888"
           value={locationInput}
           onChangeText={setLocationInput}
           style={styles.input}
           autoCapitalize="words"
+          returnKeyType="next"
+          blurOnSubmit
+          onSubmitEditing={focusAfterLocation}
         />
         <Text style={styles.fieldHint}>
           Exact location will be shared after match.
@@ -202,6 +233,7 @@ export default function Requests() {
         </View>
         {how === 'pickup_nearby' && (
           <TextInput
+            ref={refPickupRadius}
             placeholder="Miles (e.g. 10)"
             placeholderTextColor="#888"
             value={pickupRadiusMiles}
@@ -210,6 +242,10 @@ export default function Requests() {
             }
             style={[styles.input, styles.durationDaysInput]}
             keyboardType="number-pad"
+            {...numberPadAccessoryProps()}
+            returnKeyType="next"
+            blurOnSubmit
+            onSubmitEditing={focusAfterPickup}
           />
         )}
       </View>
@@ -244,22 +280,32 @@ export default function Requests() {
         </View>
         {durationType === 'multiDay' && (
           <TextInput
+            ref={refDurationDays}
             placeholder="Number of days"
             placeholderTextColor="#888"
             value={durationDays}
             onChangeText={setDurationDays}
             style={[styles.input, styles.durationDaysInput]}
             keyboardType="number-pad"
+            {...numberPadAccessoryProps()}
+            returnKeyType="next"
+            blurOnSubmit
+            onSubmitEditing={() => refTotalPrice.current?.focus()}
           />
         )}
         {durationType === 'weekly' && (
           <TextInput
+            ref={refDurationWeeks}
             placeholder="Number of weeks"
             placeholderTextColor="#888"
             value={durationWeeks}
             onChangeText={setDurationWeeks}
             style={[styles.input, styles.durationDaysInput]}
             keyboardType="number-pad"
+            {...numberPadAccessoryProps()}
+            returnKeyType="next"
+            blurOnSubmit
+            onSubmitEditing={() => refTotalPrice.current?.focus()}
           />
         )}
       </View>
@@ -272,12 +318,17 @@ export default function Requests() {
         <View style={styles.moneyRow}>
           <Text style={styles.dollarPrefix}>$</Text>
           <TextInput
+            ref={refTotalPrice}
             placeholder="0"
             placeholderTextColor="#888"
             value={totalPriceInput}
             onChangeText={(t) => setTotalPriceInput(sanitizeMoneyDigits(t))}
             style={styles.moneyInput}
             keyboardType="decimal-pad"
+            {...numberPadAccessoryProps()}
+            returnKeyType={needsDeliveryFee(how) ? 'next' : 'done'}
+            blurOnSubmit
+            onSubmitEditing={focusAfterTotal}
           />
         </View>
       </View>
@@ -291,12 +342,17 @@ export default function Requests() {
           <View style={styles.moneyRow}>
             <Text style={styles.dollarPrefix}>$</Text>
             <TextInput
+              ref={refDeliveryFee}
               placeholder="0"
               placeholderTextColor="#888"
               value={deliveryFeeInput}
               onChangeText={(t) => setDeliveryFeeInput(sanitizeMoneyDigits(t))}
               style={styles.moneyInput}
               keyboardType="decimal-pad"
+              {...numberPadAccessoryProps()}
+              returnKeyType="done"
+              blurOnSubmit
+              onSubmitEditing={() => Keyboard.dismiss()}
             />
           </View>
         </View>
@@ -395,7 +451,6 @@ export default function Requests() {
 
           if (editingTimestamp != null) {
             updateRequest(editingTimestamp, payload);
-            setRequests(getRequests());
             setEditingTimestamp(null);
             setToolName('');
             setWhen(null);
@@ -407,6 +462,7 @@ export default function Requests() {
             setTotalPriceInput('');
             setDeliveryFeeInput('');
             setLocationInput('');
+            router.back();
             return;
           }
           addRequest(payload);
@@ -417,109 +473,44 @@ export default function Requests() {
           {editingTimestamp != null ? 'Update Request' : 'Submit Request'}
         </Text>
       </Pressable>
-
-      <View style={styles.sectionDivider} />
-
-      <Text style={styles.yourRequestsTitle}>Your Requests</Text>
-      <View style={styles.requestsList}>
-        {requests.length === 0 && (
-          <Text style={styles.noRequestsText}>
-            No requests yet. Create one above.
-          </Text>
-        )}
-        {requests.map((req, idx) => {
-          const matched = !!req.matched;
-          const rowKey = req.timestamp ?? idx;
-
-          const card = (
-            <Pressable
-              style={({ pressed }) => [
-                requestListCardSurface.card,
-                matched && styles.requestCardMatched,
-                pressed && styles.requestCardPressed,
-              ]}
-              onPress={() => {
-                if (req.timestamp == null) return;
-                router.push({
-                  pathname: '/request-details',
-                  params: { requestId: String(req.timestamp) },
-                });
-              }}
-            >
-              <RequestListCardInner
-                req={req}
-                matched={matched}
-                timeAgoText={
-                  req.timestamp != null ? getTimeAgo(req.timestamp) : null
-                }
-              />
-              {req.timestamp != null && (
-                <Text style={styles.offersReceived}>
-                  {formatOffersReceived(countOffersForRequest(req.timestamp))}
-                </Text>
-              )}
-            </Pressable>
-          );
-
-          if (matched) {
-            return (
-              <View key={rowKey} style={styles.cardRowWrap}>
-                {card}
-              </View>
-            );
-          }
-
-          return (
-            <View key={rowKey} style={styles.cardRowWrap}>
-              <Swipeable
-                ref={(el) => {
-                  const ts = req.timestamp;
-                  if (ts == null) return;
-                  if (el) swipeRefs.current.set(ts, el);
-                  else swipeRefs.current.delete(ts);
-                }}
-                overshootRight={false}
-                renderRightActions={() => (
-                  <View style={styles.rightActionsRow}>
-                    <Pressable
-                      style={styles.editAction}
-                      onPress={() => {
-                        if (req.timestamp == null) return;
-                        swipeRefs.current.get(req.timestamp)?.close();
-                        applyEditFormFromRequest(req);
-                      }}
-                    >
-                      <Text style={styles.editActionText}>Edit</Text>
-                    </Pressable>
-                    <Pressable
-                      style={styles.deleteAction}
-                      onPress={() => {
-                        if (req.timestamp == null) return;
-                        removeOffersForRequest(req.timestamp);
-                        removeRequest(req.timestamp);
-                        setEditingTimestamp((t) => (t === req.timestamp ? null : t));
-                        setRequests(getRequests());
-                      }}
-                    >
-                      <Text style={styles.deleteActionText}>Delete</Text>
-                    </Pressable>
-                  </View>
-                )}
-              >
-                {card}
-              </Swipeable>
-            </View>
-          );
-        })}
-      </View>
-    </ScrollView>
+      </ScrollView>
+      </KeyboardAvoidingView>
+    </KeyboardDismissScreen>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  kav: {
+    flex: 1,
+  },
+  topBar: {
+    paddingHorizontal: 20,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E5E5EA',
+    backgroundColor: '#FFFFFF',
+  },
+  backHit: {
+    alignSelf: 'flex-start',
+    marginBottom: 4,
+  },
+  backLabel: {
+    fontSize: 17,
+    fontWeight: '500',
+    color: ui.primary,
+  },
+  screenTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#000',
+  },
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF', // White background for the full screen
+    backgroundColor: '#FFFFFF',
   },
   scrollContent: {
     paddingHorizontal: 24,
@@ -624,73 +615,6 @@ const styles = StyleSheet.create({
   },
   submitText: {
     color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  sectionDivider: {
-    height: 1,
-    backgroundColor: ui.border,
-    marginTop: 28,
-    marginBottom: 28,
-  },
-  yourRequestsTitle: {
-    fontSize: 19,
-    fontWeight: '700',
-    marginBottom: 16,
-    color: ui.text,
-    textAlign: 'left',
-  },
-  requestsList: {
-    marginBottom: 20,
-  },
-  cardRowWrap: {
-    marginBottom: 14,
-  },
-  requestCardMatched: {
-    backgroundColor: '#F4FAF4',
-    borderColor: '#C5E0C7',
-  },
-  requestCardPressed: {
-    opacity: ui.pressOpacity,
-  },
-  offersReceived: {
-    fontSize: 12,
-    color: '#868686',
-    marginTop: 8,
-    fontWeight: '500',
-  },
-  noRequestsText: {
-    color: ui.textSubtle,
-    fontSize: 15,
-    textAlign: 'left',
-    marginBottom: 8,
-    lineHeight: 22,
-  },
-  rightActionsRow: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-  },
-  editAction: {
-    backgroundColor: ui.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    width: 80,
-  },
-  editActionText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  deleteAction: {
-    backgroundColor: '#E53935',
-    justifyContent: 'center',
-    alignItems: 'center',
-    width: 88,
-    borderTopRightRadius: 14,
-    borderBottomRightRadius: 14,
-  },
-  deleteActionText: {
-    color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
   },

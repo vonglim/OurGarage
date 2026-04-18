@@ -1,6 +1,8 @@
 import type { HowKey } from '../lib/deliveryFormat';
 import type { DurationType } from '../lib/durationFormat';
 import { needsDeliveryFee } from '../lib/deliveryFormat';
+import { addNotification } from './notificationsStore';
+import { touchLastActive } from './profileStore';
 
 let requests: any[] = [];
 
@@ -19,6 +21,7 @@ export function acceptOfferForRequest(
   acceptedOfferTimestamp: number,
   acceptedPrice: number
 ) {
+  const before = getRequestByTimestamp(requestTimestamp);
   requests = requests.map((r) => {
     if (r.timestamp !== requestTimestamp || r.matched) return r;
     const price = Number.isFinite(acceptedPrice) ? acceptedPrice : 0;
@@ -30,6 +33,14 @@ export function acceptOfferForRequest(
       acceptedPrice: price,
     };
   });
+  const after = getRequestByTimestamp(requestTimestamp);
+  if (before && !before.matched && after?.matched) {
+    addNotification({
+      type: 'accepted',
+      message: 'An offer was accepted. Complete the rental agreement to continue.',
+      requestId: requestTimestamp,
+    });
+  }
 }
 
 /** Matched + not explicitly waiting on “Mark as Completed” (legacy rows have no `fulfilled`). */
@@ -44,9 +55,41 @@ export function showMarkRentalComplete(req: { matched?: boolean; fulfilled?: boo
 }
 
 export function markRequestRentalComplete(requestTimestamp: number): void {
+  const before = getRequestByTimestamp(requestTimestamp);
   requests = requests.map((r) =>
     r.timestamp === requestTimestamp && r.matched ? { ...r, fulfilled: true } : r
   );
+  const after = getRequestByTimestamp(requestTimestamp);
+  if (
+    before?.matched &&
+    before.fulfilled !== true &&
+    after?.fulfilled === true
+  ) {
+    addNotification({
+      type: 'completed',
+      message: 'A rental was marked completed.',
+      requestId: requestTimestamp,
+    });
+  }
+}
+
+/** After handoff checklist: records start time and marks rental active (in-app only). */
+export function confirmRentalHandoff(requestTimestamp: number): void {
+  const before = getRequestByTimestamp(requestTimestamp);
+  const now = Date.now();
+  requests = requests.map((r) => {
+    if (r.timestamp !== requestTimestamp || !r.matched) return r;
+    if (r.rentalStart != null) return r;
+    return { ...r, rentalStart: now, rentalActive: true };
+  });
+  const after = getRequestByTimestamp(requestTimestamp);
+  if (before?.rentalStart == null && after?.rentalStart != null) {
+    addNotification({
+      type: 'started',
+      message: 'Rental started after handoff confirmation.',
+      requestId: requestTimestamp,
+    });
+  }
 }
 
 export function addRequest(request: any) {
@@ -58,6 +101,7 @@ export function addRequest(request: any) {
     matched: false,
     timestamp: Date.now(),
   });
+  touchLastActive();
 }
 
 export function getRequests() {

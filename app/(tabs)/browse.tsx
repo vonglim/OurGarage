@@ -2,6 +2,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -12,6 +13,9 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
+import { MainTabFab, useMainTabFabBottomReserve } from '../components/MainTabFab';
+import { numberPadAccessoryProps } from '../components/NumberPadKeyboardAccessory';
 import {
   RequestListCardInner,
   requestListCardSurface,
@@ -79,6 +83,7 @@ function getTimeAgo(timestamp: number): string {
 
 export default function Browse() {
   const insets = useSafeAreaInsets();
+  const fabBottomReserve = useMainTabFabBottomReserve();
   const [sortOption, setSortOption] = useState<SortOption>('newest');
   const [refreshToken, setRefreshToken] = useState(0);
   const [offerTargetId, setOfferTargetId] = useState<number | null>(null);
@@ -100,11 +105,12 @@ export default function Browse() {
     const emptyMessage =
       visible.length === 0 && all.length > 0
         ? 'No active requests right now.'
-        : 'No requests yet. Add one from the Request tab.';
+        : 'No requests yet. Add one from the Activity tab.';
     return { visibleRequests: visible, emptyMessage };
   }, [sortOption, refreshToken]);
 
   const closeOfferModal = () => {
+    Keyboard.dismiss();
     setOfferTargetId(null);
     setOfferPriceDraft('');
     setOfferPriceUnlocked(false);
@@ -127,12 +133,13 @@ export default function Browse() {
   };
 
   return (
-    <View style={styles.root}>
+    <KeyboardDismissScreen style={styles.root}>
+      <View style={styles.screenInner}>
       <ScrollView
         style={styles.container}
         contentContainerStyle={[
           styles.content,
-          { paddingTop: 24 + insets.top, paddingBottom: 40 + insets.bottom },
+          { paddingTop: 24 + insets.top, paddingBottom: fabBottomReserve },
         ]}
         keyboardShouldPersistTaps="handled"
       >
@@ -233,6 +240,10 @@ export default function Browse() {
                   keyboardType="decimal-pad"
                   editable={offerPriceUnlocked}
                   selectTextOnFocus={offerPriceUnlocked}
+                  {...numberPadAccessoryProps()}
+                  returnKeyType="done"
+                  blurOnSubmit
+                  onSubmitEditing={() => Keyboard.dismiss()}
                 />
               </View>
               {!offerPriceUnlocked ? (
@@ -276,7 +287,9 @@ export default function Browse() {
           </KeyboardAvoidingView>
         </Pressable>
       </Modal>
-    </View>
+      <MainTabFab />
+      </View>
+    </KeyboardDismissScreen>
   );
 }
 
@@ -284,6 +297,9 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: '#FFFFFF',
+  },
+  screenInner: {
+    flex: 1,
   },
   container: {
     flex: 1,

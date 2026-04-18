@@ -2,6 +2,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+
+import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
 import { formatHowDisplay } from './lib/deliveryFormat';
 import { formatDurationDisplay } from './lib/durationFormat';
 import { formatUsd } from './lib/money';
@@ -36,25 +38,25 @@ export default function MatchSummaryScreen() {
 
   if (!requestIdStr || !Number.isFinite(Number(requestIdStr))) {
     return (
-      <View style={styles.centered}>
+      <KeyboardDismissScreen style={styles.centered}>
         <Text style={styles.muted}>Invalid request.</Text>
-      </View>
+      </KeyboardDismissScreen>
     );
   }
 
   if (!request) {
     return (
-      <View style={styles.centered}>
+      <KeyboardDismissScreen style={styles.centered}>
         <Text style={styles.muted}>Request not found.</Text>
-      </View>
+      </KeyboardDismissScreen>
     );
   }
 
   if (!request.matched) {
     return (
-      <View style={styles.centered}>
+      <KeyboardDismissScreen style={styles.centered}>
         <Text style={styles.muted}>No match on this request yet.</Text>
-      </View>
+      </KeyboardDismissScreen>
     );
   }
 
@@ -62,7 +64,8 @@ export default function MatchSummaryScreen() {
   const distanceLine = formatDistanceFromYou(request);
 
   return (
-    <ScrollView
+    <KeyboardDismissScreen>
+      <ScrollView
       style={styles.container}
       contentContainerStyle={styles.scrollContent}
       keyboardShouldPersistTaps="handled"
@@ -99,6 +102,22 @@ export default function MatchSummaryScreen() {
           </Text>
         </View>
 
+        {request.rentalStart != null ? (
+          <Text style={styles.rentalStartedNote}>Rental is active. Handoff was confirmed.</Text>
+        ) : (
+          <Pressable
+            style={({ pressed }) => [styles.startButton, pressed && styles.startButtonPressed]}
+            onPress={() =>
+              router.push({
+                pathname: '/handoff-confirmation',
+                params: { requestId: String(request.timestamp) },
+              })
+            }
+          >
+            <Text style={styles.startButtonText}>Start Rental</Text>
+          </Pressable>
+        )}
+
         <Pressable
           style={({ pressed }) => [styles.homeButton, pressed && styles.homeButtonPressed]}
           onPress={() => router.replace('/(tabs)/home')}
@@ -107,6 +126,7 @@ export default function MatchSummaryScreen() {
         </Pressable>
       </View>
     </ScrollView>
+    </KeyboardDismissScreen>
   );
 }
 
@@ -208,7 +228,30 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     paddingHorizontal: 4,
   },
+  startButton: {
+    backgroundColor: '#1565C0',
+    paddingVertical: ui.padButtonV,
+    borderRadius: ui.radiusButton,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  startButtonPressed: {
+    opacity: ui.pressOpacity,
+  },
+  startButtonText: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  rentalStartedNote: {
+    fontSize: 14,
+    color: ui.textSubtle,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 12,
+  },
   homeButton: {
+    marginTop: 12,
     backgroundColor: ui.primary,
     paddingVertical: ui.padButtonV,
     borderRadius: ui.radiusButton,

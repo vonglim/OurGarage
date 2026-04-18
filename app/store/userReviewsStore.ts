@@ -1,6 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useMemo, useSyncExternalStore } from 'react';
 
+import { addNotification } from './notificationsStore';
+import { touchLastActive } from './profileStore';
+
 const STORAGE_KEY = '@ourgarage/user_reviews_v1';
 
 export type UserReviewType = 'renter' | 'rentee';
@@ -128,6 +131,12 @@ export async function addUserReview(entry: {
   ];
   emit();
   await persist();
+  touchLastActive();
+  addNotification({
+    type: 'review',
+    message: 'A new review was saved.',
+    requestId: entry.requestTimestamp ?? null,
+  });
 }
 
 export function useUserReviews(): UserReview[] {

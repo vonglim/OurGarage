@@ -3,6 +3,7 @@ import React, { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
 import { formatUsd } from './lib/money';
 import type { Offer } from './store/offersStore';
 import { getOffers } from './store/offersStore';
@@ -36,7 +37,7 @@ export default function RentalsManagementScreen() {
   );
 
   return (
-    <View style={styles.screen}>
+    <KeyboardDismissScreen style={styles.screen}>
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
@@ -83,10 +84,7 @@ export default function RentalsManagementScreen() {
                   onPress={() =>
                     router.push({
                       pathname: '/request-details',
-                      params: {
-                        requestId: String(offer.requestId),
-                        viewer: 'offer',
-                      },
+                      params: { requestId: String(offer.requestId) },
                     })
                   }
                 >
@@ -107,7 +105,7 @@ export default function RentalsManagementScreen() {
           </View>
         )}
       </ScrollView>
-    </View>
+    </KeyboardDismissScreen>
   );
 }
 

@@ -1,12 +1,14 @@
 import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+
+import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
 import { ui } from '@/constants/appUi';
 
 export default function RequestConfirmation() {
   const router = useRouter();
 
   return (
-    <View style={styles.container}>
+    <KeyboardDismissScreen style={styles.container}>
       <Text style={styles.title}>Request Submitted 🎉</Text>
 
       <Text style={styles.text}>
@@ -19,7 +21,7 @@ export default function RequestConfirmation() {
       >
         <Text style={styles.buttonText}>Back To Home</Text>
       </Pressable>
-    </View>
+    </KeyboardDismissScreen>
   );
 }
 

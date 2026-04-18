@@ -1,5 +1,5 @@
 import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
 import { UserAvatar } from './components/UserAvatar';
 import { PresetAvatarModal } from './components/PresetAvatarModal';
 import { formatPresetAvatar } from './lib/profileAvatar';
@@ -25,6 +26,7 @@ export default function EditProfileScreen() {
   const [name, setName] = useState('');
   const [bio, setBio] = useState('');
   const [presetModalOpen, setPresetModalOpen] = useState(false);
+  const bioInputRef = useRef<TextInput>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -61,14 +63,15 @@ export default function EditProfileScreen() {
 
   return (
     <>
-      <ScrollView
+      <KeyboardDismissScreen>
+        <ScrollView
         style={styles.screen}
         contentContainerStyle={[
           styles.content,
           { paddingBottom: 32 + insets.bottom },
         ]}
         keyboardShouldPersistTaps="handled"
-      >
+        >
         <Pressable
           onPress={openAvatarOptions}
           style={({ pressed }) => [
@@ -93,10 +96,14 @@ export default function EditProfileScreen() {
           style={styles.input}
           autoCapitalize="words"
           autoCorrect
+          returnKeyType="next"
+          blurOnSubmit
+          onSubmitEditing={() => bioInputRef.current?.focus()}
         />
 
         <Text style={styles.label}>Bio</Text>
         <TextInput
+          ref={bioInputRef}
           value={bio}
           onChangeText={setBio}
           placeholder="A short bio"
@@ -105,6 +112,8 @@ export default function EditProfileScreen() {
           multiline
           textAlignVertical="top"
           autoCapitalize="sentences"
+          returnKeyType="default"
+          blurOnSubmit={false}
         />
 
         <Pressable
@@ -117,6 +126,7 @@ export default function EditProfileScreen() {
           <Text style={styles.saveButtonText}>Save Profile</Text>
         </Pressable>
       </ScrollView>
+      </KeyboardDismissScreen>
 
       <PresetAvatarModal
         visible={presetModalOpen}
