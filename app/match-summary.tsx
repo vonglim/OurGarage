@@ -8,7 +8,8 @@ import { formatHowDisplay } from './lib/deliveryFormat';
 import { formatDurationDisplay } from './lib/durationFormat';
 import { formatUsd } from './lib/money';
 import { formatDistanceFromYou } from './lib/requestDistance';
-import { getRequestByTimestamp } from './store/requestsStore';
+import { openChatForRequest } from './lib/openRequestChat';
+import { getEffectiveRentalStatus, getRequestByTimestamp } from './store/requestsStore';
 import { ui } from '@/constants/appUi';
 
 function dashLocation(loc: unknown): string {
@@ -98,11 +99,18 @@ export default function MatchSummaryScreen() {
         <View style={styles.nextSteps}>
           <Text style={styles.nextStepsTitle}>Next Steps</Text>
           <Text style={styles.nextStepsBody}>
-            Coordinate pickup or delivery (messaging coming soon)
+            Message your match to coordinate pickup or delivery.
           </Text>
         </View>
 
-        {request.rentalStart != null ? (
+        <Pressable
+          style={({ pressed }) => [styles.messageButton, pressed && styles.messageButtonPressed]}
+          onPress={() => openChatForRequest(router, request.timestamp)}
+        >
+          <Text style={styles.messageButtonText}>Message</Text>
+        </Pressable>
+
+        {getEffectiveRentalStatus(request) === 'active' ? (
           <Text style={styles.rentalStartedNote}>Rental is active. Handoff was confirmed.</Text>
         ) : (
           <Pressable
@@ -227,6 +235,21 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 22,
     paddingHorizontal: 4,
+  },
+  messageButton: {
+    backgroundColor: ui.primary,
+    paddingVertical: ui.padButtonV,
+    borderRadius: ui.radiusButton,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  messageButtonPressed: {
+    opacity: ui.pressOpacity,
+  },
+  messageButtonText: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
   startButton: {
     backgroundColor: '#1565C0',

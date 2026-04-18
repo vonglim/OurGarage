@@ -1,9 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useMemo, useSyncExternalStore } from 'react';
 
+import { getProfile } from './profileStore';
+
 const STORAGE_KEY = '@ourgarage/notifications_v1';
 
-export type AppNotificationType = 'offer' | 'accepted' | 'started' | 'completed' | 'review';
+export type AppNotificationType =
+  | 'offer'
+  | 'accepted'
+  | 'started'
+  | 'completed'
+  | 'review'
+  | 'message';
 
 export type AppNotification = {
   id: string;
@@ -13,6 +21,13 @@ export type AppNotification = {
   read: boolean;
   /** Request id (request `timestamp`) for navigation, when applicable */
   requestId: number | null;
+  /** Chat route id (`req-…`) for message notifications */
+  chatId: string | null;
+  /**
+   * If set, this notification is only shown to this user (e.g. incoming chat for recipient).
+   * Ommit for broadcast/system rows (offers, etc.).
+   */
+  forUserId: string | null;
 };
 
 let notifications: AppNotification[] = [];
@@ -35,7 +50,14 @@ async function persist() {
 
 function normalizeLoaded(raw: unknown): AppNotification[] {
   if (!Array.isArray(raw)) return [];
-  const types: AppNotificationType[] = ['offer', 'accepted', 'started', 'completed', 'review'];
+  const types: AppNotificationType[] = [
+    'offer',
+    'accepted',
+    'started',
+    'completed',
+    'review',
+    'message',
+  ];
   const out: AppNotification[] = [];
   for (const row of raw) {
     if (!row || typeof row !== 'object') continue;
@@ -48,8 +70,11 @@ function normalizeLoaded(raw: unknown): AppNotification[] {
     const read = r.read === true;
     const requestId =
       typeof r.requestId === 'number' && Number.isFinite(r.requestId) ? r.requestId : null;
+    const chatId = typeof r.chatId === 'string' && r.chatId.length > 0 ? r.chatId : null;
+    const forUserId =
+      typeof r.forUserId === 'string' && r.forUserId.length > 0 ? r.forUserId : null;
     if (!id || !timestamp) continue;
-    out.push({ id, type, message, timestamp, read, requestId });
+    out.push({ id, type, message, timestamp, read, requestId, chatId, forUserId });
   }
   return out;
 }
@@ -84,14 +109,25 @@ function getVersion(): number {
   return version;
 }
 
+function isVisibleToCurrentUser(n: AppNotification): boolean {
+  const me = getProfile().userId;
+  if (n.forUserId == null || n.forUserId === '') return true;
+  return n.forUserId === me;
+}
+
 export function getNotifications(): AppNotification[] {
   ensureLoad();
-  return [...notifications].sort((a, b) => b.timestamp - a.timestamp);
+  return [...notifications]
+    .filter(isVisibleToCurrentUser)
+    .sort((a, b) => b.timestamp - a.timestamp);
 }
 
 export function getUnreadNotificationCount(): number {
   ensureLoad();
-  return notifications.filter((n) => !n.read).length;
+  const me = getProfile().userId;
+  return notifications.filter(
+    (n) => !n.read && (n.forUserId == null || n.forUserId === '' || n.forUserId === me)
+  ).length;
 }
 
 function newId(): string {
@@ -102,6 +138,8 @@ export function addNotification(entry: {
   type: AppNotificationType;
   message: string;
   requestId?: number | null;
+  chatId?: string | null;
+  forUserId?: string | null;
 }): void {
   ensureLoad();
   notifications = [
@@ -112,6 +150,8 @@ export function addNotification(entry: {
       timestamp: Date.now(),
       read: false,
       requestId: entry.requestId ?? null,
+      chatId: entry.chatId ?? null,
+      forUserId: entry.forUserId ?? null,
     },
     ...notifications,
   ];

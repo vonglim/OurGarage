@@ -11,6 +11,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
+import { ensureChatForAcceptedOffer } from './store/chatStore';
 import { acceptOfferForRequest } from './store/requestsStore';
 import { ui } from '@/constants/appUi';
 
@@ -56,6 +57,7 @@ export default function RentalAgreementScreen() {
     setBusy(true);
     try {
       acceptOfferForRequest(parsed.requestTs, parsed.offerTs, parsed.price);
+      ensureChatForAcceptedOffer(parsed.requestTs, parsed.offerTs);
       router.replace({
         pathname: '/match-summary',
         params: { requestId: String(parsed.requestTs) },

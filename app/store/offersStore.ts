@@ -60,6 +60,13 @@ export function getOffersForRequest(requestId: number): Offer[] {
     .sort((a, b) => b.timestamp - a.timestamp);
 }
 
+export function getOfferByRequestAndOfferTimestamp(
+  requestId: number,
+  offerTimestamp: number
+): Offer | undefined {
+  return offers.find((o) => o.requestId === requestId && o.timestamp === offerTimestamp);
+}
+
 export function countOffersForRequest(requestId: number): number {
   return offers.filter((o) => o.requestId === requestId).length;
 }

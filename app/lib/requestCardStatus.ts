@@ -1,4 +1,5 @@
 import { countOffersForRequest } from '../store/offersStore';
+import { getEffectiveRentalStatus, type RentalStatus } from '../store/requestsStore';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -14,7 +15,13 @@ function isRequestExpired(req: { timestamp?: number | null; when?: string | null
   return Date.now() >= req.timestamp + lifetimeMsForWhen(req.when);
 }
 
-export type RequestCardUiStatusKey = 'open' | 'pending' | 'completed' | 'active' | 'archived';
+export type RequestCardUiStatusKey =
+  | 'open'
+  | 'pending'
+  | 'matched'
+  | 'completed'
+  | 'active'
+  | 'archived';
 
 export type RequestCardUiStatus = {
   key: RequestCardUiStatusKey;
@@ -28,6 +35,7 @@ const STATUS: Record<
 > = {
   open: { label: 'Open', dotColor: '#2E7D32' },
   pending: { label: 'Pending', dotColor: '#F9A825' },
+  matched: { label: 'Matched', dotColor: '#F9A825' },
   completed: { label: 'Completed', dotColor: '#C62828' },
   active: { label: 'Active', dotColor: '#1565C0' },
   archived: { label: 'Archived', dotColor: '#9E9E9E' },
@@ -35,23 +43,25 @@ const STATUS: Record<
 
 /**
  * Maps stored request + offers + expiry to a compact card status.
- * - Active (blue): matched and rental started (handoff confirmed)
- * - Completed (red): matched, rental not started yet
- * - Archived (gray): not matched and past listing lifetime
- * - Pending (yellow): active listing with at least one offer
- * - Open (green): active listing, no offers yet
+ * Uses `rentalStatus` when set; otherwise infers from legacy fields.
  */
 export function getRequestCardUiStatus(req: {
   matched?: boolean;
   rentalStart?: number | null;
+  rentalStatus?: RentalStatus;
+  fulfilled?: boolean;
   timestamp?: number | null;
   when?: string | null;
 }): RequestCardUiStatus {
-  if (req.matched && req.rentalStart != null) {
+  const life = getEffectiveRentalStatus(req);
+  if (life === 'completed') {
+    return { key: 'completed', ...STATUS.completed };
+  }
+  if (life === 'active') {
     return { key: 'active', ...STATUS.active };
   }
-  if (req.matched) {
-    return { key: 'completed', ...STATUS.completed };
+  if (life === 'matched') {
+    return { key: 'matched', ...STATUS.matched };
   }
   if (isRequestExpired(req)) {
     return { key: 'archived', ...STATUS.archived };

@@ -66,10 +66,8 @@ export default function RequestsManagementScreen() {
                     : '—';
               const when = req.when != null ? String(req.when) : '—';
               const isLast = index === list.length - 1;
-              const completed =
-                status.key === 'completed' || status.key === 'active';
               const ts = req.timestamp;
-              const canReview = completed && ts != null && isLeaveReviewEligible(req);
+              const canReview = ts != null && isLeaveReviewEligible(req);
               const reviewed =
                 ts != null &&
                 userReviews.some((r) => r.requestTimestamp === ts);

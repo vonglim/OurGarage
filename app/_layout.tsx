@@ -30,12 +30,14 @@ export default function RootLayout() {
               <Stack.Screen name="rental-agreement" />
               <Stack.Screen name="request-details" />
               <Stack.Screen name="match-summary" />
+              <Stack.Screen name="chat/[id]" />
               <Stack.Screen name="handoff-confirmation" />
               <Stack.Screen name="edit-profile" />
               <Stack.Screen name="rentals-management" />
               <Stack.Screen name="requests-management" />
               <Stack.Screen name="request-confirmation" />
               <Stack.Screen name="leave-review" />
+              <Stack.Screen name="end-rental" />
               <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
             </Stack>
           </View>

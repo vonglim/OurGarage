@@ -1,14 +1,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
-import {
-  Alert,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
@@ -16,12 +9,13 @@ import { RequestMetaLines } from './components/RequestMetaLines';
 import { OfferOffererRow } from './components/OfferOffererRow';
 import { getOfferUserPreview, getOffersForRequest } from './store/offersStore';
 import {
+  getEffectiveRentalStatus,
   getRequestByTimestamp,
   isLeaveReviewEligible,
-  markRequestRentalComplete,
   showMarkRentalComplete,
 } from './store/requestsStore';
 import { useUserReviews } from './store/userReviewsStore';
+import { openChatForRequest } from './lib/openRequestChat';
 import { formatUsd, getNumericOfferPrice } from './lib/money';
 import { ui } from '@/constants/appUi';
 
@@ -68,6 +62,7 @@ export default function RequestDetailsScreen() {
   }, [requestIdStr, tick]);
 
   const matched = !!request?.matched;
+  const rentalStatus = request ? getEffectiveRentalStatus(request) : 'pending';
   const requestTs = request?.timestamp;
   const reviewed =
     requestTs != null && userReviews.some((r) => r.requestTimestamp === requestTs);
@@ -97,11 +92,17 @@ export default function RequestDetailsScreen() {
     });
   };
 
-  const onMarkCompleted = () => {
+  const onMessage = () => {
+    if (request.timestamp == null || !matched) return;
+    openChatForRequest(router, request.timestamp);
+  };
+
+  const onEndRental = () => {
     if (request.timestamp == null) return;
-    markRequestRentalComplete(request.timestamp);
-    setTick((t) => t + 1);
-    Alert.alert('Updated', 'This rental is marked as completed.');
+    router.push({
+      pathname: '/end-rental',
+      params: { requestId: String(request.timestamp) },
+    });
   };
 
   const onLeaveReview = () => {
@@ -132,12 +133,14 @@ export default function RequestDetailsScreen() {
         {request.timestamp != null ? (
           <Text style={styles.detailMuted}>Posted {getTimeAgo(request.timestamp)}</Text>
         ) : null}
-        {request.rentalStart != null ? (
+        {rentalStatus === 'completed' ? (
+          <Text style={styles.statusCompleted}>Rental completed</Text>
+        ) : rentalStatus === 'active' ? (
           <Text style={styles.statusActive}>Rental active</Text>
         ) : matched ? (
           <Text style={styles.statusMatched}>Matched</Text>
         ) : null}
-        {request.rentalStart != null ? (
+        {rentalStatus === 'active' && request.rentalStart != null ? (
           <Text style={styles.detailMuted}>Rental started {getTimeAgo(request.rentalStart)}</Text>
         ) : null}
         {matched && (
@@ -155,14 +158,21 @@ export default function RequestDetailsScreen() {
           >
             <Text style={styles.secondaryBtnText}>Edit Request</Text>
           </Pressable>
-        ) : null}
+        ) : (
+          <Pressable
+            onPress={onMessage}
+            style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
+          >
+            <Text style={styles.secondaryBtnText}>Message</Text>
+          </Pressable>
+        )}
 
         {showMarkRentalComplete(request) ? (
           <Pressable
-            onPress={onMarkCompleted}
+            onPress={onEndRental}
             style={({ pressed }) => [styles.primaryOutlineBtn, pressed && styles.primaryOutlinePressed]}
           >
-            <Text style={styles.primaryOutlineBtnText}>Mark as Completed</Text>
+            <Text style={styles.primaryOutlineBtnText}>End Rental</Text>
           </Pressable>
         ) : null}
 
@@ -292,6 +302,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#2E7D32',
+    marginBottom: 8,
+  },
+  statusCompleted: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#6D4C41',
     marginBottom: 8,
   },
   statusActive: {

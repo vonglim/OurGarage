@@ -11,11 +11,13 @@ import {
   RequestListCardInner,
   requestListCardSurface,
 } from '../components/RequestListCardInner';
+import { getOtherPartyDisplayName } from '../lib/rentalParty';
 import { countOffersForRequest, removeOffersForRequest } from '../store/offersStore';
-import { getRequests, removeRequest } from '../store/requestsStore';
+import { openChatForRequest } from '../lib/openRequestChat';
+import { getEffectiveRentalStatus, getRequests, removeRequest } from '../store/requestsStore';
 import { ui } from '@/constants/appUi';
 
-type Segment = 'requests' | 'tools';
+type Segment = 'requests' | 'active' | 'tools';
 
 function formatOffersReceived(n: number): string {
   if (n === 1) return '1 offer received';
@@ -70,6 +72,20 @@ export default function ActivityScreen() {
             </Text>
           </Pressable>
           <Pressable
+            onPress={() => setSegment('active')}
+            style={({ pressed }) => [
+              styles.toggleOption,
+              segment === 'active' && styles.toggleOptionActive,
+              pressed && styles.toggleOptionPressed,
+            ]}
+          >
+            <Text
+              style={[styles.toggleLabel, segment === 'active' && styles.toggleLabelActive]}
+            >
+              Active
+            </Text>
+          </Pressable>
+          <Pressable
             onPress={() => setSegment('tools')}
             style={({ pressed }) => [
               styles.toggleOption,
@@ -93,7 +109,71 @@ export default function ActivityScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {segment === 'requests' ? (
+        {segment === 'active' ? (
+          <View style={styles.section}>
+            {requests.filter((r) => getEffectiveRentalStatus(r) === 'active').length === 0 ? (
+              <Text style={styles.emptyText}>
+                No active rentals. Start a rental from a matched request after handoff confirmation.
+              </Text>
+            ) : (
+              requests
+                .filter(
+                  (r) =>
+                    r.timestamp != null && getEffectiveRentalStatus(r) === 'active'
+                )
+                .map((req) => {
+                  const ts = req.timestamp as number;
+                  const title = String(req.toolName ?? '').trim() || 'Untitled';
+                  const other = getOtherPartyDisplayName({
+                    timestamp: ts,
+                    posterUserId: req.posterUserId,
+                    matched: req.matched,
+                    acceptedOfferTimestamp: req.acceptedOfferTimestamp,
+                  });
+                  const rowKey = ts;
+                  return (
+                    <View key={rowKey} style={styles.activeCard}>
+                      <Text style={styles.activeTitle} numberOfLines={2}>
+                        {title}
+                      </Text>
+                      <Text style={styles.activeMeta} numberOfLines={1}>
+                        With {other}
+                      </Text>
+                      <View style={styles.activeActions}>
+                        <Pressable
+                          style={({ pressed }) => [
+                            styles.activeBtnOutline,
+                            pressed && styles.activeBtnPressed,
+                          ]}
+                          onPress={() => {
+                            if (ts == null) return;
+                            openChatForRequest(router, ts);
+                          }}
+                        >
+                          <Text style={styles.activeBtnOutlineText}>Message</Text>
+                        </Pressable>
+                        <Pressable
+                          style={({ pressed }) => [
+                            styles.activeBtnPrimary,
+                            pressed && styles.activeBtnPressed,
+                          ]}
+                          onPress={() => {
+                            if (ts == null) return;
+                            router.push({
+                              pathname: '/end-rental',
+                              params: { requestId: String(ts) },
+                            });
+                          }}
+                        >
+                          <Text style={styles.activeBtnPrimaryText}>End Rental</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  );
+                })
+            )}
+          </View>
+        ) : segment === 'requests' ? (
           <View style={styles.section}>
             {requests.length === 0 ? (
               <Text style={styles.emptyText}>
@@ -250,7 +330,7 @@ const styles = StyleSheet.create({
     opacity: 0.92,
   },
   toggleLabel: {
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '600',
     color: '#6D6D72',
   },
@@ -321,5 +401,57 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  activeCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E5E5EA',
+  },
+  activeTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#000',
+    marginBottom: 6,
+  },
+  activeMeta: {
+    fontSize: 14,
+    color: ui.textSubtle,
+    marginBottom: 14,
+  },
+  activeActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  activeBtnOutline: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: ui.radiusButton,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.primary,
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  activeBtnPrimary: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: ui.radiusButton,
+    alignItems: 'center',
+    backgroundColor: ui.primary,
+  },
+  activeBtnPressed: {
+    opacity: ui.pressOpacity,
+  },
+  activeBtnOutlineText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: ui.primary,
+  },
+  activeBtnPrimaryText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#FFFFFF',
   },
 });

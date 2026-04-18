@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
 import type { AppNotification } from '../store/notificationsStore';
+import { openChatForRequest } from '../lib/openRequestChat';
 import {
   markNotificationRead,
   useNotificationsList,
@@ -23,6 +24,8 @@ function typeLabel(t: AppNotification['type']): string {
       return 'Completed';
     case 'review':
       return 'Review';
+    case 'message':
+      return 'Message';
     default:
       return '';
   }
@@ -51,6 +54,16 @@ export default function NotificationsScreen() {
     if (n.type === 'review') {
       router.push('/reviews');
       return;
+    }
+    if (n.type === 'message') {
+      if (n.chatId) {
+        router.push({ pathname: '/chat/[id]', params: { id: n.chatId } });
+        return;
+      }
+      if (n.requestId != null) {
+        openChatForRequest(router, n.requestId);
+        return;
+      }
     }
     if (n.requestId != null) {
       router.push({
