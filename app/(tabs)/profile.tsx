@@ -250,28 +250,20 @@ export default function ProfileScreen() {
               />
             </View>
 
-            <Text style={styles.sectionTitle}>Activity</Text>
+            <Text style={styles.sectionTitle}>Earnings & Status</Text>
             <View style={styles.sectionCard}>
+              <ProfileRow label="Earnings" onPress={placeholder('Earnings')} />
               <ProfileRow
-                label="Manage Rentals"
-                onPress={() => router.push('/rentals-management')}
+                label="Completed Rentals"
+                onPress={placeholder('Completed Rentals')}
               />
-              <ProfileRow
-                label="Manage Requests"
-                onPress={() => router.push('/requests-management')}
-                isLast
-              />
+              <ProfileRow label="Performance" onPress={placeholder('Performance')} isLast />
             </View>
 
             <Text style={styles.sectionTitle}>Payments & Subscription</Text>
             <View style={styles.sectionCard}>
               <ProfileRow label="Subscription" onPress={placeholder('Subscription')} />
               <ProfileRow label="Payment Methods" onPress={placeholder('Payment Methods')} isLast />
-            </View>
-
-            <Text style={styles.sectionTitle}>Earnings</Text>
-            <View style={styles.sectionCard}>
-              <ProfileRow label="Earnings & History" onPress={placeholder('Earnings & History')} isLast />
             </View>
           </>
         )}

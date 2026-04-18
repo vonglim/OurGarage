@@ -19,7 +19,7 @@ export type UserProfile = {
 };
 
 const defaultProfile: UserProfile = {
-  userId: 'local-user',
+  userId: 'user_1',
   name: '',
   bio: '',
   avatar: formatPresetAvatar('person'),

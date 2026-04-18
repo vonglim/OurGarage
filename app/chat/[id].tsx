@@ -14,15 +14,21 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
+import { getPublicProfileForView } from '../lib/mockPublicProfiles';
 import {
   addChatMessage,
+  addMessage,
   getOtherParticipant,
   markChatRead,
   useChatStore,
   type ChatMessage,
 } from '../store/chatStore';
 import { getProfile } from '../store/profileStore';
+import { getRequestByTimestamp } from '../store/requestsStore';
 import { ui } from '@/constants/appUi';
+
+/** Metro sets `__DEV__` — true in development, stripped/false in production release builds. */
+declare const __DEV__: boolean;
 
 export default function ChatDetailScreen() {
   const router = useRouter();
@@ -34,6 +40,23 @@ export default function ChatDetailScreen() {
   const me = getProfile();
   const other = chat ? getOtherParticipant(chat, me.userId) : null;
   const isArchived = chat ? chat.archived === true : false;
+  const requestForChat = chat ? getRequestByTimestamp(chat.requestId) : undefined;
+  const toolName =
+    requestForChat &&
+    typeof requestForChat.toolName === 'string' &&
+    requestForChat.toolName.trim().length > 0
+      ? requestForChat.toolName.trim()
+      : 'Tool request';
+  const subtitle =
+    other != null
+      ? `${(other.displayName ?? '').trim() || 'Neighbor'} • ⭐ ${getPublicProfileForView(
+          other.userId
+        ).ratingNumber.toFixed(1)}`
+      : '';
+  /** Same id `addChatMessage` uses as `senderId` (default profile is `user_1`). */
+  const currentUserId = me.userId;
+  /** Other participant in this thread (e.g. `user_2` when poster and offerer were the same). */
+  const otherUserId = other?.userId ?? '';
 
   const [draft, setDraft] = useState('');
   const listRef = useRef<FlatList<ChatMessage>>(null);
@@ -62,6 +85,16 @@ export default function ChatDetailScreen() {
     addChatMessage(chatId, text);
     setDraft('');
   };
+
+  const handleSimulateReply = useCallback(() => {
+    if (!__DEV__ || !chatId || !otherUserId) return;
+    addMessage(chatId, {
+      id: Date.now().toString(),
+      senderId: otherUserId,
+      text: 'Got it 👍',
+      timestamp: Date.now(),
+    });
+  }, [chatId, otherUserId]);
 
   if (!chatId) {
     return (
@@ -105,8 +138,11 @@ export default function ChatDetailScreen() {
             <Text style={styles.back}>‹ Back</Text>
           </Pressable>
           <View style={styles.headerTitleBlock}>
-            <Text style={styles.headerTitle} numberOfLines={1}>
-              {other?.displayName ?? 'Chat'}
+            <Text style={styles.title} numberOfLines={1}>
+              {toolName}
+            </Text>
+            <Text style={styles.subtitle} numberOfLines={1}>
+              {subtitle || 'Chat'}
             </Text>
             {isArchived ? (
               <Text style={styles.headerArchivedPill}>Archived</Text>
@@ -134,21 +170,57 @@ export default function ChatDetailScreen() {
           onLayout={() => {
             if (chat.messages.length > 0) scrollToEnd(false);
           }}
-          renderItem={({ item: m }) => {
-            const mine = m.senderId === me.userId;
+          renderItem={({ item: message, index }) => {
+            const isCurrentUser = message.senderId === currentUserId;
+            const prev = index > 0 ? chat.messages[index - 1] : null;
+            const senderChanged = prev != null && prev.senderId !== message.senderId;
+            if (__DEV__) {
+              console.log('message sender:', message.senderId);
+              console.log('current user:', currentUserId);
+            }
             return (
-              <View
-                style={[styles.bubbleRow, mine ? styles.bubbleRowMine : styles.bubbleRowTheirs]}
-              >
-                <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
-                  <Text style={[styles.bubbleText, mine ? styles.bubbleTextMine : styles.bubbleTextTheirs]}>
-                    {m.text}
+              <View style={styles.messageRow}>
+                <View
+                  style={[
+                    styles.messageStack,
+                    isCurrentUser ? styles.messageStackRight : styles.messageStackLeft,
+                    index > 0 &&
+                      (senderChanged ? styles.messageStackNewSender : styles.messageStackSameSender),
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.messageBubble,
+                      isCurrentUser ? styles.right : styles.left,
+                    ]}
+                  >
+                    <Text style={isCurrentUser ? styles.rightText : styles.leftText}>
+                      {message.text}
+                    </Text>
+                  </View>
+                  <Text
+                    style={[
+                      styles.timestamp,
+                      isCurrentUser ? styles.timestampRight : styles.timestampLeft,
+                    ]}
+                  >
+                    {new Date(message.timestamp).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
                   </Text>
                 </View>
               </View>
             );
           }}
         />
+
+        {/* DEV ONLY: Simulate incoming message (remove when backend is added) */}
+        {__DEV__ && (
+          <Pressable onPress={handleSimulateReply} style={styles.simButton}>
+            <Text style={styles.simText}>Simulate Reply</Text>
+          </Pressable>
+        )}
 
         {isArchived ? (
           <View style={[styles.archivedComposer, { paddingBottom: 12 + insets.bottom }]}>
@@ -157,7 +229,7 @@ export default function ChatDetailScreen() {
             </Text>
           </View>
         ) : (
-          <View style={[styles.composer, { paddingBottom: 10 + insets.bottom }]}>
+          <View style={[styles.inputContainer, { paddingBottom: 10 + insets.bottom }]}>
             <TextInput
               value={draft}
               onChangeText={setDraft}
@@ -169,6 +241,7 @@ export default function ChatDetailScreen() {
             />
             <Pressable
               onPress={onSend}
+              hitSlop={12}
               style={({ pressed }) => [styles.sendBtn, pressed && styles.sendBtnPressed]}
               disabled={!draft.trim()}
             >
@@ -208,12 +281,20 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     marginHorizontal: 8,
+    gap: 2,
   },
-  headerTitle: {
+  title: {
     textAlign: 'center',
     fontSize: 17,
     fontWeight: '700',
     color: '#000',
+    width: '100%',
+  },
+  subtitle: {
+    textAlign: 'center',
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#636366',
     width: '100%',
   },
   headerArchivedPill: {
@@ -244,37 +325,66 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingTop: 24,
   },
-  bubbleRow: {
+  messageRow: {
     width: '100%',
-    marginBottom: 10,
   },
-  bubbleRowMine: {
-    alignItems: 'flex-end',
+  messageStack: {
+    maxWidth: '75%',
+    marginBottom: 4,
   },
-  bubbleRowTheirs: {
-    alignItems: 'flex-start',
+  messageStackNewSender: {
+    marginTop: 10,
   },
-  bubble: {
-    maxWidth: '82%',
-    borderRadius: 18,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
+  messageStackSameSender: {
+    marginTop: 2,
   },
-  bubbleMine: {
-    backgroundColor: ui.primary,
+  messageStackRight: {
+    alignSelf: 'flex-end',
   },
-  bubbleTheirs: {
+  messageStackLeft: {
+    alignSelf: 'flex-start',
+  },
+  messageBubble: {
+    padding: 10,
+    borderRadius: 16,
+  },
+  right: {
+    backgroundColor: '#007AFF',
+  },
+  left: {
     backgroundColor: '#E5E5EA',
   },
-  bubbleText: {
+  timestamp: {
+    fontSize: 10,
+    color: '#888',
+    marginTop: 2,
+  },
+  timestampRight: {
+    textAlign: 'right',
+  },
+  timestampLeft: {
+    textAlign: 'left',
+  },
+  rightText: {
+    color: '#fff',
     fontSize: 16,
     lineHeight: 22,
   },
-  bubbleTextMine: {
-    color: '#FFFFFF',
-  },
-  bubbleTextTheirs: {
+  leftText: {
     color: '#000',
+    fontSize: 16,
+    lineHeight: 22,
+  },
+  simButton: {
+    padding: 10,
+    backgroundColor: '#eee',
+    alignItems: 'center',
+    marginVertical: 8,
+    borderRadius: 8,
+  },
+  simText: {
+    color: '#333',
+    fontWeight: '500',
   },
   archivedComposer: {
     paddingHorizontal: 16,
@@ -289,32 +399,31 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 18,
   },
-  composer: {
+  inputContainer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: 10,
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#E5E5EA',
-    backgroundColor: '#FFFFFF',
+    padding: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#ddd',
+    backgroundColor: '#fff',
   },
   input: {
     flex: 1,
+    padding: 10,
+    borderRadius: 20,
+    backgroundColor: '#f2f2f2',
     minHeight: 40,
     maxHeight: 120,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#D1D1D6',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
     fontSize: 16,
     color: '#000',
-    backgroundColor: '#F2F2F7',
   },
   sendBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    marginLeft: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    minWidth: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   sendBtnPressed: {
     opacity: 0.6,

@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useMemo, useRef, useSyncExternalStore } from 'react';
 
+import { scheduleLocalNewMessageNotificationForTesting } from '../lib/notifications';
 import { getPublicProfileForView, posterUserIdFromRequest } from '../lib/mockPublicProfiles';
 import { addNotification } from './notificationsStore';
 import { getOfferByRequestAndOfferTimestamp, getOfferUserPreview } from './offersStore';
@@ -61,6 +62,19 @@ function sortParticipants(a: ChatParticipant, b: ChatParticipant): [ChatParticip
   return a.userId.localeCompare(b.userId) <= 0 ? [a, b] : [b, a];
 }
 
+/** Stable id for the counterparty when poster and offerer would otherwise be the same (single-device / bad data). */
+const SYNTHETIC_CHAT_PEER_ID = 'user_2';
+
+function withDistinctParticipants(a: ChatParticipant, b: ChatParticipant): [ChatParticipant, ChatParticipant] {
+  if (a.userId !== b.userId) return sortParticipants(a, b);
+  const synthetic: ChatParticipant = {
+    userId: SYNTHETIC_CHAT_PEER_ID,
+    displayName:
+      getPublicProfileForView(SYNTHETIC_CHAT_PEER_ID).name.trim() || SYNTHETIC_CHAT_PEER_ID,
+  };
+  return sortParticipants(a, synthetic);
+}
+
 function normalizeLoaded(raw: unknown): Chat[] {
   if (!Array.isArray(raw)) return [];
   const out: Chat[] = [];
@@ -79,6 +93,10 @@ function normalizeLoaded(raw: unknown): Chat[] {
     const n0 = typeof p0.displayName === 'string' ? p0.displayName : '';
     const n1 = typeof p1.displayName === 'string' ? p1.displayName : '';
     if (!u0 || !u1) continue;
+    const [pa, pb] = withDistinctParticipants(
+      { userId: u0, displayName: n0 || u0 },
+      { userId: u1, displayName: n1 || u1 }
+    );
     const messagesRaw = r.messages;
     const messages: ChatMessage[] = [];
     if (Array.isArray(messagesRaw)) {
@@ -106,10 +124,7 @@ function normalizeLoaded(raw: unknown): Chat[] {
     out.push({
       id,
       requestId,
-      participants: [
-        { userId: u0, displayName: n0 || u0 },
-        { userId: u1, displayName: n1 || u1 },
-      ],
+      participants: [pa, pb],
       messages,
       createdAt,
       archived,
@@ -189,7 +204,7 @@ export function ensureChatForAcceptedOffer(
 
   const a: ChatParticipant = { userId: posterId, displayName: displayNameForUserId(posterId) };
   const b: ChatParticipant = { userId: offererId, displayName: preview.name };
-  const participants = sortParticipants(a, b);
+  const participants = withDistinctParticipants(a, b);
 
   const now = Date.now();
   chats = [
@@ -231,11 +246,11 @@ export function addChatMessage(chatId: string, text: string): void {
   ensureLoad();
   const existing = chats.find((c) => c.id === chatId);
   if (existing?.archived) return;
-  const senderId = getProfile().userId;
+  const currentUserId = getProfile().userId;
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   const msg: ChatMessage = {
     id,
-    senderId,
+    senderId: currentUserId,
     text: trimmed,
     timestamp: Date.now(),
   };
@@ -243,7 +258,7 @@ export function addChatMessage(chatId: string, text: string): void {
   chats = chats.map((c) => {
     if (c.id !== chatId) return c;
     requestIdForNotif = c.requestId;
-    const recipient = getOtherParticipant(c, senderId);
+    const recipient = getOtherParticipant(c, currentUserId);
     const prevUnread = c.unreadCountByUserId?.[recipient.userId] ?? 0;
     return {
       ...c,
@@ -256,8 +271,9 @@ export function addChatMessage(chatId: string, text: string): void {
   });
   emit();
   void persist();
+  void scheduleLocalNewMessageNotificationForTesting(trimmed);
   if (requestIdForNotif != null && existing) {
-    const other = getOtherParticipant(existing, senderId);
+    const other = getOtherParticipant(existing, currentUserId);
     const senderName = getProfile().name.trim() || 'Someone';
     const preview =
       trimmed.length > 200 ? `${trimmed.slice(0, 197)}…` : trimmed;
@@ -269,6 +285,43 @@ export function addChatMessage(chatId: string, text: string): void {
       forUserId: other.userId,
     });
   }
+}
+
+/**
+ * DEV ONLY: append a message with an explicit sender (e.g. simulate the other party).
+ * No-ops in production (`__DEV__` is false).
+ */
+export function addMessage(chatId: string, msg: ChatMessage): void {
+  if (!__DEV__) return;
+  ensureLoad();
+  const existing = chats.find((c) => c.id === chatId);
+  if (!existing || existing.archived) return;
+  const trimmed = msg.text.trim();
+  if (!trimmed) return;
+  const senderOk = existing.participants.some((p) => p.userId === msg.senderId);
+  if (!senderOk) return;
+  const message: ChatMessage = {
+    ...msg,
+    id: msg.id || `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    text: trimmed,
+    timestamp: typeof msg.timestamp === 'number' && msg.timestamp > 0 ? msg.timestamp : Date.now(),
+  };
+  chats = chats.map((c) => {
+    if (c.id !== chatId) return c;
+    const recipient = getOtherParticipant(c, message.senderId);
+    const prevUnread = c.unreadCountByUserId?.[recipient.userId] ?? 0;
+    return {
+      ...c,
+      messages: [...c.messages, message],
+      unreadCountByUserId: {
+        ...(c.unreadCountByUserId ?? {}),
+        [recipient.userId]: prevUnread + 1,
+      },
+    };
+  });
+  emit();
+  void persist();
+  void scheduleLocalNewMessageNotificationForTesting(trimmed);
 }
 
 export function getLastMessagePreview(chat: Chat): string {

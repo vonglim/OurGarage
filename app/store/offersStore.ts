@@ -1,6 +1,8 @@
-import { getProfile, touchLastActive } from './profileStore';
+import { create } from 'zustand';
+
 import { getPublicProfileForView } from '../lib/mockPublicProfiles';
 import { addNotification } from './notificationsStore';
+import { getProfile, touchLastActive } from './profileStore';
 import { requestAcceptsOffers } from './requestsStore';
 
 export type Offer = {
@@ -18,7 +20,23 @@ export type Offer = {
   offerUserLastActive?: number;
 };
 
-let offers: Offer[] = [];
+type OffersStoreState = {
+  offers: Offer[];
+  appendOffer: (offer: Offer) => void;
+  removeOffersByRequestId: (requestId: number) => void;
+};
+
+export const useOffersStore = create<OffersStoreState>((set) => ({
+  offers: [],
+  appendOffer: (offer) =>
+    set((s) => ({
+      offers: [...s.offers, offer],
+    })),
+  removeOffersByRequestId: (requestId) =>
+    set((s) => ({
+      offers: s.offers.filter((o) => o.requestId !== requestId),
+    })),
+}));
 
 export function addOffer(
   requestId: number,
@@ -45,7 +63,7 @@ export function addOffer(
     offerUserLastActive: profile.lastActive,
   };
   if (opts.message != null && opts.message !== '') row.message = opts.message;
-  offers.push(row);
+  useOffersStore.getState().appendOffer(row);
   touchLastActive();
   addNotification({
     type: 'offer',
@@ -55,8 +73,9 @@ export function addOffer(
 }
 
 export function getOffersForRequest(requestId: number): Offer[] {
-  return offers
-    .filter((o) => o.requestId === requestId)
+  return useOffersStore
+    .getState()
+    .offers.filter((o) => o.requestId === requestId)
     .sort((a, b) => b.timestamp - a.timestamp);
 }
 
@@ -64,19 +83,21 @@ export function getOfferByRequestAndOfferTimestamp(
   requestId: number,
   offerTimestamp: number
 ): Offer | undefined {
-  return offers.find((o) => o.requestId === requestId && o.timestamp === offerTimestamp);
+  return useOffersStore
+    .getState()
+    .offers.find((o) => o.requestId === requestId && o.timestamp === offerTimestamp);
 }
 
 export function countOffersForRequest(requestId: number): number {
-  return offers.filter((o) => o.requestId === requestId).length;
+  return useOffersStore.getState().offers.filter((o) => o.requestId === requestId).length;
 }
 
 export function removeOffersForRequest(requestId: number) {
-  offers = offers.filter((o) => o.requestId !== requestId);
+  useOffersStore.getState().removeOffersByRequestId(requestId);
 }
 
 export function getOffers(): Offer[] {
-  return [...offers];
+  return [...useOffersStore.getState().offers];
 }
 
 /** Display name / id / rating / avatar for an offer row (legacy offers get a mock neighbor). */

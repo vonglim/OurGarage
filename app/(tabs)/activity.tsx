@@ -12,7 +12,7 @@ import {
   requestListCardSurface,
 } from '../components/RequestListCardInner';
 import { getOtherPartyDisplayName } from '../lib/rentalParty';
-import { countOffersForRequest, removeOffersForRequest } from '../store/offersStore';
+import { removeOffersForRequest, useOffersStore } from '../store/offersStore';
 import { openChatForRequest } from '../lib/openRequestChat';
 import { getEffectiveRentalStatus, getRequests, removeRequest } from '../store/requestsStore';
 import { ui } from '@/constants/appUi';
@@ -40,6 +40,7 @@ function getTimeAgo(timestamp: number): string {
 export default function ActivityScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const offers = useOffersStore((state) => state.offers);
   const [segment, setSegment] = useState<Segment>('requests');
   const [requests, setRequests] = useState<ReturnType<typeof getRequests>>([]);
   const swipeRefs = useRef(new Map<number, Swipeable>());
@@ -180,9 +181,19 @@ export default function ActivityScreen() {
                 No requests yet. Tap + to request a tool.
               </Text>
             ) : (
-              requests.map((req, idx) => {
-                const matched = !!req.matched;
-                const rowKey = req.timestamp ?? idx;
+              requests.map((request, idx) => {
+                const matched = !!request.matched;
+                const rowKey = request.timestamp ?? idx;
+                const r = request as { id?: number | string; timestamp?: number | null };
+                const requestKey = r.id ?? r.timestamp;
+                const offerCount =
+                  requestKey != null && requestKey !== ''
+                    ? offers.filter(
+                        (o) => String(o.requestId) === String(requestKey)
+                      ).length
+                    : 0;
+                console.log("Request:", request.id);
+                console.log("Offers:", offers);
                 const card = (
                   <Pressable
                     style={({ pressed }) => [
@@ -191,23 +202,25 @@ export default function ActivityScreen() {
                       pressed && styles.requestCardPressed,
                     ]}
                     onPress={() => {
-                      if (req.timestamp == null) return;
+                      if (request.timestamp == null) return;
                       router.push({
                         pathname: '/request-details',
-                        params: { requestId: String(req.timestamp) },
+                        params: { requestId: String(request.timestamp) },
                       });
                     }}
                   >
                     <RequestListCardInner
-                      req={req}
+                      req={request}
                       matched={matched}
                       timeAgoText={
-                        req.timestamp != null ? getTimeAgo(req.timestamp) : null
+                        request.timestamp != null
+                          ? getTimeAgo(request.timestamp)
+                          : null
                       }
                     />
-                    {req.timestamp != null && (
+                    {request.timestamp != null && (
                       <Text style={styles.offersReceived}>
-                        {formatOffersReceived(countOffersForRequest(req.timestamp))}
+                        {formatOffersReceived(offerCount)}
                       </Text>
                     )}
                   </Pressable>
@@ -225,7 +238,7 @@ export default function ActivityScreen() {
                   <View key={rowKey} style={styles.cardRowWrap}>
                     <Swipeable
                       ref={(el) => {
-                        const ts = req.timestamp;
+                        const ts = request.timestamp;
                         if (ts == null) return;
                         if (el) swipeRefs.current.set(ts, el);
                         else swipeRefs.current.delete(ts);
@@ -236,11 +249,11 @@ export default function ActivityScreen() {
                           <Pressable
                             style={styles.editAction}
                             onPress={() => {
-                              if (req.timestamp == null) return;
-                              swipeRefs.current.get(req.timestamp)?.close();
+                              if (request.timestamp == null) return;
+                              swipeRefs.current.get(request.timestamp)?.close();
                               router.push({
                                 pathname: '/request-a-tool',
-                                params: { editTimestamp: String(req.timestamp) },
+                                params: { editTimestamp: String(request.timestamp) },
                               });
                             }}
                           >
@@ -249,9 +262,9 @@ export default function ActivityScreen() {
                           <Pressable
                             style={styles.deleteAction}
                             onPress={() => {
-                              if (req.timestamp == null) return;
-                              removeOffersForRequest(req.timestamp);
-                              removeRequest(req.timestamp);
+                              if (request.timestamp == null) return;
+                              removeOffersForRequest(request.timestamp);
+                              removeRequest(request.timestamp);
                               setRequests(getRequests());
                             }}
                           >
