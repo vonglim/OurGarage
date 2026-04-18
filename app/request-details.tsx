@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
 import { RequestMetaLines } from './components/RequestMetaLines';
 import { OfferOffererRow } from './components/OfferOffererRow';
-import { getOfferUserPreview, getOffersForRequest } from './store/offersStore';
+import { getOfferUserPreview, useOffersStore } from './store/offersStore';
 import {
   getEffectiveRentalStatus,
   getRequestByTimestamp,
@@ -54,12 +54,19 @@ export default function RequestDetailsScreen() {
     return getRequestByTimestamp(id);
   }, [requestIdStr, tick]);
 
+  const requestIdNum = useMemo(() => {
+    const n = Number(requestIdStr);
+    return Number.isFinite(n) ? n : NaN;
+  }, [requestIdStr]);
+
+  /** Subscribe to store array only — filtered list must be `useMemo` so Zustand is not given a new [] every render. */
+  const offersFromStore = useOffersStore((s) => s.offers);
   const offers = useMemo(() => {
-    void tick;
-    const id = Number(requestIdStr);
-    if (!Number.isFinite(id)) return [];
-    return getOffersForRequest(id);
-  }, [requestIdStr, tick]);
+    if (!Number.isFinite(requestIdNum)) return [];
+    return offersFromStore
+      .filter((o) => o.requestId === requestIdNum && !o.declined)
+      .sort((a, b) => b.timestamp - a.timestamp);
+  }, [offersFromStore, requestIdNum]);
 
   const matched = !!request?.matched;
   const rentalStatus = request ? getEffectiveRentalStatus(request) : 'pending';
@@ -196,49 +203,44 @@ export default function RequestDetailsScreen() {
           offers.map((offer) => {
             const who = getOfferUserPreview(offer);
             return (
-            <View key={offer.timestamp} style={styles.offerCard}>
-              <OfferOffererRow
-                name={who.name}
-                rating={who.rating}
-                avatar={who.avatar}
-                lastActive={who.lastActive}
-                onPress={() =>
-                  router.push({
-                    pathname: '/(tabs)/profile',
-                    params: { viewUserId: who.userId },
-                  })
-                }
-              />
-              <Text style={styles.offerPriceLine}>
-                Their total for entire duration: {formatUsd(getNumericOfferPrice(offer))}
-              </Text>
-              <Text style={styles.offerTime}>{getTimeAgo(offer.timestamp)}</Text>
               <Pressable
-                style={({ pressed }) => [
-                  styles.acceptButton,
-                  matched && styles.acceptButtonDisabled,
-                  pressed && !matched && styles.acceptButtonPressed,
-                ]}
-                disabled={matched}
+                key={offer.timestamp}
                 onPress={() => {
-                  const priceNum = getNumericOfferPrice(offer);
+                  if (request.timestamp == null) return;
                   router.push({
-                    pathname: '/rental-agreement',
+                    pathname: '/offer-detail',
                     params: {
                       requestId: String(request.timestamp),
                       offerTimestamp: String(offer.timestamp),
-                      price: String(priceNum),
                     },
                   });
                 }}
+                style={({ pressed }) => [
+                  styles.offerCard,
+                  pressed && styles.offerCardPressed,
+                  matched && styles.offerCardMatched,
+                ]}
               >
-                <Text
-                  style={[styles.acceptButtonText, matched && styles.acceptButtonTextDisabled]}
-                >
-                  Accept Offer
+                <OfferOffererRow
+                  name={who.name}
+                  rating={who.rating}
+                  avatar={who.avatar}
+                  lastActive={who.lastActive}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/(tabs)/profile',
+                      params: { viewUserId: who.userId },
+                    })
+                  }
+                />
+                <Text style={styles.offerPriceLine}>
+                  Their total for entire duration: {formatUsd(getNumericOfferPrice(offer))}
+                </Text>
+                <Text style={styles.offerTime}>{getTimeAgo(offer.timestamp)}</Text>
+                <Text style={styles.offerTapHint}>
+                  {matched ? 'Tap for details' : 'Tap to review & accept or decline'}
                 </Text>
               </Pressable>
-            </View>
             );
           })
         )}
@@ -410,6 +412,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: ui.border,
   },
+  offerCardPressed: {
+    opacity: 0.92,
+    backgroundColor: '#F0F4FF',
+    borderColor: ui.primary,
+  },
+  offerCardMatched: {
+    opacity: 0.85,
+  },
+  offerTapHint: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: ui.primary,
+    marginTop: 4,
+  },
   offerPriceLine: {
     fontSize: 16,
     fontWeight: '600',
@@ -420,25 +436,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     marginBottom: 12,
-  },
-  acceptButton: {
-    backgroundColor: ui.primary,
-    paddingVertical: ui.padButtonV,
-    borderRadius: ui.radiusButton,
-    alignItems: 'center',
-  },
-  acceptButtonPressed: {
-    opacity: ui.pressOpacity,
-  },
-  acceptButtonDisabled: {
-    backgroundColor: '#CCC',
-  },
-  acceptButtonText: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  acceptButtonTextDisabled: {
-    color: '#666',
   },
 });

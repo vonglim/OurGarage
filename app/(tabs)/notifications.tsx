@@ -1,5 +1,6 @@
+import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React from 'react';
+import React, { useCallback } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -7,8 +8,9 @@ import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
 import type { AppNotification } from '../store/notificationsStore';
 import { openChatForRequest } from '../lib/openRequestChat';
 import {
-  markNotificationRead,
+  markAsRead,
   useNotificationsList,
+  useNotificationsStore,
 } from '../store/notificationsStore';
 import { ui } from '@/constants/appUi';
 
@@ -49,8 +51,13 @@ export default function NotificationsScreen() {
   const insets = useSafeAreaInsets();
   const list = useNotificationsList();
 
-  const onOpen = (n: AppNotification) => {
-    markNotificationRead(n.id);
+  useFocusEffect(
+    useCallback(() => {
+      useNotificationsStore.getState().cleanupStaleNotifications();
+    }, []),
+  );
+
+  const navigateFromNotification = (n: AppNotification) => {
     if (n.type === 'review') {
       router.push('/reviews');
       return;
@@ -98,7 +105,10 @@ export default function NotificationsScreen() {
               return (
                 <Pressable
                   key={n.id}
-                  onPress={() => onOpen(n)}
+                  onPress={() => {
+                    markAsRead(n.id);
+                    navigateFromNotification(n);
+                  }}
                   style={({ pressed }) => [
                     styles.row,
                     !n.read && styles.rowUnread,

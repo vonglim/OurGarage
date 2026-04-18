@@ -1,11 +1,14 @@
 import { useFocusEffect } from '@react-navigation/native';
+import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
+import { pickPhotoFromLibrary } from './lib/pickProfileImage';
 import { archiveChatForRequest } from './store/chatStore';
+import { useRentalConditionStore } from './store/rentalConditionStore';
 import {
   getEffectiveRentalStatus,
   getRequestByTimestamp,
@@ -23,11 +26,19 @@ export default function EndRentalScreen() {
   const params = useLocalSearchParams<{ requestId?: string | string[] }>();
   const requestIdStr = firstParam(params.requestId);
   const [tick, setTick] = useState(0);
+  const hydrateConditions = useRentalConditionStore((s) => s.hydrate);
+  const returnPhotoUri = useRentalConditionStore((s) =>
+    requestIdStr && Number.isFinite(Number(requestIdStr))
+      ? s.returnPhotoByRequest[requestIdStr]
+      : undefined
+  );
+  const setReturnPhoto = useRentalConditionStore((s) => s.setReturnPhoto);
 
   useFocusEffect(
     useCallback(() => {
       setTick((t) => t + 1);
-    }, [])
+      void hydrateConditions();
+    }, [hydrateConditions])
   );
 
   const request = useMemo(() => {
@@ -36,6 +47,12 @@ export default function EndRentalScreen() {
     if (!Number.isFinite(id)) return undefined;
     return getRequestByTimestamp(id);
   }, [requestIdStr, tick]);
+
+  const onAddReturnPhoto = async () => {
+    if (request?.timestamp == null) return;
+    const uri = await pickPhotoFromLibrary();
+    if (uri) setReturnPhoto(request.timestamp, uri);
+  };
 
   const onComplete = () => {
     if (request?.timestamp == null) return;
@@ -111,6 +128,28 @@ export default function EndRentalScreen() {
           </Text>
         </View>
 
+        <View style={styles.optionalBlock}>
+          <Text style={styles.optionalLabel}>Return (optional)</Text>
+          <Pressable
+            onPress={onAddReturnPhoto}
+            style={({ pressed }) => [styles.photoBtn, pressed && styles.photoBtnPressed]}
+          >
+            <Text style={styles.photoBtnText}>Add Return Photo</Text>
+          </Pressable>
+          {returnPhotoUri ? (
+            <View style={styles.photoPreviewWrap}>
+              <Image source={{ uri: returnPhotoUri }} style={styles.photoPreview} contentFit="cover" />
+              <Pressable
+                onPress={() => request.timestamp != null && setReturnPhoto(request.timestamp, null)}
+                hitSlop={8}
+                style={({ pressed }) => [styles.removePhoto, pressed && styles.photoBtnPressed]}
+              >
+                <Text style={styles.removePhotoText}>Remove</Text>
+              </Pressable>
+            </View>
+          ) : null}
+        </View>
+
         <View style={styles.bodySpacer} />
 
         <Pressable
@@ -166,6 +205,56 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 20,
     justifyContent: 'space-between',
+    gap: 14,
+  },
+  optionalBlock: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E5E5EA',
+  },
+  optionalLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6D6D72',
+    marginBottom: 10,
+  },
+  photoBtn: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#F2F2F7',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  photoBtnPressed: {
+    opacity: 0.75,
+  },
+  photoBtnText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: ui.primary,
+  },
+  photoPreviewWrap: {
+    marginTop: 12,
+  },
+  photoPreview: {
+    width: '100%',
+    aspectRatio: 4 / 3,
+    borderRadius: 10,
+    backgroundColor: '#ECECEC',
+  },
+  removePhoto: {
+    alignSelf: 'flex-start',
+    marginTop: 8,
+    paddingVertical: 4,
+  },
+  removePhotoText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#8E8E93',
   },
   card: {
     backgroundColor: '#FFFFFF',

@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useMemo, useSyncExternalStore } from 'react';
+import { useMemo } from 'react';
+import { create } from 'zustand';
 
 import { getProfile } from './profileStore';
 
@@ -25,28 +26,10 @@ export type AppNotification = {
   chatId: string | null;
   /**
    * If set, this notification is only shown to this user (e.g. incoming chat for recipient).
-   * Ommit for broadcast/system rows (offers, etc.).
+   * Omit for broadcast/system rows (offers, etc.).
    */
   forUserId: string | null;
 };
-
-let notifications: AppNotification[] = [];
-let version = 0;
-const listeners = new Set<() => void>();
-let loadStarted = false;
-
-function emit() {
-  version += 1;
-  listeners.forEach((l) => l());
-}
-
-async function persist() {
-  try {
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(notifications));
-  } catch {
-    /* ignore */
-  }
-}
 
 function normalizeLoaded(raw: unknown): AppNotification[] {
   if (!Array.isArray(raw)) return [];
@@ -79,34 +62,22 @@ function normalizeLoaded(raw: unknown): AppNotification[] {
   return out;
 }
 
-async function loadFromStorage() {
+async function readStorage(): Promise<AppNotification[]> {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      notifications = normalizeLoaded(JSON.parse(raw));
-    }
+    if (!raw) return [];
+    return normalizeLoaded(JSON.parse(raw));
+  } catch {
+    return [];
+  }
+}
+
+async function persistNotifications(notifications: AppNotification[]): Promise<void> {
+  try {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(notifications));
   } catch {
     /* ignore */
   }
-  emit();
-}
-
-function ensureLoad() {
-  if (!loadStarted) {
-    loadStarted = true;
-    void loadFromStorage();
-  }
-}
-
-export function subscribeNotifications(listener: () => void) {
-  ensureLoad();
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-function getVersion(): number {
-  ensureLoad();
-  return version;
 }
 
 function isVisibleToCurrentUser(n: AppNotification): boolean {
@@ -115,35 +86,77 @@ function isVisibleToCurrentUser(n: AppNotification): boolean {
   return n.forUserId === me;
 }
 
-export function getNotifications(): AppNotification[] {
-  ensureLoad();
-  return [...notifications]
-    .filter(isVisibleToCurrentUser)
-    .sort((a, b) => b.timestamp - a.timestamp);
-}
-
-export function getUnreadNotificationCount(): number {
-  ensureLoad();
-  const me = getProfile().userId;
-  return notifications.filter(
-    (n) => !n.read && (n.forUserId == null || n.forUserId === '' || n.forUserId === me)
-  ).length;
-}
-
 function newId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function addNotification(entry: {
+/** Lazy deps avoid static import cycle (requests/chat → notifications). */
+function filterStaleNotifications(list: AppNotification[]): AppNotification[] {
+  const { getRequestByTimestamp } = require('./requestsStore') as typeof import('./requestsStore');
+  const { getChatById } = require('./chatStore') as typeof import('./chatStore');
+
+  return list.filter((n) => {
+    if (n.type === 'offer') {
+      if (n.requestId == null || !Number.isFinite(n.requestId)) return false;
+      return getRequestByTimestamp(n.requestId) != null;
+    }
+    if (n.type === 'message') {
+      if (typeof n.chatId === 'string' && n.chatId.length > 0) {
+        return getChatById(n.chatId) != null;
+      }
+      if (n.requestId != null && Number.isFinite(n.requestId)) {
+        return getChatById(`req-${n.requestId}`) != null;
+      }
+      return false;
+    }
+    return true;
+  });
+}
+
+type AddNotificationInput = {
   type: AppNotificationType;
   message: string;
   requestId?: number | null;
   chatId?: string | null;
   forUserId?: string | null;
-}): void {
-  ensureLoad();
-  notifications = [
-    {
+};
+
+type NotificationsState = {
+  notifications: AppNotification[];
+  /** Load persisted rows (merge in-memory extras) and drop stale offer/message rows. */
+  hydrate: () => Promise<void>;
+  /** Re-run validation on current list (e.g. after request/chat removed). Persists if anything removed. */
+  cleanupStaleNotifications: () => void;
+  addNotification: (entry: AddNotificationInput) => void;
+  markAsRead: (notificationId: string) => void;
+};
+
+export const useNotificationsStore = create<NotificationsState>((set, get) => ({
+  notifications: [],
+  hydrate: async () => {
+    const loaded = await readStorage();
+    let mergedCount = 0;
+    let validCount = 0;
+    set((state) => {
+      const loadedIds = new Set(loaded.map((n) => n.id));
+      const extras = state.notifications.filter((n) => !loadedIds.has(n.id));
+      const merged = [...extras, ...loaded].sort((a, b) => b.timestamp - a.timestamp);
+      mergedCount = merged.length;
+      const validNotifications = filterStaleNotifications(merged);
+      validCount = validNotifications.length;
+      return { notifications: validNotifications };
+    });
+    if (validCount !== mergedCount) void persistNotifications(get().notifications);
+  },
+  cleanupStaleNotifications: () => {
+    const before = get().notifications;
+    const validNotifications = filterStaleNotifications(before);
+    if (validNotifications.length === before.length) return;
+    set({ notifications: validNotifications });
+    void persistNotifications(validNotifications);
+  },
+  addNotification: (entry) => {
+    const row: AppNotification = {
       id: newId(),
       type: entry.type,
       message: entry.message,
@@ -152,32 +165,67 @@ export function addNotification(entry: {
       requestId: entry.requestId ?? null,
       chatId: entry.chatId ?? null,
       forUserId: entry.forUserId ?? null,
-    },
-    ...notifications,
-  ];
-  emit();
-  void persist();
+    };
+    set((state) => ({
+      notifications: [row, ...state.notifications],
+    }));
+    void persistNotifications(get().notifications);
+  },
+  markAsRead: (notificationId) => {
+    set((state) => ({
+      notifications: state.notifications.map((n) =>
+        n.id === notificationId ? { ...n, read: true } : n
+      ),
+    }));
+    void persistNotifications(get().notifications);
+  },
+}));
+
+/** Imperative API for non-React modules (same as store action). */
+export function addNotification(entry: AddNotificationInput): void {
+  useNotificationsStore.getState().addNotification(entry);
 }
 
+export function markAsRead(notificationId: string): void {
+  useNotificationsStore.getState().markAsRead(notificationId);
+}
+
+/** @deprecated Use `markAsRead` */
 export function markNotificationRead(id: string): void {
-  ensureLoad();
-  notifications = notifications.map((n) => (n.id === id ? { ...n, read: true } : n));
-  emit();
-  void persist();
+  markAsRead(id);
 }
 
+export function getNotifications(): AppNotification[] {
+  return [...useNotificationsStore.getState().notifications]
+    .filter(isVisibleToCurrentUser)
+    .sort((a, b) => b.timestamp - a.timestamp);
+}
+
+export function getUnreadNotificationCount(): number {
+  const me = getProfile().userId;
+  return useNotificationsStore.getState().notifications.filter(
+    (n) => !n.read && (n.forUserId == null || n.forUserId === '' || n.forUserId === me)
+  ).length;
+}
+
+/** Subscribe to the raw list; derive visible rows with `useMemo` in UI to avoid unstable array refs. */
 export function useNotificationsList(): AppNotification[] {
-  const v = useSyncExternalStore(subscribeNotifications, getVersion, getVersion);
-  return useMemo(() => {
-    void v;
-    return getNotifications();
-  }, [v]);
+  const notifications = useNotificationsStore((s) => s.notifications);
+  return useMemo(
+    () =>
+      [...notifications]
+        .filter(isVisibleToCurrentUser)
+        .sort((a, b) => b.timestamp - a.timestamp),
+    [notifications]
+  );
 }
 
 export function useUnreadNotificationCount(): number {
-  const v = useSyncExternalStore(subscribeNotifications, getVersion, getVersion);
+  const notifications = useNotificationsStore((s) => s.notifications);
   return useMemo(() => {
-    void v;
-    return getUnreadNotificationCount();
-  }, [v]);
+    const me = getProfile().userId;
+    return notifications.filter(
+      (n) => !n.read && (n.forUserId == null || n.forUserId === '' || n.forUserId === me)
+    ).length;
+  }, [notifications]);
 }

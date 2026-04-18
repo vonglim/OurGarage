@@ -1,6 +1,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
+import { Image } from 'expo-image';
 import {
   Pressable,
   ScrollView,
@@ -11,6 +12,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
+import { pickPhotoFromLibrary } from './lib/pickProfileImage';
+import { useRentalConditionStore } from './store/rentalConditionStore';
 import { confirmRentalHandoff, getRequestByTimestamp } from './store/requestsStore';
 import { ui } from '@/constants/appUi';
 
@@ -34,11 +37,19 @@ export default function HandoffConfirmationScreen() {
   const [checks, setChecks] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(ITEMS.map((i) => [i.id, false]))
   );
+  const hydrateConditions = useRentalConditionStore((s) => s.hydrate);
+  const handoffPhotoUri = useRentalConditionStore((s) =>
+    requestIdStr && Number.isFinite(Number(requestIdStr))
+      ? s.handoffPhotoByRequest[requestIdStr]
+      : undefined
+  );
+  const setHandoffPhoto = useRentalConditionStore((s) => s.setHandoffPhoto);
 
   useFocusEffect(
     useCallback(() => {
       setTick((t) => t + 1);
-    }, [])
+      void hydrateConditions();
+    }, [hydrateConditions])
   );
 
   const request = useMemo(() => {
@@ -116,6 +127,12 @@ export default function HandoffConfirmationScreen() {
     setChecks((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const onAddHandoffPhoto = async () => {
+    if (request.timestamp == null) return;
+    const uri = await pickPhotoFromLibrary();
+    if (uri) setHandoffPhoto(request.timestamp, uri);
+  };
+
   return (
     <KeyboardDismissScreen style={styles.screen}>
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
@@ -156,6 +173,28 @@ export default function HandoffConfirmationScreen() {
               </Pressable>
             );
           })}
+        </View>
+
+        <View style={styles.optionalBlock}>
+          <Text style={styles.optionalLabel}>Pickup (optional)</Text>
+          <Pressable
+            onPress={onAddHandoffPhoto}
+            style={({ pressed }) => [styles.photoBtn, pressed && styles.photoBtnPressed]}
+          >
+            <Text style={styles.photoBtnText}>Add Photo</Text>
+          </Pressable>
+          {handoffPhotoUri ? (
+            <View style={styles.photoPreviewWrap}>
+              <Image source={{ uri: handoffPhotoUri }} style={styles.photoPreview} contentFit="cover" />
+              <Pressable
+                onPress={() => request.timestamp != null && setHandoffPhoto(request.timestamp, null)}
+                hitSlop={8}
+                style={({ pressed }) => [styles.removePhoto, pressed && styles.photoBtnPressed]}
+              >
+                <Text style={styles.removePhotoText}>Remove</Text>
+              </Pressable>
+            </View>
+          ) : null}
         </View>
       </ScrollView>
 
@@ -219,6 +258,56 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: 20,
     paddingTop: 18,
+    gap: 14,
+  },
+  optionalBlock: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E5E5EA',
+  },
+  optionalLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6D6D72',
+    marginBottom: 10,
+  },
+  photoBtn: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#F2F2F7',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  photoBtnPressed: {
+    opacity: 0.75,
+  },
+  photoBtnText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: ui.primary,
+  },
+  photoPreviewWrap: {
+    marginTop: 12,
+  },
+  photoPreview: {
+    width: '100%',
+    aspectRatio: 4 / 3,
+    borderRadius: 10,
+    backgroundColor: '#ECECEC',
+  },
+  removePhoto: {
+    alignSelf: 'flex-start',
+    marginTop: 8,
+    paddingVertical: 4,
+  },
+  removePhotoText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#8E8E93',
   },
   card: {
     backgroundColor: '#FFFFFF',

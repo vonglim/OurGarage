@@ -189,11 +189,10 @@ export default function ActivityScreen() {
                 const offerCount =
                   requestKey != null && requestKey !== ''
                     ? offers.filter(
-                        (o) => String(o.requestId) === String(requestKey)
+                        (o) =>
+                          !o.declined && String(o.requestId) === String(requestKey)
                       ).length
                     : 0;
-                console.log("Request:", request.id);
-                console.log("Offers:", offers);
                 const card = (
                   <Pressable
                     style={({ pressed }) => [

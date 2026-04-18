@@ -8,6 +8,8 @@ import { requestAcceptsOffers } from './requestsStore';
 export type Offer = {
   requestId: number;
   message?: string;
+  /** Optional: lender describes the tool being offered. */
+  toolDescription?: string;
   timestamp: number;
   price: number;
   /** Who made the offer (this device user when submitting from Browse). */
@@ -18,12 +20,15 @@ export type Offer = {
   offerUserAvatar?: string;
   /** Snapshot for activity dot (simulated). */
   offerUserLastActive?: number;
+  /** Poster declined this offer (hidden from list, kept in store). */
+  declined?: boolean;
 };
 
 type OffersStoreState = {
   offers: Offer[];
   appendOffer: (offer: Offer) => void;
   removeOffersByRequestId: (requestId: number) => void;
+  markOfferDeclined: (requestId: number, offerTimestamp: number) => void;
 };
 
 export const useOffersStore = create<OffersStoreState>((set) => ({
@@ -36,11 +41,17 @@ export const useOffersStore = create<OffersStoreState>((set) => ({
     set((s) => ({
       offers: s.offers.filter((o) => o.requestId !== requestId),
     })),
+  markOfferDeclined: (requestId, offerTimestamp) =>
+    set((s) => ({
+      offers: s.offers.map((o) =>
+        o.requestId === requestId && o.timestamp === offerTimestamp ? { ...o, declined: true } : o
+      ),
+    })),
 }));
 
 export function addOffer(
   requestId: number,
-  opts?: { message?: string; price: number }
+  opts?: { message?: string; price: number; toolDescription?: string }
 ) {
   if (!requestAcceptsOffers(requestId)) return;
   if (
@@ -63,6 +74,8 @@ export function addOffer(
     offerUserLastActive: profile.lastActive,
   };
   if (opts.message != null && opts.message !== '') row.message = opts.message;
+  const desc = opts.toolDescription?.trim();
+  if (desc) row.toolDescription = desc;
   useOffersStore.getState().appendOffer(row);
   touchLastActive();
   addNotification({
@@ -75,7 +88,7 @@ export function addOffer(
 export function getOffersForRequest(requestId: number): Offer[] {
   return useOffersStore
     .getState()
-    .offers.filter((o) => o.requestId === requestId)
+    .offers.filter((o) => o.requestId === requestId && !o.declined)
     .sort((a, b) => b.timestamp - a.timestamp);
 }
 
@@ -89,7 +102,13 @@ export function getOfferByRequestAndOfferTimestamp(
 }
 
 export function countOffersForRequest(requestId: number): number {
-  return useOffersStore.getState().offers.filter((o) => o.requestId === requestId).length;
+  return useOffersStore
+    .getState()
+    .offers.filter((o) => o.requestId === requestId && !o.declined).length;
+}
+
+export function declineOffer(requestId: number, offerTimestamp: number): void {
+  useOffersStore.getState().markOfferDeclined(requestId, offerTimestamp);
 }
 
 export function removeOffersForRequest(requestId: number) {

@@ -88,6 +88,7 @@ export default function Browse() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [offerTargetId, setOfferTargetId] = useState<number | null>(null);
   const [offerPriceDraft, setOfferPriceDraft] = useState('');
+  const [offerToolDescription, setOfferToolDescription] = useState('');
   const [offerPriceUnlocked, setOfferPriceUnlocked] = useState(false);
   const offerPriceInputRef = useRef<TextInput>(null);
 
@@ -113,6 +114,7 @@ export default function Browse() {
     Keyboard.dismiss();
     setOfferTargetId(null);
     setOfferPriceDraft('');
+    setOfferToolDescription('');
     setOfferPriceUnlocked(false);
   };
 
@@ -126,7 +128,11 @@ export default function Browse() {
       return;
     }
     if (offerTargetId != null) {
-      addOffer(offerTargetId, { price: n });
+      const toolDescription = offerToolDescription.trim();
+      addOffer(offerTargetId, {
+        price: n,
+        ...(toolDescription ? { toolDescription } : {}),
+      });
       closeOfferModal();
       Alert.alert('Offer sent');
     }
@@ -219,7 +225,12 @@ export default function Browse() {
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             style={styles.modalKb}
           >
-            <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <Pressable style={[styles.modalCard, styles.modalCardScroll]} onPress={(e) => e.stopPropagation()}>
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                bounces={false}
+              >
               <Text style={styles.modalSectionLabel}>Offer</Text>
               <Text style={styles.modalTitle}>Your total for this request</Text>
               <Text style={styles.modalLabel}>Offer amount</Text>
@@ -265,6 +276,16 @@ export default function Browse() {
               <Text style={styles.modalHelper}>
                 This is the total price for the full duration
               </Text>
+              <Text style={styles.modalLabelOptional}>Describe your tool (optional)</Text>
+              <TextInput
+                value={offerToolDescription}
+                onChangeText={setOfferToolDescription}
+                placeholder="Condition, accessories, etc."
+                placeholderTextColor="#888"
+                style={styles.modalDescInput}
+                multiline
+                maxLength={500}
+              />
               <Pressable
                 style={({ pressed }) => [
                   styles.modalSendLarge,
@@ -283,6 +304,7 @@ export default function Browse() {
               >
                 <Text style={styles.modalCancelText}>Cancel</Text>
               </Pressable>
+              </ScrollView>
             </Pressable>
           </KeyboardAvoidingView>
         </Pressable>
@@ -387,6 +409,10 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 20,
   },
+  modalCardScroll: {
+    maxHeight: '88%',
+    overflow: 'hidden',
+  },
   modalSectionLabel: {
     fontSize: 12,
     fontWeight: '700',
@@ -453,7 +479,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#666',
     lineHeight: 18,
-    marginBottom: 20,
+    marginBottom: 16,
+  },
+  modalLabelOptional: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#444',
+    marginBottom: 8,
+  },
+  modalDescInput: {
+    minHeight: 72,
+    maxHeight: 120,
+    borderWidth: 1,
+    borderColor: '#DDD',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: '#000',
+    backgroundColor: '#FAFAFA',
+    textAlignVertical: 'top',
+    marginBottom: 18,
   },
   modalSendLarge: {
     backgroundColor: ui.primary,

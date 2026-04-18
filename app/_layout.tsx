@@ -9,6 +9,7 @@ import 'react-native-reanimated';
 
 import { NumberPadKeyboardAccessory } from './components/NumberPadKeyboardAccessory';
 import { registerAndStorePushTokenAsync } from './lib/notifications';
+import { useNotificationsStore } from './store/notificationsStore';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export const unstable_settings = {
@@ -20,6 +21,10 @@ export default function RootLayout() {
 
   useEffect(() => {
     void registerAndStorePushTokenAsync();
+  }, []);
+
+  useEffect(() => {
+    void useNotificationsStore.getState().hydrate();
   }, []);
 
   return (
@@ -35,6 +40,7 @@ export default function RootLayout() {
               <Stack.Screen name="list-my-tool" />
               <Stack.Screen name="rental-agreement" />
               <Stack.Screen name="request-details" />
+              <Stack.Screen name="offer-detail" />
               <Stack.Screen name="match-summary" />
               <Stack.Screen name="chat/[id]" />
               <Stack.Screen name="handoff-confirmation" />
