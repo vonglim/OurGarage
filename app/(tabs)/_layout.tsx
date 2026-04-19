@@ -2,7 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import type { BottomTabBarButtonProps } from '@react-navigation/bottom-tabs';
 import { PlatformPressable } from '@react-navigation/elements';
 import { Tabs } from 'expo-router';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { ui } from '@/constants/appUi';
 import { pressedVisual } from '@/lib/pressFeedback';
@@ -22,7 +22,7 @@ function TabBarButton(props: BottomTabBarButtonProps) {
           base,
           {
             borderRadius: 14,
-            paddingVertical: 6,
+            paddingVertical: 4,
             paddingHorizontal: 8,
             overflow: 'hidden' as const,
           },
@@ -41,6 +41,20 @@ export default function TabLayout() {
       screenOptions={{
         headerShown: false,
         tabBarButton: TabBarButton,
+        tabBarItemStyle: {
+          justifyContent: 'center',
+          alignItems: 'center',
+        },
+        
+        tabBarLabelStyle: {
+          fontSize: 11,
+          marginTop: 0,
+          marginBottom: 2,
+        },
+        
+        tabBarIconStyle: {
+          marginTop: 0,
+        },
         tabBarActiveTintColor: ui.primary,
         tabBarInactiveTintColor: ui.textSecondary,
         tabBarActiveBackgroundColor: ui.surfaceTabActive,
@@ -49,6 +63,9 @@ export default function TabLayout() {
           backgroundColor: ui.background,
           borderTopWidth: StyleSheet.hairlineWidth,
           borderTopColor: ui.border,
+          height: 74,
+          paddingBottom: 5,
+          paddingTop: 5,
         },
       }}
     >
@@ -77,13 +94,22 @@ export default function TabLayout() {
       <Tabs.Screen
         name="activity"
         options={{
-          title: 'My Activity',
+          title: 'Activity',
           tabBarIcon: ({ color, size, focused }) => (
-            <Ionicons
-              name={focused ? 'layers' : 'layers-outline'}
-              size={size}
-              color={color}
-            />
+            <View
+              style={{
+                transform: [
+                  { translateY: -2 },
+                  { translateX: 4 },
+                ],
+              }}
+            >
+              <Ionicons
+                name={focused ? 'layers' : 'layers-outline'}
+                size={size}
+                color={color}
+              />
+            </View>
           ),
         }}
       />
@@ -97,7 +123,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="notifications"
         options={{
-          title: 'Notifications',
+          title: 'Alerts',
           tabBarBadge: unread > 0 ? (unread > 99 ? '99+' : unread) : undefined,
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons
