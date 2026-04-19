@@ -3,19 +3,21 @@ import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
 import { Image } from 'expo-image';
 import {
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { Pressable } from '@/components/Pressable';
+import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
 import { pickPhotoFromLibrary } from './lib/pickProfileImage';
 import { useRentalConditionStore } from './store/rentalConditionStore';
 import { confirmRentalHandoff, getRequestByTimestamp } from './store/requestsStore';
-import { ui } from '@/constants/appUi';
+import { primarySolidPressed, ui } from '@/constants/appUi';
+import { IMAGE_TRANSITION_MS } from '@/constants/interactionTiming';
 
 const ITEMS: { id: string; label: string }[] = [
   { id: 'inspected', label: 'I have inspected the equipment' },
@@ -73,10 +75,12 @@ export default function HandoffConfirmationScreen() {
   if (!requestIdStr || !Number.isFinite(Number(requestIdStr))) {
     return (
       <KeyboardDismissScreen style={[styles.screen, styles.centered]}>
-        <Text style={styles.muted}>Invalid request.</Text>
-        <Pressable onPress={() => router.back()} style={styles.textBtn} hitSlop={12}>
-          <Text style={styles.textBtnLabel}>Go back</Text>
-        </Pressable>
+        <ScreenEntrance style={styles.entranceFillCentered}>
+          <Text style={styles.muted}>Invalid request.</Text>
+          <Pressable onPress={() => router.back()} style={styles.textBtn} hitSlop={12}>
+            <Text style={styles.textBtnLabel}>Go back</Text>
+          </Pressable>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
     );
   }
@@ -84,10 +88,12 @@ export default function HandoffConfirmationScreen() {
   if (!request) {
     return (
       <KeyboardDismissScreen style={[styles.screen, styles.centered]}>
-        <Text style={styles.muted}>Request not found.</Text>
-        <Pressable onPress={() => router.back()} style={styles.textBtn} hitSlop={12}>
-          <Text style={styles.textBtnLabel}>Go back</Text>
-        </Pressable>
+        <ScreenEntrance style={styles.entranceFillCentered}>
+          <Text style={styles.muted}>Request not found.</Text>
+          <Pressable onPress={() => router.back()} style={styles.textBtn} hitSlop={12}>
+            <Text style={styles.textBtnLabel}>Go back</Text>
+          </Pressable>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
     );
   }
@@ -95,10 +101,12 @@ export default function HandoffConfirmationScreen() {
   if (!request.matched) {
     return (
       <KeyboardDismissScreen style={[styles.screen, styles.centered]}>
-        <Text style={styles.muted}>This request is not matched yet.</Text>
-        <Pressable onPress={() => router.back()} style={styles.textBtn} hitSlop={12}>
-          <Text style={styles.textBtnLabel}>Go back</Text>
-        </Pressable>
+        <ScreenEntrance style={styles.entranceFillCentered}>
+          <Text style={styles.muted}>This request is not matched yet.</Text>
+          <Pressable onPress={() => router.back()} style={styles.textBtn} hitSlop={12}>
+            <Text style={styles.textBtnLabel}>Go back</Text>
+          </Pressable>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
     );
   }
@@ -106,9 +114,12 @@ export default function HandoffConfirmationScreen() {
   if (request.rentalStart != null) {
     return (
       <KeyboardDismissScreen style={[styles.screen, styles.centered, { paddingTop: insets.top }]}>
-        <Text style={styles.alreadyTitle}>Rental already started</Text>
-        <Text style={styles.muted}>Handoff was confirmed earlier.</Text>
+        <ScreenEntrance style={styles.entranceFillCentered}>
+          <Text style={styles.alreadyTitle}>Rental already started</Text>
+          <Text style={styles.muted}>Handoff was confirmed earlier.</Text>
         <Pressable
+          pressOpacityFeedback={false}
+          haptic
           onPress={() =>
             router.replace({
               pathname: '/request-details',
@@ -119,6 +130,7 @@ export default function HandoffConfirmationScreen() {
         >
           <Text style={styles.primaryBtnText}>Open request</Text>
         </Pressable>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
     );
   }
@@ -135,7 +147,8 @@ export default function HandoffConfirmationScreen() {
 
   return (
     <KeyboardDismissScreen style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+      <ScreenEntrance style={styles.entranceFlex}>
+        <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
         </Pressable>
@@ -185,7 +198,12 @@ export default function HandoffConfirmationScreen() {
           </Pressable>
           {handoffPhotoUri ? (
             <View style={styles.photoPreviewWrap}>
-              <Image source={{ uri: handoffPhotoUri }} style={styles.photoPreview} contentFit="cover" />
+              <Image
+                source={{ uri: handoffPhotoUri }}
+                style={styles.photoPreview}
+                contentFit="cover"
+                transition={IMAGE_TRANSITION_MS}
+              />
               <Pressable
                 onPress={() => request.timestamp != null && setHandoffPhoto(request.timestamp, null)}
                 hitSlop={8}
@@ -200,6 +218,8 @@ export default function HandoffConfirmationScreen() {
 
       <View style={[styles.footer, { paddingBottom: 16 + insets.bottom }]}>
         <Pressable
+          pressOpacityFeedback={false}
+          haptic
           onPress={onConfirm}
           disabled={!allChecked}
           style={({ pressed }) => [
@@ -211,14 +231,23 @@ export default function HandoffConfirmationScreen() {
           <Text style={styles.primaryBtnText}>Confirm & Start Rental</Text>
         </Pressable>
       </View>
+      </ScreenEntrance>
     </KeyboardDismissScreen>
   );
 }
 
 const styles = StyleSheet.create({
+  entranceFlex: {
+    flex: 1,
+  },
+  entranceFillCentered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   screen: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
   },
   centered: {
     justifyContent: 'center',
@@ -229,8 +258,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
-    backgroundColor: '#F2F2F7',
+    borderBottomColor: ui.border,
+    backgroundColor: ui.surfaceGrouped,
   },
   backHit: {
     alignSelf: 'flex-start',
@@ -244,12 +273,12 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
   },
   headerSub: {
     marginTop: 6,
     fontSize: 14,
-    color: '#6D6D72',
+    color: ui.textSecondary,
     lineHeight: 20,
   },
   scroll: {
@@ -261,26 +290,26 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   optionalBlock: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 14,
     padding: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
   },
   optionalLabel: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#6D6D72',
+    color: ui.textSecondary,
     marginBottom: 10,
   },
   photoBtn: {
     alignSelf: 'flex-start',
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: ui.border,
   },
   photoBtnPressed: {
     opacity: 0.75,
@@ -297,7 +326,7 @@ const styles = StyleSheet.create({
     width: '100%',
     aspectRatio: 4 / 3,
     borderRadius: 10,
-    backgroundColor: '#ECECEC',
+    backgroundColor: ui.surfaceNeutral,
   },
   removePhoto: {
     alignSelf: 'flex-start',
@@ -307,14 +336,14 @@ const styles = StyleSheet.create({
   removePhotoText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#8E8E93',
+    color: ui.textSecondary,
   },
   card: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 14,
     overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
   },
   checkRow: {
     flexDirection: 'row',
@@ -325,27 +354,27 @@ const styles = StyleSheet.create({
   },
   checkRowBorder: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#ECECEC',
+    borderTopColor: ui.border,
   },
   checkRowPressed: {
-    backgroundColor: '#F9F9F9',
+    backgroundColor: ui.surfaceInput,
   },
   checkbox: {
     width: 26,
     height: 26,
     borderRadius: 6,
     borderWidth: 2,
-    borderColor: '#C7C7CC',
+    borderColor: ui.border,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
   },
   checkboxOn: {
     borderColor: ui.primary,
     backgroundColor: ui.primary,
   },
   checkmark: {
-    color: '#FFFFFF',
+    color: ui.primaryOn,
     fontSize: 16,
     fontWeight: '800',
   },
@@ -353,14 +382,14 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     lineHeight: 22,
-    color: '#1C1C1E',
+    color: ui.textPrimary,
   },
   footer: {
     paddingHorizontal: 20,
     paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#E5E5EA',
-    backgroundColor: '#F2F2F7',
+    borderTopColor: ui.border,
+    backgroundColor: ui.surfaceGrouped,
   },
   primaryBtn: {
     backgroundColor: ui.primary,
@@ -369,13 +398,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   primaryBtnPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   primaryBtnDisabled: {
     opacity: 0.45,
   },
   primaryBtnText: {
-    color: '#FFFFFF',
+    color: ui.primaryOn,
     fontSize: 17,
     fontWeight: '600',
   },
@@ -398,7 +427,7 @@ const styles = StyleSheet.create({
   alreadyTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
     marginBottom: 8,
     textAlign: 'center',
   },

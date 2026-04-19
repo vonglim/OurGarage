@@ -4,14 +4,14 @@ import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
   Modal,
-  Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { cardChrome, ui } from '@/constants/appUi';
+import { cardChrome, primarySolidPressed, shadowKey, ui } from '@/constants/appUi';
 
 export const MAIN_TAB_FAB_SIZE = 56;
 export const MAIN_TAB_FAB_GAP = 16;
@@ -37,6 +37,8 @@ export function MainTabFab() {
   return (
     <>
       <Pressable
+        pressOpacityFeedback={false}
+        haptic
         accessibilityRole="button"
         accessibilityLabel="Add request or list equipment"
         onPress={() => setOpen(true)}
@@ -49,7 +51,7 @@ export function MainTabFab() {
           pressed && styles.fabPressed,
         ]}
       >
-        <Ionicons name="add" size={32} color="#FFFFFF" />
+        <Ionicons name="add" size={32} color={ui.primaryOn} />
       </Pressable>
 
       <Modal
@@ -103,20 +105,17 @@ const styles = StyleSheet.create({
     backgroundColor: ui.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.22,
-    shadowRadius: 5,
+    ...shadowKey,
     elevation: 6,
   },
   fabPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.4)',
     justifyContent: 'flex-end',
-    paddingHorizontal: 20,
+    paddingHorizontal: ui.padScreenH,
   },
   modalCard: {
     ...cardChrome,
@@ -126,7 +125,7 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#6D6D72',
+    color: ui.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
     paddingHorizontal: 16,
@@ -139,15 +138,15 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     paddingHorizontal: 16,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#ECECEC',
+    borderTopColor: ui.border,
   },
   modalRowPressed: {
-    backgroundColor: '#F6F6F7',
+    backgroundColor: ui.surfaceStriped,
   },
   modalRowText: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#111',
+    color: ui.textPrimary,
   },
   modalCancel: {
     paddingVertical: 14,
@@ -156,6 +155,6 @@ const styles = StyleSheet.create({
   modalCancelText: {
     fontSize: 17,
     fontWeight: '500',
-    color: '#8E8E93',
+    color: ui.textSecondary,
   },
 });

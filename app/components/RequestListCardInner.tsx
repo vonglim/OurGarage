@@ -1,7 +1,8 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { Pressable } from '@/components/Pressable';
 import { formatHowDisplay } from '../lib/deliveryFormat';
 import {
   getPublicProfileForView,
@@ -16,7 +17,7 @@ import {
 import { getRequestCardUiStatus } from '../lib/requestCardStatus';
 import { formatMilesShort, milesFromViewerToRequest } from '../lib/requestDistance';
 import { formatUsd, getNumericTotalPrice } from '../lib/money';
-import { cardChrome, ui } from '@/constants/appUi';
+import { cardChrome, primarySolidPressed, ui } from '@/constants/appUi';
 import { UserActivityDot } from './UserActivityDot';
 
 /** Placeholder poster avatar (until backend provides URLs). */
@@ -119,7 +120,7 @@ export function RequestListCardInner({
   const posterParsed = parseProfileAvatar(poster.avatar);
   const posterPreset =
     posterParsed.kind === 'preset' ? getPresetById(posterParsed.id) : null;
-  const posterAvatarBg = posterPreset?.color ?? '#ECECF0';
+  const posterAvatarBg = posterPreset?.color ?? ui.borderLight;
 
   return (
     <View style={styles.root}>
@@ -146,7 +147,7 @@ export function RequestListCardInner({
             <Ionicons
               name={(posterPreset?.icon ?? 'person') as React.ComponentProps<typeof Ionicons>['name']}
               size={18}
-              color="#FFFFFF"
+              color={ui.primaryOn}
             />
           </View>
           <View style={styles.posterMeta}>
@@ -181,6 +182,8 @@ export function RequestListCardInner({
               {leftFooter}
             </Text>
             <Pressable
+              pressOpacityFeedback={false}
+              haptic
               disabled={offerAction.disabled}
               onPress={offerAction.onPress}
               style={({ pressed }) => [
@@ -259,13 +262,13 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     fontWeight: '700',
-    color: '#1C1C1E',
+    color: ui.textPrimary,
     minWidth: 0,
   },
   posterRating: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#3A3A3C',
+    color: ui.textPrimary,
     letterSpacing: 0.2,
   },
   topRow: {
@@ -276,8 +279,8 @@ const styles = StyleSheet.create({
   toolName: {
     flex: 1,
     fontSize: 17,
-    fontWeight: '700',
-    color: '#111111',
+    fontWeight: '800',
+    color: ui.textPrimary,
     lineHeight: 22,
     textAlign: 'left',
   },
@@ -295,7 +298,7 @@ const styles = StyleSheet.create({
   statusLabel: {
     fontSize: 11,
     fontWeight: '600',
-    color: '#555555',
+    color: ui.textSecondary,
     letterSpacing: 0.15,
   },
   priceDurationRow: {
@@ -303,21 +306,21 @@ const styles = StyleSheet.create({
     textAlign: 'left',
   },
   priceEmphasis: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#000000',
+    fontSize: ui.fontPriceLarge + 4,
+    fontWeight: '700',
+    color: ui.textPrimary,
     letterSpacing: -0.45,
   },
   durationInline: {
     fontSize: 14,
-    fontWeight: '700',
-    color: '#454B58',
+    fontWeight: '600',
+    color: ui.textSecondary,
   },
   deliveryLine: {
     marginTop: GAP_PRICE_TO_DELIVERY,
     fontSize: 13,
     fontWeight: '400',
-    color: '#6B7280',
+    color: ui.textSecondary,
     lineHeight: 18,
     textAlign: 'left',
   },
@@ -332,7 +335,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 11,
     fontWeight: '400',
-    color: '#8E8E93',
+    color: ui.textSecondary,
     textAlign: 'left',
     marginRight: 4,
     minWidth: 0,
@@ -341,30 +344,30 @@ const styles = StyleSheet.create({
     marginTop: BOTTOM_ROW_MARGIN_TOP,
     fontSize: 11,
     fontWeight: '400',
-    color: '#8E8E93',
+    color: ui.textSecondary,
     textAlign: 'left',
   },
   offerPill: {
     flexShrink: 0,
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 8,
+    borderRadius: ui.radiusInput,
     backgroundColor: ui.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
   offerPillDisabled: {
-    backgroundColor: '#CCCCCC',
+    backgroundColor: ui.surfaceNeutral,
   },
   offerPillPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   offerPillText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: ui.primaryOn,
   },
   offerPillTextDisabled: {
-    color: '#666666',
+    color: ui.textSecondary,
   },
 });

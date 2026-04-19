@@ -1,8 +1,11 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
+import { Pressable } from '@/components/Pressable';
+import { IMAGE_TRANSITION_MS } from '@/constants/interactionTiming';
+import { ui } from '@/constants/appUi';
 import { parseProfileAvatar } from '../lib/profileAvatar';
 import { getPresetById } from '../lib/userAvatarPresets';
 import { UserActivityDot } from './UserActivityDot';
@@ -35,7 +38,7 @@ function OfferAvatar({ avatar }: { avatar: string }) {
           source={{ uri: parsed.uri }}
           style={{ width: AVATAR, height: AVATAR, borderRadius: r }}
           contentFit="cover"
-          transition={120}
+          transition={IMAGE_TRANSITION_MS}
         />
       </View>
     );
@@ -56,7 +59,7 @@ function OfferAvatar({ avatar }: { avatar: string }) {
       <Ionicons
         name={preset.icon as React.ComponentProps<typeof Ionicons>['name']}
         size={AVATAR_ICON}
-        color="#FFFFFF"
+        color={ui.primaryOn}
       />
     </View>
   );
@@ -66,7 +69,6 @@ function OfferAvatar({ avatar }: { avatar: string }) {
 export function OfferOffererRow(props: OfferOffererRowProps) {
   const { name, rating, avatar, lastActive } = props;
   const isClickable = props.isClickable !== false;
-  console.log('isClickable:', isClickable);
 
   if (!isClickable) {
     return (
@@ -150,12 +152,12 @@ const styles = StyleSheet.create({
     minWidth: 0,
     fontSize: 16,
     fontWeight: '700',
-    color: '#111',
+    color: ui.textPrimary,
   },
   rating: {
     flexShrink: 0,
     fontSize: 14,
     fontWeight: '600',
-    color: '#555',
+    color: ui.textSecondary,
   },
 });

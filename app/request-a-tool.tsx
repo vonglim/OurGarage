@@ -6,16 +6,18 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { Pressable } from '@/components/Pressable';
+import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { ScrollView } from 'react-native-gesture-handler';
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
 import { numberPadAccessoryProps } from './components/NumberPadKeyboardAccessory';
 import { getRequestEditFormValues } from './lib/getRequestEditFormValues';
+import { showFeedbackToast } from './store/feedbackToastStore';
 import {
   addRequest,
   getRequestByTimestamp,
@@ -25,7 +27,7 @@ import { DELIVERY_OPTIONS, needsDeliveryFee, type HowKey } from './lib/deliveryF
 import { DURATION_OPTIONS, type DurationType } from './lib/durationFormat';
 import { parseMoneyToNumber, sanitizeMoneyDigits } from './lib/money';
 import { coordinatesFromLocationField } from './lib/zipCoordinates';
-import { ui } from '@/constants/appUi';
+import { primarySolidPressed, subtleControlPressed, ui } from '@/constants/appUi';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const whenOptions = ['Today', 'This Weekend', 'Flexible'];
@@ -150,6 +152,7 @@ export default function RequestAToolScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={0}
       >
+      <ScreenEntrance style={styles.entranceFlex}>
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
@@ -174,7 +177,7 @@ export default function RequestAToolScreen() {
         <TextInput
           ref={refToolName}
           placeholder="What equipment do you need?"
-          placeholderTextColor="#888"
+          placeholderTextColor={ui.textSecondary}
           value={toolName}
           onChangeText={setToolName}
           style={styles.input}
@@ -189,7 +192,7 @@ export default function RequestAToolScreen() {
         <TextInput
           ref={refLocation}
           placeholder="e.g. 60614 or Chicago"
-          placeholderTextColor="#888"
+          placeholderTextColor={ui.textSecondary}
           value={locationInput}
           onChangeText={setLocationInput}
           style={styles.input}
@@ -210,10 +213,12 @@ export default function RequestAToolScreen() {
           {whenOptions.map((option) => (
             <Pressable
               key={option}
+              pressOpacityFeedback={false}
               style={({ pressed }) => [
                 styles.optionButton,
                 when === option && styles.optionSelected,
-                pressed && styles.optionPressed,
+                pressed &&
+                  (when === option ? styles.optionPressedSelected : styles.optionPressedNeutral),
               ]}
               onPress={() => setWhen(option)}
             >
@@ -236,10 +241,12 @@ export default function RequestAToolScreen() {
           {DELIVERY_OPTIONS.map(({ key, shortLabel }) => (
             <Pressable
               key={key}
+              pressOpacityFeedback={false}
               style={({ pressed }) => [
                 styles.optionButton,
                 how === key && styles.optionSelected,
-                pressed && styles.optionPressed,
+                pressed &&
+                  (how === key ? styles.optionPressedSelected : styles.optionPressedNeutral),
               ]}
               onPress={() => setHow(key)}
             >
@@ -258,7 +265,7 @@ export default function RequestAToolScreen() {
           <TextInput
             ref={refPickupRadius}
             placeholder="Miles (e.g. 10)"
-            placeholderTextColor="#888"
+            placeholderTextColor={ui.textSecondary}
             value={pickupRadiusMiles}
             onChangeText={(t) =>
               setPickupRadiusMiles(t.replace(/[^0-9]/g, '').slice(0, 3))
@@ -279,10 +286,14 @@ export default function RequestAToolScreen() {
           {DURATION_OPTIONS.map(({ key, label }) => (
             <Pressable
               key={key}
+              pressOpacityFeedback={false}
               style={({ pressed }) => [
                 styles.optionButton,
                 durationType === key && styles.optionSelected,
-                pressed && styles.optionPressed,
+                pressed &&
+                  (durationType === key
+                    ? styles.optionPressedSelected
+                    : styles.optionPressedNeutral),
               ]}
               onPress={() => {
                 setDurationType(key);
@@ -305,7 +316,7 @@ export default function RequestAToolScreen() {
           <TextInput
             ref={refDurationDays}
             placeholder="Number of days"
-            placeholderTextColor="#888"
+            placeholderTextColor={ui.textSecondary}
             value={durationDays}
             onChangeText={setDurationDays}
             style={[styles.input, styles.durationDaysInput]}
@@ -320,7 +331,7 @@ export default function RequestAToolScreen() {
           <TextInput
             ref={refDurationWeeks}
             placeholder="Number of weeks"
-            placeholderTextColor="#888"
+            placeholderTextColor={ui.textSecondary}
             value={durationWeeks}
             onChangeText={setDurationWeeks}
             style={[styles.input, styles.durationDaysInput]}
@@ -343,7 +354,7 @@ export default function RequestAToolScreen() {
           <TextInput
             ref={refTotalPrice}
             placeholder="0"
-            placeholderTextColor="#888"
+            placeholderTextColor={ui.textSecondary}
             value={totalPriceInput}
             onChangeText={(t) => setTotalPriceInput(sanitizeMoneyDigits(t))}
             style={styles.moneyInput}
@@ -367,7 +378,7 @@ export default function RequestAToolScreen() {
             <TextInput
               ref={refDeliveryFee}
               placeholder="0"
-              placeholderTextColor="#888"
+              placeholderTextColor={ui.textSecondary}
               value={deliveryFeeInput}
               onChangeText={(t) => setDeliveryFeeInput(sanitizeMoneyDigits(t))}
               style={styles.moneyInput}
@@ -383,6 +394,8 @@ export default function RequestAToolScreen() {
 
       {/* Submit / Update Button */}
       <Pressable
+        pressOpacityFeedback={false}
+        haptic
         style={({ pressed }) => [
           styles.submitButton,
           pressed && styles.submitButtonPressed,
@@ -485,10 +498,12 @@ export default function RequestAToolScreen() {
             setTotalPriceInput('');
             setDeliveryFeeInput('');
             setLocationInput('');
+            showFeedbackToast('Request updated');
             router.back();
             return;
           }
           addRequest(payload);
+          showFeedbackToast('Request sent');
           router.push('/request-confirmation');
         }}
       >
@@ -497,6 +512,7 @@ export default function RequestAToolScreen() {
         </Text>
       </Pressable>
       </ScrollView>
+      </ScreenEntrance>
       </KeyboardAvoidingView>
     </KeyboardDismissScreen>
   );
@@ -505,7 +521,10 @@ export default function RequestAToolScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
+  },
+  entranceFlex: {
+    flex: 1,
   },
   kav: {
     flex: 1,
@@ -514,8 +533,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
-    backgroundColor: '#FFFFFF',
+    borderBottomColor: ui.border,
+    backgroundColor: ui.background,
   },
   backHit: {
     alignSelf: 'flex-start',
@@ -529,11 +548,11 @@ const styles = StyleSheet.create({
   screenTitle: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
   },
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
   },
   scrollContent: {
     paddingHorizontal: 24,
@@ -545,7 +564,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 28,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
     textAlign: 'center',
   },
   section: {
@@ -563,7 +582,7 @@ const styles = StyleSheet.create({
     borderRadius: ui.radiusButton,
     padding: 14,
     fontSize: 15,
-    backgroundColor: '#F7F7F7',
+    backgroundColor: ui.surfaceStriped,
     color: ui.text,
   },
   durationDaysInput: {
@@ -581,13 +600,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: ui.border,
     borderRadius: ui.radiusButton,
-    backgroundColor: '#F7F7F7',
+    backgroundColor: ui.surfaceStriped,
     paddingLeft: 12,
   },
   dollarPrefix: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#111',
+    color: ui.textPrimary,
     marginRight: 4,
   },
   moneyInput: {
@@ -595,7 +614,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingRight: 12,
     fontSize: 18,
-    color: '#000',
+    color: ui.textPrimary,
   },
   optionGroup: {
     flexDirection: 'row',
@@ -605,7 +624,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 14,
     borderRadius: ui.radiusButton,
-    backgroundColor: '#EEEEEE',
+    backgroundColor: ui.surfaceNeutral,
     marginRight: 10,
     marginBottom: 10,
     borderWidth: 1,
@@ -615,8 +634,11 @@ const styles = StyleSheet.create({
     backgroundColor: ui.primary,
     borderColor: ui.primary,
   },
-  optionPressed: {
-    opacity: ui.pressOpacity,
+  optionPressedNeutral: {
+    ...subtleControlPressed,
+  },
+  optionPressedSelected: {
+    ...primarySolidPressed,
   },
   optionText: {
     color: ui.text,
@@ -624,7 +646,7 @@ const styles = StyleSheet.create({
     maxWidth: 168,
   },
   optionTextSelected: {
-    color: '#fff',
+    color: ui.primaryOn,
   },
   submitButton: {
     marginTop: 20,
@@ -634,10 +656,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   submitButtonPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   submitText: {
-    color: '#fff',
+    color: ui.primaryOn,
     fontSize: 16,
     fontWeight: '600',
   },

@@ -1,7 +1,37 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import type { BottomTabBarButtonProps } from '@react-navigation/bottom-tabs';
+import { PlatformPressable } from '@react-navigation/elements';
 import { Tabs } from 'expo-router';
+import { StyleSheet } from 'react-native';
 
+import { ui } from '@/constants/appUi';
+import { pressedVisual } from '@/lib/pressFeedback';
 import { useUnreadNotificationCount } from '../store/notificationsStore';
+
+function TabBarButton(props: BottomTabBarButtonProps) {
+  const { style: styleProp, ...rest } = props;
+  return (
+    <PlatformPressable
+      {...rest}
+      style={((state: { pressed: boolean }) => {
+        const base =
+          typeof styleProp === 'function'
+            ? (styleProp as (s: { pressed: boolean }) => unknown)(state)
+            : styleProp;
+        return [
+          base,
+          {
+            borderRadius: 14,
+            paddingVertical: 6,
+            paddingHorizontal: 8,
+            overflow: 'hidden' as const,
+          },
+          pressedVisual(state.pressed),
+        ];
+      }) as unknown as BottomTabBarButtonProps['style']}
+    />
+  );
+}
 
 export default function TabLayout() {
   const unread = useUnreadNotificationCount();
@@ -10,8 +40,16 @@ export default function TabLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: '#007AFF',
-        tabBarInactiveTintColor: '#8E8E93',
+        tabBarButton: TabBarButton,
+        tabBarActiveTintColor: ui.primary,
+        tabBarInactiveTintColor: ui.textSecondary,
+        tabBarActiveBackgroundColor: ui.surfaceTabActive,
+        tabBarInactiveBackgroundColor: 'transparent',
+        tabBarStyle: {
+          backgroundColor: ui.background,
+          borderTopWidth: StyleSheet.hairlineWidth,
+          borderTopColor: ui.border,
+        },
       }}
     >
       <Tabs.Screen

@@ -1,12 +1,12 @@
 import { useRouter } from 'expo-router';
 import React from 'react';
 import {
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
@@ -160,37 +160,37 @@ export default function ChatsScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
   },
   header: {
-    paddingHorizontal: 20,
-    paddingBottom: 12,
+    paddingHorizontal: ui.padScreenH,
+    paddingBottom: ui.spaceSm + 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
+    borderBottomColor: ui.border,
   },
   title: {
     fontSize: 28,
-    fontWeight: '700',
-    color: '#000',
+    fontWeight: '800',
+    color: ui.textPrimary,
     letterSpacing: -0.3,
   },
   scroll: {
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
+    paddingHorizontal: ui.padScreenH,
+    paddingTop: ui.spaceMd,
   },
   sectionTitle: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#6D6D72',
+    color: ui.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
-    marginBottom: 8,
+    marginBottom: ui.spaceSm,
   },
   sectionTitleArchived: {
-    marginTop: 22,
+    marginTop: ui.spaceSection - 6,
   },
   sectionEmpty: {
     fontSize: 14,
@@ -199,20 +199,20 @@ const styles = StyleSheet.create({
   },
   sectionEmptyMuted: {
     fontSize: 13,
-    color: '#AEAEB2',
+    color: ui.textSecondary,
     marginBottom: 4,
   },
   emptyCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 20,
+    backgroundColor: ui.background,
+    borderRadius: ui.radiusCard,
+    padding: ui.padScreenH,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
   },
   emptyTitle: {
     fontSize: 17,
-    fontWeight: '600',
-    color: '#000',
+    fontWeight: '700',
+    color: ui.textPrimary,
     marginBottom: 8,
   },
   emptyBody: {
@@ -221,30 +221,30 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   listCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    backgroundColor: ui.background,
+    borderRadius: ui.radiusButton,
     overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
     marginBottom: 4,
   },
   listCardArchived: {
-    backgroundColor: '#F9F9FB',
-    borderColor: '#E8E8ED',
+    backgroundColor: ui.surfaceInput,
+    borderColor: ui.border,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 14,
     paddingHorizontal: 16,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
   },
   rowBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
+    borderBottomColor: ui.border,
   },
   rowPressed: {
-    backgroundColor: '#F9F9F9',
+    backgroundColor: ui.surfaceInput,
   },
   rowText: {
     flex: 1,
@@ -260,8 +260,8 @@ const styles = StyleSheet.create({
   rowName: {
     flex: 1,
     fontSize: 17,
-    fontWeight: '600',
-    color: '#000',
+    fontWeight: '700',
+    color: ui.textPrimary,
     minWidth: 0,
   },
   unreadBadge: {
@@ -274,12 +274,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   unreadBadgeArchived: {
-    backgroundColor: '#AEAEB2',
+    backgroundColor: ui.textSecondary,
   },
   unreadBadgeText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: ui.primaryOn,
   },
   rowPreview: {
     fontSize: 14,
@@ -288,7 +288,7 @@ const styles = StyleSheet.create({
   },
   chevron: {
     fontSize: 22,
-    color: '#C7C7CC',
+    color: ui.textSecondary,
     marginLeft: 8,
   },
   rowArchived: {
@@ -296,30 +296,30 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 10,
     paddingHorizontal: 14,
-    backgroundColor: '#F9F9FB',
+    backgroundColor: ui.surfaceInput,
   },
   rowBorderArchived: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E8E8ED',
+    borderBottomColor: ui.border,
   },
   rowPressedArchived: {
-    backgroundColor: '#F0F0F4',
+    backgroundColor: ui.borderLight,
   },
   rowNameArchived: {
     flex: 1,
     fontSize: 15,
     fontWeight: '600',
-    color: '#636366',
+    color: ui.textSecondary,
     minWidth: 0,
   },
   rowPreviewArchived: {
     fontSize: 12,
-    color: '#8E8E93',
+    color: ui.textSecondary,
     lineHeight: 17,
   },
   chevronArchived: {
     fontSize: 18,
-    color: '#AEAEB2',
+    color: ui.textSecondary,
     marginLeft: 8,
   },
 });

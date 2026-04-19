@@ -1,12 +1,14 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useMemo } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable } from '@/components/Pressable';
+import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
 import { formatListingDistanceAway } from './lib/requestDistance';
 import { formatListingPriceWithUnit, getListingById } from './store/listingsStore';
-import { cardChrome, ui } from '@/constants/appUi';
+import { cardChrome, primarySolidPressed, ui } from '@/constants/appUi';
 
 function firstParam(v: string | string[] | undefined): string | undefined {
   if (v == null) return undefined;
@@ -35,17 +37,20 @@ export default function ListingDetailScreen() {
   if (!id || !listing) {
     return (
       <KeyboardDismissScreen style={[styles.screen, styles.centered]}>
-        <Text style={styles.muted}>Listing not found.</Text>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.textBtn}>
-          <Text style={styles.textBtnLabel}>Go back</Text>
-        </Pressable>
+        <ScreenEntrance style={styles.entranceFillCentered}>
+          <Text style={styles.muted}>Listing not found.</Text>
+          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.textBtn}>
+            <Text style={styles.textBtnLabel}>Go back</Text>
+          </Pressable>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
     );
   }
 
   return (
     <KeyboardDismissScreen style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+      <ScreenEntrance style={styles.entranceFlex}>
+        <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
         </Pressable>
@@ -83,6 +88,8 @@ export default function ListingDetailScreen() {
         <View style={styles.sectionGap} />
 
         <Pressable
+          pressOpacityFeedback={false}
+          haptic
           onPress={() =>
             router.push({
               pathname: '/request-a-tool',
@@ -97,14 +104,23 @@ export default function ListingDetailScreen() {
           <Text style={styles.primaryBtnText}>Request this item</Text>
         </Pressable>
       </ScrollView>
+      </ScreenEntrance>
     </KeyboardDismissScreen>
   );
 }
 
 const styles = StyleSheet.create({
+  entranceFlex: {
+    flex: 1,
+  },
+  entranceFillCentered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   screen: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
   },
   centered: {
     justifyContent: 'center',
@@ -130,8 +146,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
-    backgroundColor: '#F2F2F7',
+    borderBottomColor: ui.border,
+    backgroundColor: ui.surfaceGrouped,
   },
   backHit: {
     alignSelf: 'flex-start',
@@ -145,7 +161,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
   },
   scroll: {
     flex: 1,
@@ -156,18 +172,18 @@ const styles = StyleSheet.create({
   toolName: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
     marginBottom: 8,
   },
   ownerLine: {
     fontSize: 15,
-    color: '#555',
+    color: ui.textSecondary,
     lineHeight: 22,
     marginBottom: 4,
   },
   distanceLine: {
     fontSize: 15,
-    color: '#636366',
+    color: ui.textSecondary,
     lineHeight: 22,
     marginBottom: 8,
   },
@@ -179,7 +195,7 @@ const styles = StyleSheet.create({
   },
   dateLine: {
     fontSize: 14,
-    color: '#8E8E93',
+    color: ui.textSecondary,
   },
   sectionGap: {
     height: 22,
@@ -187,7 +203,7 @@ const styles = StyleSheet.create({
   sectionLabel: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#6D6D72',
+    color: ui.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
     marginBottom: 8,
@@ -197,7 +213,7 @@ const styles = StyleSheet.create({
   },
   body: {
     fontSize: 16,
-    color: '#333',
+    color: ui.textPrimary,
     lineHeight: 24,
   },
   primaryBtn: {
@@ -208,11 +224,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   primaryBtnPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   primaryBtnText: {
     fontSize: 17,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: ui.primaryOn,
   },
 });

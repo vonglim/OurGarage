@@ -7,13 +7,14 @@ import {
   KeyboardAvoidingView,
   Modal,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { Pressable } from '@/components/Pressable';
+import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { numberPadAccessoryProps } from './components/NumberPadKeyboardAccessory';
@@ -27,9 +28,15 @@ import {
   getOfferUserPreview,
   useOffersStore,
 } from './store/offersStore';
+import { showFeedbackToast } from './store/feedbackToastStore';
 import { getProfile } from './store/profileStore';
 import { getEffectiveRentalStatus, getRequestByTimestamp } from './store/requestsStore';
-import { ui } from '@/constants/appUi';
+import {
+  outlinePrimaryPressed,
+  primarySolidPressed,
+  subtleControlPressed,
+  ui,
+} from '@/constants/appUi';
 
 function firstParam(v: string | string[] | undefined): string | undefined {
   if (v == null) return undefined;
@@ -187,18 +194,19 @@ export default function OfferDetailScreen() {
       message: counterMessageDraft.trim(),
     });
     closeCounterModal();
+    showFeedbackToast('Counter sent');
     router.back();
   };
 
   if (!requestIdStr || !offerTsStr || !Number.isFinite(requestIdNum) || !Number.isFinite(offerTsNum)) {
     return (
       <View style={{ flex: 1 }}>
-        <View style={[styles.screen, styles.centered]}>
+        <ScreenEntrance style={styles.entranceFillCentered}>
           <Text style={styles.muted}>Invalid link.</Text>
           <Pressable onPress={() => router.back()} hitSlop={12} style={styles.textBtn}>
             <Text style={styles.textBtnLabel}>Go back</Text>
           </Pressable>
-        </View>
+        </ScreenEntrance>
       </View>
     );
   }
@@ -206,12 +214,12 @@ export default function OfferDetailScreen() {
   if (!request || !offer) {
     return (
       <View style={{ flex: 1 }}>
-        <View style={[styles.screen, styles.centered]}>
+        <ScreenEntrance style={styles.entranceFillCentered}>
           <Text style={styles.muted}>Offer not found.</Text>
           <Pressable onPress={() => router.back()} hitSlop={12} style={styles.textBtn}>
             <Text style={styles.textBtnLabel}>Go back</Text>
           </Pressable>
-        </View>
+        </ScreenEntrance>
       </View>
     );
   }
@@ -234,7 +242,8 @@ export default function OfferDetailScreen() {
   // Revisit after current feature work
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#F2F2F7' }}>
+    <View style={{ flex: 1, backgroundColor: ui.surfaceGrouped }}>
+      <ScreenEntrance style={styles.entranceFlex}>
       <View style={{ flex: 1 }}>
         <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
           <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
@@ -303,6 +312,8 @@ export default function OfferDetailScreen() {
               ) : null}
               {canAcceptCurrent ? (
                 <Pressable
+                  pressOpacityFeedback={false}
+                  haptic
                   onPress={onAccept}
                   style={({ pressed }) => [
                     styles.primaryBtn,
@@ -406,6 +417,7 @@ export default function OfferDetailScreen() {
       {footerShows ? (
         <View style={[styles.buttonContainer, { paddingBottom: 16 + insets.bottom }]}>
           <Pressable
+            pressOpacityFeedback={false}
             onPress={openCounterModal}
             style={({ pressed }) => [
               styles.counterOfferBtn,
@@ -415,6 +427,7 @@ export default function OfferDetailScreen() {
             <Text style={styles.counterOfferBtnText}>Counter Offer</Text>
           </Pressable>
           <Pressable
+            pressOpacityFeedback={false}
             onPress={onDecline}
             style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
           >
@@ -422,6 +435,7 @@ export default function OfferDetailScreen() {
           </Pressable>
         </View>
       ) : null}
+      </ScreenEntrance>
 
       <Modal
           visible={counterModalVisible}
@@ -444,7 +458,7 @@ export default function OfferDetailScreen() {
                   <Text style={styles.counterModalDollar}>$</Text>
                   <TextInput
                     placeholder="0"
-                    placeholderTextColor="#888"
+                    placeholderTextColor={ui.textSecondary}
                     value={counterPriceDraft}
                     onChangeText={(t) => setCounterPriceDraft(sanitizeMoneyDigits(t))}
                     style={styles.counterModalMoneyInput}
@@ -463,12 +477,14 @@ export default function OfferDetailScreen() {
                   value={counterMessageDraft}
                   onChangeText={setCounterMessageDraft}
                   placeholder="Explain your counter-offer"
-                  placeholderTextColor="#888"
+                  placeholderTextColor={ui.textSecondary}
                   style={styles.counterModalMessageInput}
                   multiline
                   maxLength={500}
                 />
                 <Pressable
+                  pressOpacityFeedback={false}
+                  haptic
                   onPress={submitCounter}
                   style={({ pressed }) => [
                     styles.primaryBtn,
@@ -492,9 +508,19 @@ export default function OfferDetailScreen() {
 }
 
 const styles = StyleSheet.create({
+  entranceFlex: {
+    flex: 1,
+  },
+  entranceFillCentered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: ui.surfaceGrouped,
+    paddingHorizontal: 28,
+  },
   screen: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
   },
   centered: {
     justifyContent: 'center',
@@ -505,8 +531,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
-    backgroundColor: '#F2F2F7',
+    borderBottomColor: ui.border,
+    backgroundColor: ui.surfaceGrouped,
   },
   backHit: {
     alignSelf: 'flex-start',
@@ -520,18 +546,18 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
   },
   headerSub: {
     marginTop: 6,
     fontSize: 14,
-    color: '#6D6D72',
+    color: ui.textSecondary,
     lineHeight: 20,
   },
   sectionLabel: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#6D6D72',
+    color: ui.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
     marginBottom: 8,
@@ -540,7 +566,7 @@ const styles = StyleSheet.create({
   currentOfferName: {
     fontSize: 17,
     fontWeight: '700',
-    color: '#111',
+    color: ui.textPrimary,
     marginTop: 4,
     marginBottom: 6,
   },
@@ -554,17 +580,17 @@ const styles = StyleSheet.create({
     color: '#C62828',
   },
   historyRow: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 12,
     padding: 14,
     marginBottom: 10,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
     alignSelf: 'stretch',
   },
   historyRowFocused: {
     borderColor: ui.primary,
-    backgroundColor: '#F8FAFF',
+    backgroundColor: ui.surfaceTintPrimary,
   },
   historyRowLocked: {
     opacity: 0.88,
@@ -575,64 +601,64 @@ const styles = StyleSheet.create({
   historyRowName: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#111',
+    color: ui.textPrimary,
     marginBottom: 4,
   },
   historyRowPrice: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#333',
+    color: ui.textPrimary,
     marginBottom: 4,
   },
   historyRowMessage: {
     fontSize: 14,
-    color: '#555',
+    color: ui.textSecondary,
     lineHeight: 20,
     marginBottom: 6,
   },
   historyRowMeta: {
     fontSize: 12,
-    color: '#8E8E93',
+    color: ui.textSecondary,
   },
   card: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 14,
     padding: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
     marginBottom: 18,
   },
   priceLine: {
     fontSize: 28,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
     marginBottom: 6,
   },
   offerMessageLine: {
     fontSize: 15,
-    color: '#333',
+    color: ui.textPrimary,
     lineHeight: 22,
     marginBottom: 10,
   },
   mutedSmall: {
     fontSize: 14,
-    color: '#6D6D72',
+    color: ui.textSecondary,
     lineHeight: 20,
     marginBottom: 10,
   },
   timeLine: {
     fontSize: 14,
-    color: '#8E8E93',
+    color: ui.textSecondary,
   },
   bodyLine: {
     fontSize: 15,
-    color: '#333',
+    color: ui.textPrimary,
     lineHeight: 22,
     marginBottom: 8,
   },
   bodyMultiline: {
     fontSize: 15,
-    color: '#333',
+    color: ui.textPrimary,
     lineHeight: 22,
   },
   notice: {
@@ -669,13 +695,13 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     padding: 16,
-    backgroundColor: '#fff',
+    backgroundColor: ui.background,
     borderTopWidth: 1,
-    borderColor: '#eee',
+    borderColor: ui.border,
     gap: 10,
   },
   counterOfferBtn: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: ui.radiusButton,
     paddingVertical: ui.padButtonV,
     alignItems: 'center',
@@ -683,7 +709,7 @@ const styles = StyleSheet.create({
     borderColor: ui.primary,
   },
   counterOfferBtnPressed: {
-    opacity: ui.pressOpacity,
+    ...outlinePrimaryPressed,
   },
   counterOfferBtnText: {
     color: ui.primary,
@@ -697,26 +723,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   primaryBtnPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   primaryBtnText: {
-    color: '#FFFFFF',
+    color: ui.primaryOn,
     fontSize: 17,
     fontWeight: '600',
   },
   secondaryBtn: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: ui.radiusButton,
     paddingVertical: ui.padButtonV,
     alignItems: 'center',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#C7C7CC',
+    borderColor: ui.border,
   },
   secondaryBtnPressed: {
-    opacity: ui.pressOpacity,
+    ...subtleControlPressed,
   },
   secondaryBtnText: {
-    color: '#333',
+    color: ui.textPrimary,
     fontSize: 17,
     fontWeight: '600',
   },
@@ -745,36 +771,36 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   counterModalCard: {
-    backgroundColor: '#FFF',
+    backgroundColor: ui.background,
     borderRadius: 14,
     padding: 20,
   },
   counterModalTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#111',
+    color: ui.textPrimary,
     marginBottom: 16,
   },
   counterModalLabel: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#333',
+    color: ui.textPrimary,
     marginBottom: 8,
   },
   counterModalMoneyRow: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#CCC',
+    borderColor: ui.border,
     borderRadius: 10,
-    backgroundColor: '#F8F8F8',
+    backgroundColor: ui.surfaceInput,
     paddingLeft: 12,
     marginBottom: 8,
   },
   counterModalDollar: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#111',
+    color: ui.textPrimary,
     marginRight: 4,
   },
   counterModalMoneyInput: {
@@ -782,11 +808,11 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     paddingRight: 12,
     fontSize: 20,
-    color: '#000',
+    color: ui.textPrimary,
   },
   counterModalHelper: {
     fontSize: 13,
-    color: '#666',
+    color: ui.textSecondary,
     lineHeight: 18,
     marginBottom: 16,
   },
@@ -794,13 +820,13 @@ const styles = StyleSheet.create({
     minHeight: 88,
     maxHeight: 140,
     borderWidth: 1,
-    borderColor: '#DDD',
+    borderColor: ui.border,
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 15,
-    color: '#000',
-    backgroundColor: '#FAFAFA',
+    color: ui.textPrimary,
+    backgroundColor: ui.surfaceInput,
     textAlignVertical: 'top',
     marginBottom: 18,
   },

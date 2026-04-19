@@ -1,7 +1,9 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable } from '@/components/Pressable';
+import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
@@ -17,7 +19,12 @@ import {
 import { useUserReviews } from './store/userReviewsStore';
 import { openChatForRequest } from './lib/openRequestChat';
 import { formatUsd, getNumericOfferPrice } from './lib/money';
-import { ui } from '@/constants/appUi';
+import {
+  destructiveOutlinePressed,
+  outlinePrimaryPressed,
+  primarySolidPressed,
+  ui,
+} from '@/constants/appUi';
 
 function getTimeAgo(timestamp: number): string {
   const diffMs = Date.now() - timestamp;
@@ -79,7 +86,9 @@ export default function RequestDetailsScreen() {
   if (!requestIdStr || !Number.isFinite(Number(requestIdStr))) {
     return (
       <KeyboardDismissScreen style={styles.centered}>
-        <Text style={styles.muted}>Invalid request.</Text>
+        <ScreenEntrance style={styles.entranceFillCentered}>
+          <Text style={styles.muted}>Invalid request.</Text>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
     );
   }
@@ -87,7 +96,9 @@ export default function RequestDetailsScreen() {
   if (!request) {
     return (
       <KeyboardDismissScreen style={styles.centered}>
-        <Text style={styles.muted}>Request not found.</Text>
+        <ScreenEntrance style={styles.entranceFillCentered}>
+          <Text style={styles.muted}>Request not found.</Text>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
     );
   }
@@ -122,7 +133,8 @@ export default function RequestDetailsScreen() {
 
   return (
     <KeyboardDismissScreen style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+      <ScreenEntrance style={styles.entranceFlex}>
+        <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
         </Pressable>
@@ -161,6 +173,7 @@ export default function RequestDetailsScreen() {
 
         {!matched ? (
           <Pressable
+            pressOpacityFeedback={false}
             onPress={onEditRequest}
             style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
           >
@@ -168,6 +181,7 @@ export default function RequestDetailsScreen() {
           </Pressable>
         ) : (
           <Pressable
+            pressOpacityFeedback={false}
             onPress={onMessage}
             style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
           >
@@ -177,6 +191,7 @@ export default function RequestDetailsScreen() {
 
         {showMarkRentalComplete(request) ? (
           <Pressable
+            pressOpacityFeedback={false}
             onPress={onEndRental}
             style={({ pressed }) => [styles.primaryOutlineBtn, pressed && styles.primaryOutlinePressed]}
           >
@@ -189,6 +204,8 @@ export default function RequestDetailsScreen() {
             <Text style={styles.reviewedNote}>Review submitted</Text>
           ) : (
             <Pressable
+              pressOpacityFeedback={false}
+              haptic
               onPress={onLeaveReview}
               style={({ pressed }) => [styles.leaveReviewBtn, pressed && styles.leaveReviewBtnPressed]}
             >
@@ -226,7 +243,6 @@ export default function RequestDetailsScreen() {
                 />
                 <Pressable
                   onPress={() => {
-                    console.log("Pressed parent");
                     if (request.timestamp == null) return;
                     router.push({
                       pathname: '/offer-detail',
@@ -262,21 +278,30 @@ export default function RequestDetailsScreen() {
           })
         )}
       </ScrollView>
+      </ScreenEntrance>
     </KeyboardDismissScreen>
   );
 }
 
 const styles = StyleSheet.create({
+  entranceFlex: {
+    flex: 1,
+  },
+  entranceFillCentered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   screen: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
   },
   header: {
     paddingHorizontal: 20,
     paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
-    backgroundColor: '#F2F2F7',
+    borderBottomColor: ui.border,
+    backgroundColor: ui.surfaceGrouped,
   },
   backHit: {
     alignSelf: 'flex-start',
@@ -290,11 +315,11 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
   },
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
   },
   content: {
     padding: 24,
@@ -304,17 +329,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
   },
   toolName: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#111',
+    color: ui.textPrimary,
     marginBottom: 6,
   },
   detailMuted: {
     fontSize: 14,
-    color: '#6D6D72',
+    color: ui.textSecondary,
     marginBottom: 10,
   },
   statusMatched: {
@@ -348,7 +373,7 @@ const styles = StyleSheet.create({
   },
   detail: {
     fontSize: 15,
-    color: '#404040',
+    color: ui.textPrimary,
     marginBottom: 6,
   },
   secondaryBtn: {
@@ -359,10 +384,10 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: ui.primary,
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
   },
   secondaryBtnPressed: {
-    opacity: ui.pressOpacity,
+    ...outlinePrimaryPressed,
   },
   secondaryBtnText: {
     fontSize: 16,
@@ -377,10 +402,10 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#C62828',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
   },
   primaryOutlinePressed: {
-    opacity: 0.88,
+    ...destructiveOutlinePressed,
   },
   primaryOutlineBtnText: {
     fontSize: 16,
@@ -396,10 +421,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   leaveReviewBtnPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   leaveReviewBtnText: {
-    color: '#FFFFFF',
+    color: ui.primaryOn,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -407,12 +432,12 @@ const styles = StyleSheet.create({
     marginTop: 14,
     fontSize: 14,
     fontWeight: '500',
-    color: '#6D6D72',
+    color: ui.textSecondary,
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
     marginTop: 24,
     marginBottom: 12,
   },
@@ -429,7 +454,7 @@ const styles = StyleSheet.create({
     color: ui.primary,
   },
   offerCard: {
-    backgroundColor: '#FAFAFA',
+    backgroundColor: ui.surfaceInput,
     borderRadius: ui.radiusCard,
     padding: ui.padCard,
     marginBottom: 14,
@@ -446,7 +471,7 @@ const styles = StyleSheet.create({
   },
   offerCardPressed: {
     opacity: 0.92,
-    backgroundColor: '#F0F4FF',
+    backgroundColor: ui.surfaceTintPrimary,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: ui.primary,
   },
@@ -462,7 +487,7 @@ const styles = StyleSheet.create({
   offerPriceLine: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#333',
+    color: ui.textPrimary,
     marginBottom: 4,
   },
   offerCounterHint: {
@@ -473,13 +498,13 @@ const styles = StyleSheet.create({
   },
   offerMessagePreview: {
     fontSize: 14,
-    color: '#555',
+    color: ui.textSecondary,
     lineHeight: 20,
     marginBottom: 6,
   },
   offerTime: {
     fontSize: 14,
-    color: '#666',
+    color: ui.textSecondary,
     marginBottom: 12,
   },
 });

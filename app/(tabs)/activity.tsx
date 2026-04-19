@@ -1,6 +1,9 @@
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { CardPressable } from '@/components/CardPressable';
+import { Pressable } from '@/components/Pressable';
+import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { Swipeable } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -22,7 +25,7 @@ import {
 import { useTotalUnreadChatCount } from '../store/chatStore';
 import { formatListingPriceWithUnit, useListingsStore } from '../store/listingsStore';
 import { useProfile } from '../store/profileStore';
-import { cardChrome, ui } from '@/constants/appUi';
+import { cardChrome, primarySolidPressed, shadowKey, ui } from '@/constants/appUi';
 
 function formatOffersReceived(n: number): string {
   if (n === 1) return '1 offer received';
@@ -95,7 +98,7 @@ export default function ActivityScreen() {
 
   return (
     <KeyboardDismissScreen style={styles.screen}>
-      <View style={styles.screenInner}>
+      <ScreenEntrance style={styles.screenInner}>
         <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
           <Text style={styles.screenTitle}>My Activity</Text>
           <View style={styles.segment}>
@@ -133,7 +136,7 @@ export default function ActivityScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.sectionBlock}>
-            <Pressable
+            <CardPressable
               onPress={goToChats}
               style={({ pressed }) => [
                 styles.messagesBanner,
@@ -152,7 +155,7 @@ export default function ActivityScreen() {
                   </Text>
                 </View>
               ) : null}
-            </Pressable>
+            </CardPressable>
           </View>
 
           <View style={styles.sectionRule} />
@@ -211,6 +214,8 @@ export default function ActivityScreen() {
                     <View style={styles.activeBetweenCardSpacer} />
                     <View style={styles.activeActionsColumn}>
                       <Pressable
+                        pressOpacityFeedback={false}
+                        haptic
                         style={({ pressed }) => [
                           styles.activeBtnPrimaryLarge,
                           pressed && styles.activeBtnPressed,
@@ -224,6 +229,8 @@ export default function ActivityScreen() {
                       </Pressable>
                       <View style={styles.activeBtnStackGap} />
                       <Pressable
+                        pressOpacityFeedback={false}
+                        haptic
                         style={({ pressed }) => [
                           styles.activeBtnPrimaryLarge,
                           pressed && styles.activeBtnPressed,
@@ -266,11 +273,10 @@ export default function ActivityScreen() {
                       ).length
                     : 0;
                 const card = (
-                  <Pressable
-                    style={({ pressed }) => [
+                  <CardPressable
+                    style={[
                       requestListCardSurface.card,
                       matched && styles.requestCardMatched,
-                      pressed && styles.requestCardPressed,
                     ]}
                     onPress={() => {
                       if (request.timestamp == null) return;
@@ -294,7 +300,7 @@ export default function ActivityScreen() {
                         {formatOffersReceived(offerCount)}
                       </Text>
                     )}
-                  </Pressable>
+                  </CardPressable>
                 );
 
                 if (matched) {
@@ -358,7 +364,7 @@ export default function ActivityScreen() {
                 </Text>
               ) : (
                 myEquipment.map((item) => (
-                  <Pressable
+                  <CardPressable
                     key={item.id}
                     onPress={() =>
                       router.push({
@@ -386,7 +392,7 @@ export default function ActivityScreen() {
                         {item.description.trim()}
                       </Text>
                     ) : null}
-                  </Pressable>
+                  </CardPressable>
                 ))
               )}
             </View>
@@ -394,7 +400,7 @@ export default function ActivityScreen() {
         </ScrollView>
 
         <MainTabFab />
-      </View>
+      </ScreenEntrance>
     </KeyboardDismissScreen>
   );
 }
@@ -402,39 +408,39 @@ export default function ActivityScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
   },
   screenInner: {
     flex: 1,
   },
   header: {
-    paddingHorizontal: 20,
-    paddingBottom: 16,
-    backgroundColor: '#F2F2F7',
+    paddingHorizontal: ui.padScreenH,
+    paddingBottom: ui.spaceMd,
+    backgroundColor: ui.surfaceGrouped,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
+    borderBottomColor: ui.border,
   },
   screenTitle: {
     fontSize: 28,
-    fontWeight: '700',
-    color: '#000',
+    fontWeight: '800',
+    color: ui.textPrimary,
     letterSpacing: -0.3,
-    marginBottom: 14,
+    marginBottom: ui.spaceSm + 6,
   },
   segment: {
     flexDirection: 'row',
-    backgroundColor: '#ECECEC',
-    borderRadius: 12,
+    backgroundColor: ui.surfaceNeutral,
+    borderRadius: ui.radiusInput,
     padding: 3,
   },
   segmentItem: {
     flex: 1,
     paddingVertical: 10,
     alignItems: 'center',
-    borderRadius: 10,
+    borderRadius: ui.radiusInput - 4,
   },
   segmentItemActive: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.06,
@@ -447,20 +453,20 @@ const styles = StyleSheet.create({
   segmentLabel: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#8E8E93',
+    color: ui.textSecondary,
   },
   segmentLabelActive: {
-    color: '#000',
+    color: ui.textPrimary,
   },
   scroll: {
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
+    paddingHorizontal: ui.padScreenH,
+    paddingTop: ui.padScreenH,
   },
   sectionBlock: {
-    marginBottom: 8,
+    marginBottom: ui.spaceSm,
   },
   sectionBlockLast: {
     marginBottom: 0,
@@ -468,15 +474,15 @@ const styles = StyleSheet.create({
   sectionHeading: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#6D6D72',
+    color: ui.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
-    marginBottom: 12,
+    marginBottom: ui.spaceMd,
   },
   sectionRule: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: '#C6C6C8',
-    marginVertical: 22,
+    backgroundColor: ui.border,
+    marginVertical: ui.spaceSection,
     alignSelf: 'stretch',
   },
   messagesBanner: {
@@ -486,14 +492,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   messagesBannerPressed: {
-    opacity: ui.pressOpacity,
-    backgroundColor: '#F7F7F9',
+    backgroundColor: ui.surfaceInput,
   },
   messagesRowLabel: {
     flex: 1,
     fontSize: 17,
     fontWeight: '600',
-    color: '#000',
+    color: ui.textPrimary,
     letterSpacing: -0.2,
   },
   messagesUnreadPill: {
@@ -508,7 +513,7 @@ const styles = StyleSheet.create({
   messagesUnreadPillText: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: ui.primaryOn,
   },
   emptyText: {
     fontSize: 15,
@@ -521,7 +526,7 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#3C3C43',
+    color: ui.textPrimary,
     lineHeight: 22,
   },
   emptySubline: {
@@ -537,12 +542,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#F4FAF4',
     borderColor: '#C5E0C7',
   },
-  requestCardPressed: {
-    opacity: ui.pressOpacity,
-  },
   offersReceived: {
     fontSize: 13,
-    color: '#48484A',
+    color: ui.textPrimary,
     marginTop: 10,
     fontWeight: '600',
     letterSpacing: -0.1,
@@ -558,7 +560,7 @@ const styles = StyleSheet.create({
     width: 80,
   },
   editActionText: {
-    color: '#FFFFFF',
+    color: ui.primaryOn,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -567,11 +569,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     width: 88,
-    borderTopRightRadius: 16,
-    borderBottomRightRadius: 16,
+    borderTopRightRadius: ui.radiusCard,
+    borderBottomRightRadius: ui.radiusCard,
   },
   deleteActionText: {
-    color: '#FFFFFF',
+    color: ui.primaryOn,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -589,8 +591,8 @@ const styles = StyleSheet.create({
   },
   activeToolName: {
     fontSize: 20,
-    fontWeight: '700',
-    color: '#000',
+    fontWeight: '800',
+    color: ui.textPrimary,
     textAlign: 'center',
     alignSelf: 'stretch',
   },
@@ -599,7 +601,7 @@ const styles = StyleSheet.create({
   },
   activeWithLine: {
     fontSize: 15,
-    color: '#333',
+    color: ui.textPrimary,
     textAlign: 'center',
     alignSelf: 'stretch',
     lineHeight: 22,
@@ -607,7 +609,7 @@ const styles = StyleSheet.create({
   activeStartLabel: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#6D6D72',
+    color: ui.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
     marginBottom: 4,
@@ -616,7 +618,7 @@ const styles = StyleSheet.create({
   },
   activeStartValue: {
     fontSize: 15,
-    color: '#111',
+    color: ui.textPrimary,
     textAlign: 'center',
     alignSelf: 'stretch',
     lineHeight: 22,
@@ -647,7 +649,7 @@ const styles = StyleSheet.create({
     color: '#1B5E20',
   },
   activeBetweenCardSpacer: {
-    height: 24,
+    height: ui.spaceSection,
   },
   activeActionsColumn: {
     width: '100%',
@@ -659,48 +661,49 @@ const styles = StyleSheet.create({
   activeBtnPrimaryLarge: {
     alignSelf: 'stretch',
     paddingVertical: 18,
-    paddingHorizontal: 20,
-    borderRadius: 14,
+    paddingHorizontal: ui.padScreenH,
+    borderRadius: ui.radiusButton,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: ui.primary,
+    ...shadowKey,
   },
   activeBtnPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   activeBtnPrimaryLargeText: {
     fontSize: 17,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: ui.primaryOn,
   },
   listingCard: {
     ...cardChrome,
-    marginBottom: 12,
+    marginBottom: ui.spaceSm + 4,
   },
   listingCardPressed: {
-    opacity: ui.pressOpacity,
+    backgroundColor: ui.surfaceStriped,
   },
   listingTitle: {
     fontSize: 17,
-    fontWeight: '700',
-    color: '#111',
+    fontWeight: '800',
+    color: ui.textPrimary,
     marginBottom: 6,
     lineHeight: 22,
   },
   listingMeta: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#3C3C43',
+    fontSize: ui.fontPrice,
+    fontWeight: '600',
+    color: ui.textPrimary,
     marginBottom: 4,
   },
   listingDistance: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#636366',
+    color: ui.textSecondary,
     marginBottom: 4,
   },
   listingDesc: {
     fontSize: 14,
-    color: '#636366',
+    color: ui.textSecondary,
   },
 });

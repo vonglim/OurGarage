@@ -1,6 +1,7 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
@@ -112,14 +113,14 @@ export default function RentalsManagementScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
   },
   header: {
     paddingHorizontal: 20,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
-    backgroundColor: '#F2F2F7',
+    borderBottomColor: ui.border,
+    backgroundColor: ui.surfaceGrouped,
   },
   backHit: {
     alignSelf: 'flex-start',
@@ -133,13 +134,13 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 28,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
     letterSpacing: -0.3,
   },
   headerSub: {
     marginTop: 6,
     fontSize: 14,
-    color: '#6D6D72',
+    color: ui.textSecondary,
     lineHeight: 20,
   },
   scroll: {
@@ -150,55 +151,55 @@ const styles = StyleSheet.create({
     paddingTop: 16,
   },
   emptyCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 12,
     padding: 20,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
   },
   emptyTitle: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#000',
+    color: ui.textPrimary,
     marginBottom: 8,
   },
   emptyBody: {
     fontSize: 15,
-    color: '#6D6D72',
+    color: ui.textSecondary,
     lineHeight: 21,
   },
   listCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 12,
     overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
   },
   row: {
     paddingVertical: 14,
     paddingHorizontal: 16,
   },
   rowPressed: {
-    backgroundColor: '#F9F9F9',
+    backgroundColor: ui.surfaceInput,
   },
   rowBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
+    borderBottomColor: ui.border,
   },
   rowTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#000',
+    color: ui.textPrimary,
     marginBottom: 4,
   },
   rowMeta: {
     fontSize: 14,
-    color: '#6D6D72',
+    color: ui.textSecondary,
   },
   message: {
     marginTop: 8,
     fontSize: 14,
-    color: '#3A3A3C',
+    color: ui.textPrimary,
     lineHeight: 20,
   },
 });

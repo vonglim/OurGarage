@@ -4,16 +4,15 @@ import { Image } from 'expo-image';
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
   useWindowDimensions,
 } from 'react-native';
+import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
 import { PresetAvatarModal } from '../components/PresetAvatarModal';
 import { UserActivityDot } from '../components/UserActivityDot';
 import {
@@ -25,6 +24,7 @@ import { pickProfileImageFromLibrary } from '../lib/pickProfileImage';
 import { formatUsd } from '../lib/money';
 import { getProfile, updateProfile, type UserProfile } from '../store/profileStore';
 import { cardChrome, ui } from '@/constants/appUi';
+import { IMAGE_TRANSITION_MS } from '@/constants/interactionTiming';
 
 /** Profile hero height as fraction of window (30–35%). */
 const HERO_HEIGHT_RATIO = 0.33;
@@ -128,18 +128,19 @@ export default function ProfileScreen() {
   }, []);
 
   return (
-    <>
-      <KeyboardDismissScreen>
-        <ScrollView
+    <View style={styles.root}>
+      <ScrollView
         style={styles.screen}
         contentContainerStyle={[
           styles.content,
+          styles.scrollContent,
           {
             paddingTop: 0,
             paddingBottom: 40 + insets.bottom,
           },
         ]}
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
         {isViewingOther ? (
           <Pressable
@@ -168,7 +169,7 @@ export default function ProfileScreen() {
                   source={{ uri: parsedAvatar.uri }}
                   style={StyleSheet.absoluteFillObject}
                   contentFit="cover"
-                  transition={200}
+                  transition={IMAGE_TRANSITION_MS}
                 />
               ) : (
                 <View style={[StyleSheet.absoluteFillObject, styles.heroPlaceholder]} />
@@ -189,7 +190,7 @@ export default function ProfileScreen() {
                   source={{ uri: parsedAvatar.uri }}
                   style={StyleSheet.absoluteFillObject}
                   contentFit="cover"
-                  transition={200}
+                  transition={IMAGE_TRANSITION_MS}
                 />
               ) : (
                 <View style={[StyleSheet.absoluteFillObject, styles.heroPlaceholder]} />
@@ -203,6 +204,7 @@ export default function ProfileScreen() {
           )}
 
           <Pressable
+            pressOpacityFeedback={false}
             accessibilityRole="button"
             accessibilityLabel="View reviews"
             onPress={() => router.push('/(tabs)/reviews')}
@@ -290,7 +292,6 @@ export default function ProfileScreen() {
           </>
         )}
       </ScrollView>
-      </KeyboardDismissScreen>
 
       {!isViewingOther ? (
         <PresetAvatarModal
@@ -301,22 +302,30 @@ export default function ProfileScreen() {
           }}
         />
       ) : null}
-    </>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: ui.surfaceGrouped,
+  },
   screen: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
   },
   content: {
     paddingHorizontal: 20,
   },
+  /** Lets short profiles fill the screen without breaking scroll when content is tall. */
+  scrollContent: {
+    flexGrow: 1,
+  },
   hero: {
     overflow: 'hidden',
     marginBottom: 16,
-    backgroundColor: '#000',
+    backgroundColor: ui.primary,
   },
   heroPress: {
     ...StyleSheet.absoluteFillObject,
@@ -325,7 +334,7 @@ const styles = StyleSheet.create({
     opacity: 0.92,
   },
   heroPlaceholder: {
-    backgroundColor: '#C7CCD4',
+    backgroundColor: ui.border,
   },
   heroHintWrap: {
     ...StyleSheet.absoluteFillObject,
@@ -336,7 +345,7 @@ const styles = StyleSheet.create({
   heroHint: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: ui.primaryOn,
     textAlign: 'center',
     textShadowColor: 'rgba(0,0,0,0.35)',
     textShadowOffset: { width: 0, height: 1 },
@@ -352,8 +361,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   ratingOverlayPressed: {
-    opacity: 0.88,
-    transform: [{ scale: 0.98 }],
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderRadius: 20,
+    alignSelf: 'center',
   },
   ratingRowInner: {
     flexDirection: 'row',
@@ -364,7 +374,7 @@ const styles = StyleSheet.create({
   ratingSegLight: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: ui.primaryOn,
     textShadowColor: 'rgba(0,0,0,0.72)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 5,
@@ -396,23 +406,23 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     fontSize: 22,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
     textAlign: 'center',
   },
   displayBio: {
     fontSize: 16,
     lineHeight: 22,
-    color: '#3A3A3C',
+    color: ui.textPrimary,
     textAlign: 'center',
   },
   displayBioPlaceholder: {
-    color: '#8E8E93',
+    color: ui.textSecondary,
     fontStyle: 'italic',
   },
   sectionTitle: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#6D6D72',
+    color: ui.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
     marginBottom: 8,
@@ -422,7 +432,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   impactCard: {
-    backgroundColor: '#F5F8FF',
+    backgroundColor: ui.surfaceTintPrimary,
     borderRadius: ui.radiusCard,
     paddingVertical: ui.padCard,
     paddingHorizontal: ui.padCard + 2,
@@ -444,13 +454,13 @@ const styles = StyleSheet.create({
   impactLabel: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#AEAEB2',
+    color: ui.textSecondary,
     letterSpacing: -0.1,
   },
   impactValue: {
     fontSize: 17,
     fontWeight: '700',
-    color: '#1C1C1E',
+    color: ui.textPrimary,
     letterSpacing: -0.2,
   },
   impactDivider: {
@@ -469,23 +479,23 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 14,
     paddingHorizontal: 16,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
   },
   rowBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
+    borderBottomColor: ui.border,
   },
   rowPressed: {
-    backgroundColor: '#F9F9F9',
+    backgroundColor: ui.surfaceInput,
   },
   rowLabel: {
     fontSize: 16,
-    color: '#000',
+    color: ui.textPrimary,
     flex: 1,
   },
   chevron: {
     fontSize: 22,
-    color: '#C7C7CC',
+    color: ui.textSecondary,
     fontWeight: '300',
     marginLeft: 8,
   },
@@ -501,6 +511,6 @@ const styles = StyleSheet.create({
   viewBackLabel: {
     fontSize: 17,
     fontWeight: '500',
-    color: '#007AFF',
+    color: ui.primary,
   },
 });

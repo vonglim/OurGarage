@@ -1,5 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, TextStyle } from 'react-native';
+
+import { ui } from '@/constants/appUi';
 import {
   formatHowDisplay,
   needsDeliveryFee,
@@ -76,31 +78,31 @@ export function RequestMetaLines({ req, detailStyle, variant = 'default' }: Prop
 const styles = StyleSheet.create({
   detail: {
     fontSize: 15,
-    color: '#404040',
+    color: ui.textPrimary,
     marginBottom: 4,
   },
   cardSecondary: {
     fontSize: 14,
-    color: '#3A3A3A',
+    color: ui.textPrimary,
     marginBottom: 8,
     lineHeight: 20,
   },
   cardSubtle: {
     fontSize: 13,
-    color: '#555555',
+    color: ui.textSecondary,
     marginBottom: 6,
     lineHeight: 18,
   },
   cardHint: {
     fontSize: 12,
-    color: '#666666',
+    color: ui.textSecondary,
     marginTop: 4,
     marginBottom: 0,
     lineHeight: 17,
   },
   hint: {
     fontSize: 12,
-    color: '#666666',
+    color: ui.textSecondary,
     fontStyle: 'italic',
     marginTop: 4,
     marginBottom: 2,

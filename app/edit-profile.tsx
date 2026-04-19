@@ -2,13 +2,14 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useRef, useState } from 'react';
 import {
   Alert,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { Pressable } from '@/components/Pressable';
+import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
@@ -16,9 +17,10 @@ import { UserAvatar } from './components/UserAvatar';
 import { PresetAvatarModal } from './components/PresetAvatarModal';
 import { formatPresetAvatar } from './lib/profileAvatar';
 import { pickProfileImageFromLibrary } from './lib/pickProfileImage';
+import { showFeedbackToast } from './store/feedbackToastStore';
 import { getProfile, updateProfile } from './store/profileStore';
 
-import { ui } from '@/constants/appUi';
+import { primarySolidPressed, ui } from '@/constants/appUi';
 
 export default function EditProfileScreen() {
   const router = useRouter();
@@ -58,12 +60,14 @@ export default function EditProfileScreen() {
 
   const onSave = async () => {
     await updateProfile({ name: name.trim(), bio: bio.trim() });
+    showFeedbackToast('Profile saved');
     router.back();
   };
 
   return (
     <>
       <KeyboardDismissScreen>
+        <ScreenEntrance style={styles.entranceFlex}>
         <ScrollView
         style={styles.screen}
         contentContainerStyle={[
@@ -92,7 +96,7 @@ export default function EditProfileScreen() {
           value={name}
           onChangeText={setName}
           placeholder="Your name"
-          placeholderTextColor="#8E8E93"
+          placeholderTextColor="ui.textSecondary"
           style={styles.input}
           autoCapitalize="words"
           autoCorrect
@@ -107,7 +111,7 @@ export default function EditProfileScreen() {
           value={bio}
           onChangeText={setBio}
           placeholder="A short bio"
-          placeholderTextColor="#8E8E93"
+          placeholderTextColor="ui.textSecondary"
           style={[styles.input, styles.inputMultiline]}
           multiline
           textAlignVertical="top"
@@ -117,6 +121,8 @@ export default function EditProfileScreen() {
         />
 
         <Pressable
+          pressOpacityFeedback={false}
+          haptic
           onPress={() => void onSave()}
           style={({ pressed }) => [
             styles.saveButton,
@@ -126,6 +132,7 @@ export default function EditProfileScreen() {
           <Text style={styles.saveButtonText}>Save Profile</Text>
         </Pressable>
       </ScrollView>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
 
       <PresetAvatarModal
@@ -140,9 +147,12 @@ export default function EditProfileScreen() {
 }
 
 const styles = StyleSheet.create({
+  entranceFlex: {
+    flex: 1,
+  },
   screen: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
   },
   content: {
     paddingHorizontal: 20,
@@ -159,9 +169,9 @@ const styles = StyleSheet.create({
   avatarOuter: {
     padding: 10,
     borderRadius: 999,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.08,
@@ -171,26 +181,26 @@ const styles = StyleSheet.create({
   },
   avatarHint: {
     fontSize: 14,
-    color: '#6D6D72',
+    color: ui.textSecondary,
   },
   label: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#6D6D72',
+    color: ui.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
     marginBottom: 8,
     marginTop: 4,
   },
   input: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
     paddingHorizontal: 16,
     paddingVertical: 14,
     fontSize: 17,
-    color: '#000',
+    color: ui.textPrimary,
     marginBottom: 16,
   },
   inputMultiline: {
@@ -206,10 +216,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   saveButtonPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   saveButtonText: {
-    color: '#FFFFFF',
+    color: ui.primaryOn,
     fontSize: 17,
     fontWeight: '600',
   },

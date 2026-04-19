@@ -1,26 +1,32 @@
 import { useRouter } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
+import { Pressable } from '@/components/Pressable';
+import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
-import { ui } from '@/constants/appUi';
+import { primarySolidPressed, ui } from '@/constants/appUi';
 
 export default function RequestConfirmation() {
   const router = useRouter();
 
   return (
     <KeyboardDismissScreen style={styles.container}>
-      <Text style={styles.title}>Request Submitted 🎉</Text>
+      <ScreenEntrance style={styles.entranceContent}>
+        <Text style={styles.title}>Request Submitted 🎉</Text>
 
-      <Text style={styles.text}>
-        We’ll notify neighbors with equipment nearby. You’ll start getting responses soon.
-      </Text>
+        <Text style={styles.text}>
+          We’ll notify neighbors with equipment nearby. You’ll start getting responses soon.
+        </Text>
 
-      <Pressable
-        style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
-        onPress={() => router.push('/home')}
-      >
-        <Text style={styles.buttonText}>Back To Home</Text>
-      </Pressable>
+        <Pressable
+          pressOpacityFeedback={false}
+          haptic
+          style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
+          onPress={() => router.push('/home')}
+        >
+          <Text style={styles.buttonText}>Back To Home</Text>
+        </Pressable>
+      </ScreenEntrance>
     </KeyboardDismissScreen>
   );
 }
@@ -31,7 +37,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
-    backgroundColor: '#fff',
+    backgroundColor: ui.background,
+  },
+  entranceContent: {
+    alignItems: 'center',
+    maxWidth: 360,
+    width: '100%',
   },
   title: {
     fontSize: 26,
@@ -54,10 +65,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   buttonPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   buttonText: {
-    color: '#fff',
+    color: ui.primaryOn,
     fontSize: 16,
     fontWeight: '600',
   },

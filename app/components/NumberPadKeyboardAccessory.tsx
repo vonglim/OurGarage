@@ -1,14 +1,16 @@
 import React from 'react';
+
+import { ui } from '@/constants/appUi';
 import {
   InputAccessoryView,
   Keyboard,
   Platform,
-  Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
 
+import { Pressable } from '@/components/Pressable';
 /** Shared id for iOS `inputAccessoryViewID` on numeric fields (number-pad / decimal-pad). */
 export const NUMBER_PAD_ACCESSORY_ID = 'ourgarage-numeric-done';
 
@@ -44,9 +46,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'flex-end',
     alignItems: 'center',
-    backgroundColor: '#E5E5EA',
+    backgroundColor: ui.border,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#C7C7CC',
+    borderTopColor: ui.border,
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
@@ -57,6 +59,6 @@ const styles = StyleSheet.create({
   doneText: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#007AFF',
+    color: ui.primary,
   },
 });

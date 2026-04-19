@@ -2,12 +2,13 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import React from 'react';
 import {
   Modal,
-  Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
 
+import { Pressable } from '@/components/Pressable';
+import { ui } from '@/constants/appUi';
 import { USER_AVATAR_PRESETS, type UserAvatarPreset } from '../lib/userAvatarPresets';
 
 const PRESET_CELL = 72;
@@ -55,7 +56,7 @@ export function PresetAvatarModal({ visible, onClose, onSelectPreset }: Props) {
                       >['name']
                     }
                     size={28}
-                    color="#FFFFFF"
+                    color={ui.primaryOn}
                   />
                 </View>
               </Pressable>
@@ -84,16 +85,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
   },
   modalCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 16,
     padding: 20,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
   },
   modalTitle: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#000',
+    color: ui.textPrimary,
     textAlign: 'center',
     marginBottom: 16,
   },
@@ -128,7 +129,7 @@ const styles = StyleSheet.create({
   },
   modalCloseText: {
     fontSize: 17,
-    color: '#007AFF',
+    color: ui.primary,
     fontWeight: '500',
   },
 });

@@ -3,6 +3,8 @@ import { Image } from 'expo-image';
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 
+import { IMAGE_TRANSITION_MS } from '@/constants/interactionTiming';
+import { ui } from '@/constants/appUi';
 import { getPresetById } from '../lib/userAvatarPresets';
 import { parseProfileAvatar } from '../lib/profileAvatar';
 import { useProfile } from '../store/profileStore';
@@ -37,7 +39,7 @@ export function UserAvatar({ avatar: avatarProp }: Props) {
           source={{ uri: parsed.uri }}
           style={{ width: SIZE, height: SIZE, borderRadius: radius }}
           contentFit="cover"
-          transition={120}
+          transition={IMAGE_TRANSITION_MS}
         />
       </View>
     );
@@ -59,7 +61,7 @@ export function UserAvatar({ avatar: avatarProp }: Props) {
       <Ionicons
         name={preset.icon as React.ComponentProps<typeof Ionicons>['name']}
         size={ICON_SIZE}
-        color="#FFFFFF"
+        color={ui.primaryOn}
       />
     </View>
   );
@@ -68,7 +70,7 @@ export function UserAvatar({ avatar: avatarProp }: Props) {
 const styles = StyleSheet.create({
   clip: {
     overflow: 'hidden',
-    backgroundColor: '#E5E5EA',
+    backgroundColor: ui.border,
   },
   presetCircle: {
     alignItems: 'center',

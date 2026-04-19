@@ -1,12 +1,14 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack } from 'expo-router';
+import { Stack, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { View } from 'react-native';
 import 'react-native-reanimated';
 
+import { STACK_TRANSITION_DURATION_MS } from '@/constants/navigation';
+import { FeedbackToastHost } from './components/FeedbackToastHost';
 import { NumberPadKeyboardAccessory } from './components/NumberPadKeyboardAccessory';
 import { registerAndStorePushTokenAsync } from './lib/notifications';
 import { useNotificationsStore } from './store/notificationsStore';
@@ -14,6 +16,19 @@ import { seedTestData as seedOffersTestData } from './store/offersStore';
 import { seedTestData as seedListingsTestData } from './store/listingsStore';
 import { seedTestData as seedRequestsTestData } from './store/requestsStore';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { lightImpact } from '@/lib/haptics';
+
+function NavigationHaptics() {
+  const pathname = usePathname();
+  const prevPath = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevPath.current !== null && prevPath.current !== pathname) {
+      lightImpact();
+    }
+    prevPath.current = pathname;
+  }, [pathname]);
+  return null;
+}
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -42,8 +57,14 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <View style={{ flex: 1 }}>
+            <NavigationHaptics />
             <NumberPadKeyboardAccessory />
-            <Stack screenOptions={{ headerShown: false }}>
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                animationDuration: STACK_TRANSITION_DURATION_MS,
+              }}
+            >
               <Stack.Screen name="onboarding-terms" />
               <Stack.Screen name="(tabs)" />
               <Stack.Screen name="request-a-tool" />
@@ -63,6 +84,7 @@ export default function RootLayout() {
               <Stack.Screen name="end-rental" />
               <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
             </Stack>
+            <FeedbackToastHost />
           </View>
           <StatusBar style="auto" />
         </ThemeProvider>

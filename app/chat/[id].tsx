@@ -5,12 +5,13 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { Pressable } from '@/components/Pressable';
+import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
@@ -24,8 +25,9 @@ import {
   type ChatMessage,
 } from '../store/chatStore';
 import { getProfile } from '../store/profileStore';
+import { showFeedbackToast } from '../store/feedbackToastStore';
 import { getRequestByTimestamp } from '../store/requestsStore';
-import { ui } from '@/constants/appUi';
+import { subtleControlPressed, ui } from '@/constants/appUi';
 
 /** Metro sets `__DEV__` — true in development, stripped/false in production release builds. */
 declare const __DEV__: boolean;
@@ -84,6 +86,7 @@ export default function ChatDetailScreen() {
     if (!text || !chatId || isArchived) return;
     addChatMessage(chatId, text);
     setDraft('');
+    showFeedbackToast('Sent');
   };
 
   const handleSimulateReply = useCallback(() => {
@@ -99,14 +102,16 @@ export default function ChatDetailScreen() {
   if (!chatId) {
     return (
       <KeyboardDismissScreen style={styles.screen}>
-        <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-          <Pressable onPress={() => router.back()} hitSlop={10}>
-            <Text style={styles.back}>‹ Back</Text>
-          </Pressable>
-        </View>
-        <View style={styles.center}>
-          <Text style={styles.missing}>Missing chat.</Text>
-        </View>
+        <ScreenEntrance style={styles.entranceFlex}>
+          <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+            <Pressable onPress={() => router.back()} hitSlop={10}>
+              <Text style={styles.back}>‹ Back</Text>
+            </Pressable>
+          </View>
+          <View style={styles.center}>
+            <Text style={styles.missing}>Missing chat.</Text>
+          </View>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
     );
   }
@@ -114,14 +119,16 @@ export default function ChatDetailScreen() {
   if (!chat) {
     return (
       <KeyboardDismissScreen style={styles.screen}>
-        <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-          <Pressable onPress={() => router.back()} hitSlop={10}>
-            <Text style={styles.back}>‹ Back</Text>
-          </Pressable>
-        </View>
-        <View style={styles.center}>
-          <Text style={styles.missing}>This chat is not available.</Text>
-        </View>
+        <ScreenEntrance style={styles.entranceFlex}>
+          <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+            <Pressable onPress={() => router.back()} hitSlop={10}>
+              <Text style={styles.back}>‹ Back</Text>
+            </Pressable>
+          </View>
+          <View style={styles.center}>
+            <Text style={styles.missing}>This chat is not available.</Text>
+          </View>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
     );
   }
@@ -133,6 +140,7 @@ export default function ChatDetailScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
       >
+        <ScreenEntrance style={styles.entranceFlex}>
         <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
           <Pressable onPress={() => router.back()} hitSlop={10}>
             <Text style={styles.back}>‹ Back</Text>
@@ -234,12 +242,14 @@ export default function ChatDetailScreen() {
               value={draft}
               onChangeText={setDraft}
               placeholder="Message…"
-              placeholderTextColor="#8E8E93"
+              placeholderTextColor={ui.textSecondary}
               style={styles.input}
               multiline
               maxLength={2000}
             />
             <Pressable
+              pressOpacityFeedback={false}
+              haptic
               onPress={onSend}
               hitSlop={12}
               style={({ pressed }) => [styles.sendBtn, pressed && styles.sendBtnPressed]}
@@ -249,6 +259,7 @@ export default function ChatDetailScreen() {
             </Pressable>
           </View>
         )}
+        </ScreenEntrance>
       </KeyboardAvoidingView>
     </KeyboardDismissScreen>
   );
@@ -257,7 +268,10 @@ export default function ChatDetailScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
+  },
+  entranceFlex: {
+    flex: 1,
   },
   flex: {
     flex: 1,
@@ -269,8 +283,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
-    backgroundColor: '#F2F2F7',
+    borderBottomColor: ui.border,
+    backgroundColor: ui.surfaceGrouped,
   },
   back: {
     fontSize: 17,
@@ -287,21 +301,21 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontSize: 17,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
     width: '100%',
   },
   subtitle: {
     textAlign: 'center',
     fontSize: 13,
     fontWeight: '500',
-    color: '#636366',
+    color: ui.textSecondary,
     width: '100%',
   },
   headerArchivedPill: {
     marginTop: 4,
     fontSize: 11,
     fontWeight: '600',
-    color: '#636366',
+    color: ui.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.3,
   },
@@ -349,14 +363,14 @@ const styles = StyleSheet.create({
     borderRadius: 16,
   },
   right: {
-    backgroundColor: '#007AFF',
+    backgroundColor: ui.primary,
   },
   left: {
-    backgroundColor: '#E5E5EA',
+    backgroundColor: ui.border,
   },
   timestamp: {
     fontSize: 10,
-    color: '#888',
+    color: ui.textSecondary,
     marginTop: 2,
   },
   timestampRight: {
@@ -366,32 +380,32 @@ const styles = StyleSheet.create({
     textAlign: 'left',
   },
   rightText: {
-    color: '#fff',
+    color: ui.primaryOn,
     fontSize: 16,
     lineHeight: 22,
   },
   leftText: {
-    color: '#000',
+    color: ui.textPrimary,
     fontSize: 16,
     lineHeight: 22,
   },
   simButton: {
     padding: 10,
-    backgroundColor: '#eee',
+    backgroundColor: ui.surfaceNeutral,
     alignItems: 'center',
     marginVertical: 8,
     borderRadius: 8,
   },
   simText: {
-    color: '#333',
+    color: ui.textPrimary,
     fontWeight: '500',
   },
   archivedComposer: {
     paddingHorizontal: 16,
     paddingTop: 12,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#E5E5EA',
-    backgroundColor: '#F2F2F7',
+    borderTopColor: ui.border,
+    backgroundColor: ui.surfaceGrouped,
   },
   archivedComposerText: {
     fontSize: 13,
@@ -404,18 +418,18 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     padding: 10,
     borderTopWidth: 1,
-    borderTopColor: '#ddd',
-    backgroundColor: '#fff',
+    borderTopColor: ui.border,
+    backgroundColor: ui.background,
   },
   input: {
     flex: 1,
     padding: 10,
     borderRadius: 20,
-    backgroundColor: '#f2f2f2',
+    backgroundColor: ui.surfaceInput,
     minHeight: 40,
     maxHeight: 120,
     fontSize: 16,
-    color: '#000',
+    color: ui.textPrimary,
   },
   sendBtn: {
     marginLeft: 8,
@@ -424,9 +438,11 @@ const styles = StyleSheet.create({
     minWidth: 48,
     justifyContent: 'center',
     alignItems: 'center',
+    borderRadius: ui.radiusButton,
+    overflow: 'hidden',
   },
   sendBtnPressed: {
-    opacity: 0.6,
+    ...subtleControlPressed,
   },
   sendText: {
     fontSize: 17,
@@ -434,7 +450,7 @@ const styles = StyleSheet.create({
     color: ui.primary,
   },
   sendTextDisabled: {
-    color: '#C7C7CC',
+    color: ui.textSecondary,
   },
   center: {
     flex: 1,

@@ -1,7 +1,10 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { CardPressable } from '@/components/CardPressable';
+import { Pressable } from '@/components/Pressable';
+import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
@@ -16,7 +19,7 @@ import {
 import { useRequestsStore } from '../store/requestsStore';
 import type { ToolListing } from '../store/listingsStore';
 import { formatListingPriceWithUnit, useListingsStore } from '../store/listingsStore';
-import { cardChrome, ui } from '@/constants/appUi';
+import { ui } from '@/constants/appUi';
 
 function matchesSearchRequests(req: Record<string, unknown>, q: string): boolean {
   if (!q) return true;
@@ -103,7 +106,7 @@ export default function Browse() {
 
   return (
     <KeyboardDismissScreen style={styles.root}>
-      <View style={styles.screenInner}>
+      <ScreenEntrance style={styles.screenInner}>
         <ScrollView
           style={styles.container}
           contentContainerStyle={[
@@ -146,7 +149,7 @@ export default function Browse() {
             value={searchQuery}
             onChangeText={setSearchQuery}
             placeholder="Search equipment"
-            placeholderTextColor="#8E8E93"
+            placeholderTextColor={ui.textSecondary}
             style={styles.searchInput}
             returnKeyType="search"
             clearButtonMode="while-editing"
@@ -166,10 +169,11 @@ export default function Browse() {
                 const distLabel = formatMilesShort(distMi, 'Distance unknown');
                 const price = getNumericTotalPrice(req);
                 const priceLabel = price != null && Number.isFinite(price) ? formatUsd(price) : '—';
-                const metaLine = `${priceLabel} · ${formatDurationDisplay(req as never)} · ${distLabel}`;
+                const duration = formatDurationDisplay(req as never);
+                const metaLine = `${priceLabel} · ${duration}. ${distLabel}`;
 
                 return (
-                  <Pressable
+                  <CardPressable
                     key={ts ?? idx}
                     onPress={() => {
                       if (ts == null) return;
@@ -181,17 +185,34 @@ export default function Browse() {
                     disabled={ts == null}
                     style={({ pressed }) => [
                       styles.card,
-                      pressed && styles.cardPressed,
+                      idx === 0 && styles.cardEdge,
+                      pressed && ts != null && styles.cardPressed,
                       ts == null && styles.cardDisabled,
                     ]}
                     accessibilityRole="button"
                     accessibilityLabel={`${title}, ${metaLine}`}
                   >
-                    <Text style={styles.cardTitle} numberOfLines={2}>
+                    <Text
+                      style={styles.cardTitle}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
                       {title}
                     </Text>
-                    <Text style={styles.cardMeta} numberOfLines={1}>
-                      {metaLine}
+                    <Text
+                      style={styles.cardPriceDuration}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      <Text style={styles.cardPrice}>{priceLabel}</Text>
+                      <Text style={styles.cardMuted}> · {duration}</Text>
+                    </Text>
+                    <Text
+                      style={styles.cardDistance}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      {distLabel}
                     </Text>
                     {desc ? (
                       <Text
@@ -202,48 +223,71 @@ export default function Browse() {
                         {desc}
                       </Text>
                     ) : null}
-                  </Pressable>
+                  </CardPressable>
                 );
               })
             )
           ) : toolRows.length === 0 ? (
             <Text style={styles.emptyText}>{toolEmpty}</Text>
           ) : (
-            toolRows.map((item) => (
-              <Pressable
-                key={item.id}
-                onPress={() =>
-                  router.push({
-                    pathname: '/listing-detail',
-                    params: { listingId: item.id },
-                  })
-                }
-                style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
-                accessibilityRole="button"
-                accessibilityLabel={`${item.name}, ${formatListingPriceWithUnit(item.price, item.priceUnit)}, ${formatMilesShort(item.distance)}`}
-              >
-                <Text style={styles.cardTitle} numberOfLines={2}>
-                  {item.name}
-                </Text>
-                <Text style={styles.cardMeta} numberOfLines={1}>
-                  {`${formatListingPriceWithUnit(item.price, item.priceUnit)} · ${formatMilesShort(item.distance)}`}
-                </Text>
-                {item.description?.trim() ? (
+            toolRows.map((item, idx) => {
+              const priceStr = formatListingPriceWithUnit(item.price, item.priceUnit);
+              const distStr = formatMilesShort(item.distance);
+              return (
+                <CardPressable
+                  key={item.id}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/listing-detail',
+                      params: { listingId: item.id },
+                    })
+                  }
+                  style={({ pressed }) => [
+                    styles.card,
+                    idx === 0 && styles.cardEdge,
+                    pressed && styles.cardPressed,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${item.name}, ${priceStr}, ${distStr}`}
+                >
                   <Text
-                    style={styles.cardDesc}
+                    style={styles.cardTitle}
                     numberOfLines={1}
                     ellipsizeMode="tail"
                   >
-                    {item.description.trim()}
+                    {item.name}
                   </Text>
-                ) : null}
-              </Pressable>
-            ))
+                  <Text
+                    style={styles.cardPricePrimary}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {priceStr}
+                  </Text>
+                  <Text
+                    style={styles.cardDistance}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {distStr}
+                  </Text>
+                  {item.description?.trim() ? (
+                    <Text
+                      style={styles.cardDesc}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      {item.description.trim()}
+                    </Text>
+                  ) : null}
+                </CardPressable>
+              );
+            })
           )}
         </ScrollView>
 
         <MainTabFab />
-      </View>
+      </ScreenEntrance>
     </KeyboardDismissScreen>
   );
 }
@@ -251,45 +295,40 @@ export default function Browse() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
   },
   screenInner: {
     flex: 1,
   },
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
   },
   content: {
-    paddingHorizontal: 20,
+    paddingHorizontal: ui.padScreenH,
   },
   screenTitle: {
     fontSize: 28,
-    fontWeight: '700',
-    color: '#000',
-    marginBottom: 20,
+    fontWeight: '800',
+    color: ui.textPrimary,
+    marginBottom: ui.spaceMd,
     letterSpacing: -0.3,
   },
   segment: {
     flexDirection: 'row',
-    backgroundColor: '#ECECEC',
-    borderRadius: 12,
+    backgroundColor: ui.surfaceNeutral,
+    borderRadius: ui.radiusInput,
     padding: 3,
-    marginBottom: 16,
+    marginBottom: ui.spaceSm + 2,
   },
   segmentItem: {
     flex: 1,
     paddingVertical: 10,
     alignItems: 'center',
-    borderRadius: 10,
+    borderRadius: ui.radiusInput - 4,
   },
   segmentItemActive: {
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 2,
-    elevation: 1,
+    backgroundColor: ui.background,
   },
   segmentPressed: {
     opacity: 0.92,
@@ -297,59 +336,98 @@ const styles = StyleSheet.create({
   segmentLabel: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#636366',
+    color: ui.textSecondary,
   },
   segmentLabelActive: {
-    color: '#000',
+    color: ui.textPrimary,
   },
   searchInput: {
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: ui.border,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    borderRadius: ui.radiusInput,
+    paddingHorizontal: ui.spaceMd - 2,
+    paddingVertical: 9,
     fontSize: 16,
-    color: '#000',
-    backgroundColor: '#F9F9F9',
-    marginBottom: 22,
+    color: ui.textPrimary,
+    backgroundColor: ui.surfaceInput,
+    marginBottom: ui.spaceSm + 2,
   },
   emptyText: {
     color: ui.textSubtle,
     fontSize: 15,
     textAlign: 'center',
-    marginTop: 28,
+    marginTop: ui.spaceSection,
     lineHeight: 22,
     paddingHorizontal: 12,
   },
   card: {
-    ...cardChrome,
-    marginBottom: 12,
+    backgroundColor: ui.background,
+    paddingVertical: 5,
+    paddingHorizontal: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: ui.border,
+  },
+  /** Top edge of list for a light enclosure under the search field. */
+  cardEdge: {
+    borderTopWidth: 1,
+    borderTopColor: ui.border,
   },
   cardPressed: {
-    opacity: ui.pressOpacity,
+    backgroundColor: ui.surfaceStriped,
   },
   cardDisabled: {
     opacity: 0.55,
   },
   cardTitle: {
     fontSize: 17,
-    fontWeight: '700',
-    color: '#111',
-    marginBottom: 4,
-    lineHeight: 21,
+    fontWeight: '800',
+    color: ui.textPrimary,
+    marginBottom: 0,
+    lineHeight: 19,
+    letterSpacing: -0.25,
   },
-  cardMeta: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#3C3C43',
-    marginBottom: 2,
+  /** Request row: price (semi-bold) + duration (muted). */
+  cardPriceDuration: {
+    marginTop: 0,
+    marginBottom: 0,
     lineHeight: 18,
   },
-  cardDesc: {
+  cardPrice: {
+    fontSize: ui.fontPrice,
+    fontWeight: '600',
+    color: ui.textPrimary,
+    letterSpacing: -0.2,
+  },
+  cardMuted: {
+    fontSize: 14,
+    fontWeight: '400',
+    color: ui.textSecondary,
+  },
+  /** Listing row: full price + unit line. */
+  cardPricePrimary: {
+    fontSize: ui.fontPrice,
+    fontWeight: '600',
+    color: ui.textPrimary,
+    letterSpacing: -0.2,
+    lineHeight: 18,
+    marginTop: 0,
+    marginBottom: 0,
+  },
+  /** Distance on its own line (requests + listings). */
+  cardDistance: {
     fontSize: 13,
-    color: '#8E8E93',
-    lineHeight: 17,
-    marginTop: 2,
+    fontWeight: '400',
+    color: ui.textSecondary,
+    lineHeight: 16,
+    marginTop: 0,
+    marginBottom: 0,
+  },
+  cardDesc: {
+    fontSize: 12,
+    fontWeight: '400',
+    color: ui.textSecondary,
+    lineHeight: 15,
+    marginTop: 0,
     marginBottom: 0,
   },
 });

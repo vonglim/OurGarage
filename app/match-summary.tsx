@@ -1,8 +1,10 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { Pressable } from '@/components/Pressable';
+import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
 import { formatHowDisplay } from './lib/deliveryFormat';
 import { formatDurationDisplay } from './lib/durationFormat';
@@ -10,7 +12,7 @@ import { formatUsd } from './lib/money';
 import { formatDistanceFromYou } from './lib/requestDistance';
 import { openChatForRequest } from './lib/openRequestChat';
 import { getEffectiveRentalStatus, getRequestByTimestamp } from './store/requestsStore';
-import { ui } from '@/constants/appUi';
+import { primarySolidPressed, shadowCard, shadowKey, ui } from '@/constants/appUi';
 
 function dashLocation(loc: unknown): string {
   if (loc == null) return '—';
@@ -40,7 +42,9 @@ export default function MatchSummaryScreen() {
   if (!requestIdStr || !Number.isFinite(Number(requestIdStr))) {
     return (
       <KeyboardDismissScreen style={styles.centered}>
-        <Text style={styles.muted}>Invalid request.</Text>
+        <ScreenEntrance style={styles.entranceFillCentered}>
+          <Text style={styles.muted}>Invalid request.</Text>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
     );
   }
@@ -48,7 +52,9 @@ export default function MatchSummaryScreen() {
   if (!request) {
     return (
       <KeyboardDismissScreen style={styles.centered}>
-        <Text style={styles.muted}>Request not found.</Text>
+        <ScreenEntrance style={styles.entranceFillCentered}>
+          <Text style={styles.muted}>Request not found.</Text>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
     );
   }
@@ -56,7 +62,9 @@ export default function MatchSummaryScreen() {
   if (!request.matched) {
     return (
       <KeyboardDismissScreen style={styles.centered}>
-        <Text style={styles.muted}>No match on this request yet.</Text>
+        <ScreenEntrance style={styles.entranceFillCentered}>
+          <Text style={styles.muted}>No match on this request yet.</Text>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
     );
   }
@@ -66,7 +74,8 @@ export default function MatchSummaryScreen() {
 
   return (
     <KeyboardDismissScreen>
-      <ScrollView
+      <ScreenEntrance style={styles.entranceFlex}>
+        <ScrollView
       style={styles.container}
       contentContainerStyle={styles.scrollContent}
       keyboardShouldPersistTaps="handled"
@@ -104,6 +113,8 @@ export default function MatchSummaryScreen() {
         </View>
 
         <Pressable
+          pressOpacityFeedback={false}
+          haptic
           style={({ pressed }) => [styles.messageButton, pressed && styles.messageButtonPressed]}
           onPress={() => openChatForRequest(router, request.timestamp)}
         >
@@ -114,6 +125,7 @@ export default function MatchSummaryScreen() {
           <Text style={styles.rentalStartedNote}>Rental is active. Handoff was confirmed.</Text>
         ) : (
           <Pressable
+            pressOpacityFeedback={false}
             style={({ pressed }) => [styles.startButton, pressed && styles.startButtonPressed]}
             onPress={() =>
               router.push({
@@ -127,6 +139,8 @@ export default function MatchSummaryScreen() {
         )}
 
         <Pressable
+          pressOpacityFeedback={false}
+          haptic
           style={({ pressed }) => [styles.homeButton, pressed && styles.homeButtonPressed]}
           onPress={() => router.replace('/(tabs)/home')}
         >
@@ -134,39 +148,45 @@ export default function MatchSummaryScreen() {
         </Pressable>
       </View>
     </ScrollView>
+      </ScreenEntrance>
     </KeyboardDismissScreen>
   );
 }
 
 const styles = StyleSheet.create({
+  entranceFlex: {
+    flex: 1,
+  },
+  entranceFillCentered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   container: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: ui.surfaceStriped,
   },
   scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
-    paddingVertical: 32,
-    paddingHorizontal: 24,
+    paddingVertical: ui.spaceLg,
+    paddingHorizontal: ui.spaceSection,
   },
   centered: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: ui.surfaceStriped,
   },
   card: {
     alignSelf: 'center',
     width: '100%',
     maxWidth: 400,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 28,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
+    backgroundColor: ui.background,
+    borderRadius: ui.radiusCard,
+    padding: ui.spaceSection,
+    ...shadowCard,
     elevation: 2,
   },
   statusMatched: {
@@ -184,8 +204,8 @@ const styles = StyleSheet.create({
   },
   toolName: {
     fontSize: 22,
-    fontWeight: '700',
-    color: '#111',
+    fontWeight: '800',
+    color: ui.textPrimary,
     textAlign: 'center',
     marginBottom: 24,
   },
@@ -203,15 +223,15 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   value: {
-    fontSize: 16,
-    color: '#222',
+    fontSize: ui.fontPrice,
+    color: ui.textPrimary,
     textAlign: 'center',
     lineHeight: 22,
   },
   valueEmphasis: {
-    fontSize: 20,
+    fontSize: ui.fontTitleCard,
     fontWeight: '700',
-    color: '#111',
+    color: ui.textPrimary,
     textAlign: 'center',
   },
   nextSteps: {
@@ -225,7 +245,7 @@ const styles = StyleSheet.create({
   nextStepsTitle: {
     fontSize: 17,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
     marginBottom: 8,
     textAlign: 'center',
   },
@@ -242,27 +262,29 @@ const styles = StyleSheet.create({
     borderRadius: ui.radiusButton,
     alignItems: 'center',
     marginBottom: 12,
+    ...shadowKey,
   },
   messageButtonPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   messageButtonText: {
-    color: '#FFF',
+    color: ui.primaryOn,
     fontSize: 16,
     fontWeight: '600',
   },
   startButton: {
-    backgroundColor: '#1565C0',
+    backgroundColor: ui.primary,
     paddingVertical: ui.padButtonV,
     borderRadius: ui.radiusButton,
     alignItems: 'center',
     marginBottom: 12,
+    ...shadowKey,
   },
   startButtonPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   startButtonText: {
-    color: '#FFF',
+    color: ui.primaryOn,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -279,12 +301,13 @@ const styles = StyleSheet.create({
     paddingVertical: ui.padButtonV,
     borderRadius: ui.radiusButton,
     alignItems: 'center',
+    ...shadowKey,
   },
   homeButtonPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   homeButtonText: {
-    color: '#FFF',
+    color: ui.primaryOn,
     fontSize: 16,
     fontWeight: '600',
   },

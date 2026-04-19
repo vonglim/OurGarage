@@ -2,12 +2,12 @@ import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import {
   Modal,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '@/app/components/KeyboardDismissScreen';
@@ -364,14 +364,14 @@ export default function ReviewsScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
   },
   navHeader: {
     paddingHorizontal: 20,
     paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
-    backgroundColor: '#F2F2F7',
+    borderBottomColor: ui.border,
+    backgroundColor: ui.surfaceGrouped,
   },
   backHit: {
     alignSelf: 'flex-start',
@@ -385,7 +385,7 @@ const styles = StyleSheet.create({
   navTitle: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
     letterSpacing: -0.2,
   },
   scroll: {
@@ -396,19 +396,19 @@ const styles = StyleSheet.create({
     paddingTop: 16,
   },
   summaryCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 12,
     paddingVertical: 24,
     paddingHorizontal: 20,
     alignItems: 'center',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
     marginBottom: 14,
   },
   summaryRating: {
     fontSize: 52,
     fontWeight: '800',
-    color: '#000',
+    color: ui.textPrimary,
     letterSpacing: -2,
     marginBottom: 4,
   },
@@ -420,7 +420,7 @@ const styles = StyleSheet.create({
   },
   summaryCaption: {
     fontSize: 14,
-    color: '#6D6D72',
+    color: ui.textSecondary,
     fontWeight: '500',
   },
   selectorRow: {
@@ -437,7 +437,7 @@ const styles = StyleSheet.create({
   selectorLabel: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#6D6D72',
+    color: ui.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.35,
     marginBottom: 6,
@@ -455,24 +455,24 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
   },
   selectorTriggerPressed: {
     opacity: 0.88,
-    backgroundColor: '#F9F9F9',
+    backgroundColor: ui.surfaceInput,
   },
   selectorValue: {
     flex: 1,
     fontSize: 15,
     fontWeight: '600',
-    color: '#111',
+    color: ui.textPrimary,
     marginRight: 6,
   },
   selectorCaret: {
     fontSize: 12,
-    color: '#8E8E93',
+    color: ui.textSecondary,
     marginTop: 2,
   },
   modalBackdrop: {
@@ -482,18 +482,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
   },
   modalCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 14,
     paddingTop: 16,
     paddingBottom: 8,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
     maxHeight: '72%',
   },
   modalTitle: {
     fontSize: 17,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
     paddingHorizontal: 18,
     marginBottom: 8,
   },
@@ -504,14 +504,14 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     paddingHorizontal: 18,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#ECECEC',
+    borderTopColor: ui.border,
   },
   modalOptionPressed: {
-    backgroundColor: '#F6F6F7',
+    backgroundColor: ui.surfaceStriped,
   },
   modalOptionText: {
     fontSize: 17,
-    color: '#111',
+    color: ui.textPrimary,
   },
   modalOptionTextSelected: {
     fontWeight: '600',
@@ -531,39 +531,39 @@ const styles = StyleSheet.create({
   modalCancelText: {
     fontSize: 17,
     fontWeight: '500',
-    color: '#8E8E93',
+    color: ui.textSecondary,
   },
   listHeading: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#6D6D72',
+    color: ui.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
     marginBottom: 8,
   },
   listCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 12,
     overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
   },
   emptyCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 12,
     padding: 20,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
   },
   emptyTitle: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#000',
+    color: ui.textPrimary,
     marginBottom: 6,
   },
   emptyBody: {
     fontSize: 15,
-    color: '#6D6D72',
+    color: ui.textSecondary,
   },
   reviewRow: {
     flexDirection: 'row',
@@ -573,7 +573,7 @@ const styles = StyleSheet.create({
   },
   reviewRowBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
+    borderBottomColor: ui.border,
   },
   avatar: {
     width: 40,
@@ -587,7 +587,7 @@ const styles = StyleSheet.create({
   avatarInitial: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: ui.primaryOn,
   },
   reviewBody: {
     flex: 1,
@@ -607,15 +607,15 @@ const styles = StyleSheet.create({
     minWidth: 0,
     fontSize: 16,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
   },
   roleTag: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#6D6D72',
+    color: ui.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.3,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
@@ -630,6 +630,6 @@ const styles = StyleSheet.create({
   reviewText: {
     fontSize: 15,
     lineHeight: 22,
-    color: '#3A3A3C',
+    color: ui.textPrimary,
   },
 });

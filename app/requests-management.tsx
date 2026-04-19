@@ -1,6 +1,7 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
@@ -9,7 +10,7 @@ import { formatUsd, getNumericTotalPrice } from './lib/money';
 import { getRequests, isLeaveReviewEligible } from './store/requestsStore';
 import { useUserReviews } from './store/userReviewsStore';
 
-import { ui } from '@/constants/appUi';
+import { outlinePrimaryPressed, ui } from '@/constants/appUi';
 
 type Req = ReturnType<typeof getRequests>[number];
 
@@ -102,6 +103,7 @@ export default function RequestsManagementScreen() {
                       <Text style={styles.reviewedNote}>Review submitted</Text>
                     ) : (
                       <Pressable
+                        pressOpacityFeedback={false}
                         onPress={() =>
                           router.push(
                             `/leave-review?requestTimestamp=${encodeURIComponent(String(ts))}&type=renter`
@@ -129,14 +131,14 @@ export default function RequestsManagementScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
   },
   header: {
     paddingHorizontal: 20,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
-    backgroundColor: '#F2F2F7',
+    borderBottomColor: ui.border,
+    backgroundColor: ui.surfaceGrouped,
   },
   backHit: {
     alignSelf: 'flex-start',
@@ -150,13 +152,13 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 28,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
     letterSpacing: -0.3,
   },
   headerSub: {
     marginTop: 6,
     fontSize: 14,
-    color: '#6D6D72',
+    color: ui.textSecondary,
     lineHeight: 20,
   },
   scroll: {
@@ -167,29 +169,29 @@ const styles = StyleSheet.create({
     paddingTop: 16,
   },
   emptyCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 12,
     padding: 20,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
   },
   emptyTitle: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#000',
+    color: ui.textPrimary,
     marginBottom: 8,
   },
   emptyBody: {
     fontSize: 15,
-    color: '#6D6D72',
+    color: ui.textSecondary,
     lineHeight: 21,
   },
   listCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 12,
     overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
   },
   row: {
     paddingVertical: 14,
@@ -203,17 +205,17 @@ const styles = StyleSheet.create({
   },
   rowBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
+    borderBottomColor: ui.border,
   },
   rowTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#000',
+    color: ui.textPrimary,
     marginBottom: 4,
   },
   rowMeta: {
     fontSize: 14,
-    color: '#6D6D72',
+    color: ui.textSecondary,
     marginBottom: 6,
   },
   statusRow: {
@@ -229,7 +231,7 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#555555',
+    color: ui.textSecondary,
   },
   leaveReviewBtn: {
     alignSelf: 'flex-start',
@@ -237,12 +239,12 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: ui.primary,
   },
   leaveReviewBtnPressed: {
-    opacity: 0.85,
+    ...outlinePrimaryPressed,
   },
   leaveReviewBtnText: {
     fontSize: 14,
@@ -253,6 +255,6 @@ const styles = StyleSheet.create({
     marginTop: 10,
     fontSize: 13,
     fontWeight: '500',
-    color: '#6D6D72',
+    color: ui.textSecondary,
   },
 });

@@ -4,20 +4,22 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { Pressable } from '@/components/Pressable';
+import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
 import { getProfile } from './store/profileStore';
+import { showFeedbackToast } from './store/feedbackToastStore';
 import { addUserReview, type UserReviewType } from './store/userReviewsStore';
 
-import { ui } from '@/constants/appUi';
+import { primarySolidPressed, ui } from '@/constants/appUi';
 
 export default function LeaveReviewScreen() {
   const router = useRouter();
@@ -52,9 +54,8 @@ export default function LeaveReviewScreen() {
       requestTimestamp,
       reviewerName: profile.name.trim() || 'You',
     });
-    Alert.alert('Thank you', 'Your review was saved.', [
-      { text: 'OK', onPress: () => router.back() },
-    ]);
+    showFeedbackToast('Thanks!');
+    router.back();
   };
 
   return (
@@ -63,6 +64,7 @@ export default function LeaveReviewScreen() {
         style={styles.screen}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
+      <ScreenEntrance style={styles.entranceFlex}>
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
@@ -102,7 +104,7 @@ export default function LeaveReviewScreen() {
           value={comment}
           onChangeText={setComment}
           placeholder="Share details about your experience"
-          placeholderTextColor="#8E8E93"
+          placeholderTextColor="ui.textSecondary"
           style={styles.input}
           multiline
           textAlignVertical="top"
@@ -112,6 +114,8 @@ export default function LeaveReviewScreen() {
         />
 
         <Pressable
+          pressOpacityFeedback={false}
+          haptic
           onPress={() => void submit()}
           style={({ pressed }) => [
             styles.submit,
@@ -121,22 +125,26 @@ export default function LeaveReviewScreen() {
           <Text style={styles.submitText}>Submit</Text>
         </Pressable>
       </ScrollView>
+      </ScreenEntrance>
       </KeyboardAvoidingView>
     </KeyboardDismissScreen>
   );
 }
 
 const styles = StyleSheet.create({
+  entranceFlex: {
+    flex: 1,
+  },
   screen: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
   },
   header: {
     paddingHorizontal: 20,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
-    backgroundColor: '#F2F2F7',
+    borderBottomColor: ui.border,
+    backgroundColor: ui.surfaceGrouped,
   },
   backHit: {
     alignSelf: 'flex-start',
@@ -150,7 +158,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
   },
   scrollContent: {
     paddingHorizontal: 20,
@@ -159,7 +167,7 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#6D6D72',
+    color: ui.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.35,
     marginBottom: 10,
@@ -180,7 +188,7 @@ const styles = StyleSheet.create({
   },
   star: {
     fontSize: 36,
-    color: '#D1D1D6',
+    color: ui.textSecondary,
   },
   starFilled: {
     color: '#F9A825',
@@ -188,18 +196,18 @@ const styles = StyleSheet.create({
   ratingHint: {
     marginTop: 8,
     fontSize: 14,
-    color: '#6D6D72',
+    color: ui.textSecondary,
   },
   input: {
     minHeight: 120,
     borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 16,
-    color: '#000',
-    backgroundColor: '#FFFFFF',
+    color: ui.textPrimary,
+    backgroundColor: ui.background,
   },
   submit: {
     marginTop: 24,
@@ -209,10 +217,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   submitPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   submitText: {
-    color: '#FFFFFF',
+    color: ui.primaryOn,
     fontSize: 17,
     fontWeight: '600',
   },

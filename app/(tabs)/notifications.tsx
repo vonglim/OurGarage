@@ -1,7 +1,8 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React, { useCallback } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
@@ -152,18 +153,18 @@ export default function NotificationsScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
   },
   header: {
     paddingHorizontal: 20,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
+    borderBottomColor: ui.border,
   },
   title: {
     fontSize: 28,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
     letterSpacing: -0.3,
   },
   scroll: {
@@ -191,11 +192,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   rowUnread: {
-    backgroundColor: '#F3F8FF',
+    backgroundColor: ui.surfaceTintPrimary,
   },
   rowBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
+    borderBottomColor: ui.border,
   },
   rowPressed: {
     opacity: 0.9,
@@ -219,10 +220,10 @@ const styles = StyleSheet.create({
   typePill: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#6D6D72',
+    color: ui.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
-    backgroundColor: '#ECECEC',
+    backgroundColor: ui.surfaceNeutral,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
@@ -232,12 +233,12 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: 'right',
     fontSize: 12,
-    color: '#8E8E93',
+    color: ui.textSecondary,
   },
   message: {
     fontSize: 16,
     lineHeight: 22,
-    color: '#1C1C1E',
+    color: ui.textPrimary,
     paddingLeft: 16,
   },
   messageBlock: {
@@ -248,7 +249,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 22,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
     letterSpacing: -0.2,
   },
   messageSecondary: {

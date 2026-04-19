@@ -1,20 +1,22 @@
+import { cardChrome, primarySolidPressed, shadowCard, shadowKey, ui } from '@/constants/appUi';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useRef } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { cardChrome, ui } from '@/constants/appUi';
+import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { CardPressable } from '@/components/CardPressable';
+import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
 import { MainTabFab, useMainTabFabBottomReserve } from '../components/MainTabFab';
-import { listOpenRequestsSortedByDistance } from '../lib/openRequestsForBrowse';
 import { formatUsd, getNumericTotalPrice } from '../lib/money';
+import { listOpenRequestsSortedByDistance } from '../lib/openRequestsForBrowse';
 import { formatMilesShort, milesFromViewerToRequest } from '../lib/requestDistance';
 import { getOnboardingTermsAccepted } from '../store/agreementsStore';
-import { touchLastActive } from '../store/profileStore';
-import { useRequestsStore } from '../store/requestsStore';
 import type { ToolListing } from '../store/listingsStore';
 import { formatListingPriceWithUnit, useListingsStore } from '../store/listingsStore';
+import { touchLastActive } from '../store/profileStore';
+import { useRequestsStore } from '../store/requestsStore';
 
 const PREVIEW_COUNT = 5;
 const PREVIEW_CARD_WIDTH = 260;
@@ -108,7 +110,7 @@ export default function Home() {
           style={styles.outer}
           contentContainerStyle={[
             styles.scrollInner,
-            { paddingTop: 16 + insets.top, paddingBottom: fabBottomReserve },
+            { paddingTop: ui.spaceMd + insets.top, paddingBottom: fabBottomReserve },
           ]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
@@ -118,17 +120,19 @@ export default function Home() {
 
             <View style={styles.actionsBlock}>
               <Pressable
+                pressOpacityFeedback={false}
+                haptic
                 onPress={goBrowseTools}
                 style={({ pressed }) => [
                   styles.actionCardPrimary,
                   pressed && styles.actionCardPressed,
                 ]}
                 accessibilityRole="button"
-                accessibilityLabel="Find Equipment. Things you need, without buying."
+                accessibilityLabel="Find Equipment. Need equipement or a tool, search here."
               >
                 <Text style={styles.actionTitleOnPrimary}>Find Equipment</Text>
                 <Text style={styles.actionSubtitleOnPrimary}>
-                  Things you need, without buying
+                  Need equipment or a tool?
                 </Text>
               </Pressable>
 
@@ -171,14 +175,16 @@ export default function Home() {
                   <ScrollView
                     horizontal
                     showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={{ paddingHorizontal: 16 }}
+                    contentContainerStyle={{ paddingHorizontal: ui.spaceMd }}
                   >
                     {previewRequests.map((req, idx) => {
                       const ts = req.timestamp as number | undefined;
                       const title = String(req.toolName ?? '').trim() || 'Request';
-                      const meta = `${requestPriceLabel(req)} · ${requestDistanceLabel(req)}`;
+                      const priceLabel = requestPriceLabel(req);
+                      const distLabel = requestDistanceLabel(req);
+                      const meta = `${priceLabel} · ${distLabel}`;
                       return (
-                        <Pressable
+                        <CardPressable
                           key={ts != null ? String(ts) : `req-${idx}`}
                           onPress={() => {
                             if (ts == null) return;
@@ -187,7 +193,7 @@ export default function Home() {
                           disabled={ts == null}
                           style={({ pressed }) => [
                             styles.previewCard,
-                            pressed && styles.previewCardPressed,
+                            pressed && ts != null && styles.previewCardPressed,
                           ]}
                           accessibilityRole="button"
                           accessibilityLabel={`${title}, ${meta}`}
@@ -196,9 +202,10 @@ export default function Home() {
                             {title}
                           </Text>
                           <Text style={styles.previewMeta} numberOfLines={1}>
-                            {meta}
+                            <Text style={styles.previewPrice}>{priceLabel}</Text>
+                            <Text style={styles.previewMetaRest}> · {distLabel}</Text>
                           </Text>
-                        </Pressable>
+                        </CardPressable>
                       );
                     })}
                   </ScrollView>
@@ -227,10 +234,10 @@ export default function Home() {
                   <ScrollView
                     horizontal
                     showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={{ paddingHorizontal: 16 }}
+                    contentContainerStyle={{ paddingHorizontal: ui.spaceMd }}
                   >
                     {previewListings.map((item: ToolListing) => (
-                      <Pressable
+                      <CardPressable
                         key={item.id}
                         onPress={() => goToListingDetails(item.id)}
                         style={({ pressed }) => [
@@ -244,7 +251,13 @@ export default function Home() {
                           {item.name}
                         </Text>
                         <Text style={styles.previewMeta} numberOfLines={1}>
-                          {`${formatListingPriceWithUnit(item.price, item.priceUnit)} · ${formatMilesShort(item.distance)}`}
+                          <Text style={styles.previewPrice}>
+                            {formatListingPriceWithUnit(item.price, item.priceUnit)}
+                          </Text>
+                          <Text style={styles.previewMetaRest}>
+                            {' '}
+                            · {formatMilesShort(item.distance)}
+                          </Text>
                         </Text>
                         {item.description?.trim() ? (
                           <Text
@@ -255,7 +268,7 @@ export default function Home() {
                             {item.description.trim()}
                           </Text>
                         ) : null}
-                      </Pressable>
+                      </CardPressable>
                     ))}
                   </ScrollView>
                 )}
@@ -275,68 +288,61 @@ const styles = StyleSheet.create({
   },
   outer: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
   },
   scrollInner: {
     flexGrow: 1,
     alignItems: 'stretch',
-    paddingHorizontal: 20,
+    paddingHorizontal: ui.padScreenH,
   },
   column: {
     width: '100%',
   },
   title: {
     fontSize: 32,
-    fontWeight: '700',
+    fontWeight: '800',
     letterSpacing: -0.5,
-    marginBottom: 20,
-    color: '#000',
+    marginBottom: ui.spaceSection,
+    color: ui.textPrimary,
     textAlign: 'center',
   },
   actionsBlock: {
     width: '100%',
-    gap: 24,
-    marginBottom: 32,
+    gap: ui.spaceSection,
+    marginBottom: ui.spaceLg,
   },
   actionCardPrimary: {
     width: '100%',
     backgroundColor: ui.primary,
-    borderRadius: 20,
-    paddingVertical: 32,
-    paddingHorizontal: 24,
+    borderRadius: ui.radiusProminent,
+    paddingVertical: ui.spaceLg,
+    paddingHorizontal: ui.spaceSection,
     alignItems: 'center',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    elevation: 5,
+    ...shadowKey,
   },
   actionCardSecondary: {
     width: '100%',
     backgroundColor: cardChrome.backgroundColor,
-    borderRadius: cardChrome.borderRadius,
-    paddingVertical: 14,
-    paddingHorizontal: 20,
+    borderRadius: ui.radiusCard,
+    paddingVertical: ui.padButtonV,
+    paddingHorizontal: ui.spaceSection,
     alignItems: 'center',
     borderWidth: cardChrome.borderWidth,
-    borderColor: 'rgba(60, 60, 67, 0.22)',
-    shadowColor: cardChrome.shadowColor,
-    shadowOffset: cardChrome.shadowOffset,
-    shadowOpacity: cardChrome.shadowOpacity * 0.75,
-    shadowRadius: cardChrome.shadowRadius,
+    borderColor: ui.border,
+    ...shadowCard,
     elevation: 2,
   },
   actionCardPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   actionCardSecondaryPressed: {
     opacity: 0.96,
-    backgroundColor: '#F5F5F7',
+    backgroundColor: ui.surfaceStriped,
   },
   actionTitleOnPrimary: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: ui.primaryOn,
     letterSpacing: -0.35,
     marginBottom: 8,
     textAlign: 'center',
@@ -350,8 +356,8 @@ const styles = StyleSheet.create({
   },
   actionTitleSecondary: {
     fontSize: 17,
-    fontWeight: '600',
-    color: '#3A3A3C',
+    fontWeight: '700',
+    color: ui.textPrimary,
     letterSpacing: -0.2,
     marginBottom: 4,
     textAlign: 'center',
@@ -359,30 +365,30 @@ const styles = StyleSheet.create({
   actionSubtitleSecondary: {
     fontSize: 13,
     fontWeight: '500',
-    color: '#8E8E93',
+    color: ui.textSecondary,
     textAlign: 'center',
     lineHeight: 18,
   },
   previewRegion: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#E5E5EA',
+    borderTopColor: ui.border,
   },
   section: {
-    marginTop: 24,
-    marginBottom: 22,
+    marginTop: ui.spaceSection,
+    marginBottom: ui.spaceSection,
   },
   sectionTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 12,
-    gap: 10,
+    marginBottom: ui.spaceMd,
+    gap: ui.spaceSm + 2,
   },
   sectionHeading: {
     flex: 1,
     fontSize: 17,
-    fontWeight: '700',
-    color: '#1C1C1E',
+    fontWeight: '800',
+    color: ui.textPrimary,
     letterSpacing: -0.25,
     lineHeight: 22,
     paddingRight: 8,
@@ -409,32 +415,39 @@ const styles = StyleSheet.create({
     ...cardChrome,
   },
   previewCardPressed: {
-    opacity: 0.9,
+    backgroundColor: ui.surfaceStriped,
   },
   previewTitle: {
     fontSize: 15,
     fontWeight: '800',
-    color: '#1C1C1E',
+    color: ui.textPrimary,
     lineHeight: 20,
     marginBottom: 8,
     minHeight: 40,
   },
   previewMeta: {
-    fontSize: 13,
+    lineHeight: 22,
+  },
+  previewPrice: {
+    fontSize: ui.fontPrice,
     fontWeight: '600',
-    color: '#3C3C43',
-    lineHeight: 18,
+    color: ui.textPrimary,
+  },
+  previewMetaRest: {
+    fontSize: ui.fontSubtle,
+    fontWeight: '500',
+    color: ui.textSecondary,
   },
   previewDesc: {
     fontSize: 13,
     fontWeight: '500',
-    color: '#8E8E93',
+    color: ui.textSecondary,
     lineHeight: 18,
     marginTop: 6,
   },
   emptyHint: {
     fontSize: 14,
-    color: '#AEAEB2',
+    color: ui.textSecondary,
     lineHeight: 20,
   },
 });

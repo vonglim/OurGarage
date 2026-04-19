@@ -2,6 +2,7 @@ import { Redirect } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
+import { ui } from '@/constants/appUi';
 import { getOnboardingTermsAccepted } from './store/agreementsStore';
 
 type Gate = 'loading' | 'terms' | 'home';
@@ -23,7 +24,7 @@ export default function Index() {
   if (gate === 'loading') {
     return (
       <View style={styles.loading}>
-        <ActivityIndicator size="large" color="#007AFF" />
+        <ActivityIndicator size="large" color={ui.primary} />
       </View>
     );
   }
@@ -40,6 +41,6 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
   },
 });

@@ -2,17 +2,17 @@ import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
 import { setOnboardingTermsAccepted } from './store/agreementsStore';
-import { ui } from '@/constants/appUi';
+import { primarySolidPressed, ui } from '@/constants/appUi';
 
 const POINTS = [
   'You are responsible for any agreements you make with other people on OurGarage.',
@@ -63,6 +63,8 @@ export default function OnboardingTermsScreen() {
 
       <View style={[styles.footer, { paddingBottom: 16 + insets.bottom }]}>
         <Pressable
+          pressOpacityFeedback={false}
+          haptic
           onPress={() => void onAgree()}
           disabled={busy}
           style={({ pressed }) => [
@@ -72,7 +74,7 @@ export default function OnboardingTermsScreen() {
           ]}
         >
           {busy ? (
-            <ActivityIndicator color="#FFFFFF" />
+            <ActivityIndicator color={ui.primaryOn} />
           ) : (
             <Text style={styles.primaryBtnText}>Agree & Continue</Text>
           )}
@@ -85,7 +87,7 @@ export default function OnboardingTermsScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
   },
   scroll: {
     flex: 1,
@@ -96,7 +98,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 26,
     fontWeight: '800',
-    color: '#000',
+    color: ui.textPrimary,
     letterSpacing: -0.4,
     marginBottom: 12,
   },
@@ -107,11 +109,11 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   card: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 14,
     padding: 18,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
   },
   bulletRow: {
     flexDirection: 'row',
@@ -131,14 +133,14 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     lineHeight: 24,
-    color: '#1C1C1E',
+    color: ui.textPrimary,
   },
   footer: {
     paddingHorizontal: 22,
     paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#E5E5EA',
-    backgroundColor: '#F2F2F7',
+    borderTopColor: ui.border,
+    backgroundColor: ui.surfaceGrouped,
   },
   primaryBtn: {
     backgroundColor: ui.primary,
@@ -149,13 +151,13 @@ const styles = StyleSheet.create({
     minHeight: 50,
   },
   primaryBtnPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   primaryBtnDisabled: {
     opacity: 0.75,
   },
   primaryBtnText: {
-    color: '#FFFFFF',
+    color: ui.primaryOn,
     fontSize: 17,
     fontWeight: '600',
   },

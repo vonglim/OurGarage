@@ -2,7 +2,9 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { Pressable } from '@/components/Pressable';
+import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
@@ -14,7 +16,8 @@ import {
   getRequestByTimestamp,
   markRequestRentalComplete,
 } from './store/requestsStore';
-import { ui } from '@/constants/appUi';
+import { primarySolidPressed, ui } from '@/constants/appUi';
+import { IMAGE_TRANSITION_MS } from '@/constants/interactionTiming';
 
 function firstParam(v: string | string[] | undefined): string | undefined {
   if (v == null) return undefined;
@@ -70,10 +73,12 @@ export default function EndRentalScreen() {
   if (!requestIdStr || !Number.isFinite(Number(requestIdStr))) {
     return (
       <KeyboardDismissScreen style={[styles.screen, styles.centered]}>
-        <Text style={styles.muted}>Invalid request.</Text>
-        <Pressable onPress={() => router.back()} style={styles.textBtn} hitSlop={12}>
-          <Text style={styles.textBtnLabel}>Go back</Text>
-        </Pressable>
+        <ScreenEntrance style={styles.entranceFillCentered}>
+          <Text style={styles.muted}>Invalid request.</Text>
+          <Pressable onPress={() => router.back()} style={styles.textBtn} hitSlop={12}>
+            <Text style={styles.textBtnLabel}>Go back</Text>
+          </Pressable>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
     );
   }
@@ -81,10 +86,12 @@ export default function EndRentalScreen() {
   if (!request) {
     return (
       <KeyboardDismissScreen style={[styles.screen, styles.centered]}>
-        <Text style={styles.muted}>Request not found.</Text>
-        <Pressable onPress={() => router.back()} style={styles.textBtn} hitSlop={12}>
-          <Text style={styles.textBtnLabel}>Go back</Text>
-        </Pressable>
+        <ScreenEntrance style={styles.entranceFillCentered}>
+          <Text style={styles.muted}>Request not found.</Text>
+          <Pressable onPress={() => router.back()} style={styles.textBtn} hitSlop={12}>
+            <Text style={styles.textBtnLabel}>Go back</Text>
+          </Pressable>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
     );
   }
@@ -92,27 +99,32 @@ export default function EndRentalScreen() {
   if (getEffectiveRentalStatus(request) !== 'active') {
     return (
       <KeyboardDismissScreen style={[styles.screen, styles.centered, { paddingTop: insets.top }]}>
-        <Text style={styles.muted}>
-          This rental is not active, so it cannot be completed here.
-        </Text>
-        <Pressable
-          onPress={() =>
-            router.replace({
-              pathname: '/request-details',
-              params: { requestId: String(request.timestamp) },
-            })
-          }
-          style={({ pressed }) => [styles.primaryBtn, pressed && styles.primaryBtnPressed]}
-        >
-          <Text style={styles.primaryBtnText}>Open request</Text>
-        </Pressable>
+        <ScreenEntrance style={styles.entranceFillCentered}>
+          <Text style={styles.muted}>
+            This rental is not active, so it cannot be completed here.
+          </Text>
+          <Pressable
+            pressOpacityFeedback={false}
+            haptic
+            onPress={() =>
+              router.replace({
+                pathname: '/request-details',
+                params: { requestId: String(request.timestamp) },
+              })
+            }
+            style={({ pressed }) => [styles.primaryBtn, pressed && styles.primaryBtnPressed]}
+          >
+            <Text style={styles.primaryBtnText}>Open request</Text>
+          </Pressable>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
     );
   }
 
   return (
     <KeyboardDismissScreen style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+      <ScreenEntrance style={styles.entranceFlex}>
+        <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
         </Pressable>
@@ -138,7 +150,12 @@ export default function EndRentalScreen() {
           </Pressable>
           {returnPhotoUri ? (
             <View style={styles.photoPreviewWrap}>
-              <Image source={{ uri: returnPhotoUri }} style={styles.photoPreview} contentFit="cover" />
+              <Image
+                source={{ uri: returnPhotoUri }}
+                style={styles.photoPreview}
+                contentFit="cover"
+                transition={IMAGE_TRANSITION_MS}
+              />
               <Pressable
                 onPress={() => request.timestamp != null && setReturnPhoto(request.timestamp, null)}
                 hitSlop={8}
@@ -153,20 +170,31 @@ export default function EndRentalScreen() {
         <View style={styles.bodySpacer} />
 
         <Pressable
+          pressOpacityFeedback={false}
+          haptic
           onPress={onComplete}
           style={({ pressed }) => [styles.primaryBtn, pressed && styles.primaryBtnPressed]}
         >
           <Text style={styles.primaryBtnText}>Complete Rental</Text>
         </Pressable>
       </View>
+      </ScreenEntrance>
     </KeyboardDismissScreen>
   );
 }
 
 const styles = StyleSheet.create({
+  entranceFlex: {
+    flex: 1,
+  },
+  entranceFillCentered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   screen: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
   },
   centered: {
     justifyContent: 'center',
@@ -177,8 +205,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E5E5EA',
-    backgroundColor: '#F2F2F7',
+    borderBottomColor: ui.border,
+    backgroundColor: ui.surfaceGrouped,
   },
   backHit: {
     alignSelf: 'flex-start',
@@ -192,12 +220,12 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#000',
+    color: ui.textPrimary,
   },
   headerSub: {
     marginTop: 6,
     fontSize: 14,
-    color: '#6D6D72',
+    color: ui.textSecondary,
     lineHeight: 20,
   },
   body: {
@@ -208,26 +236,26 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   optionalBlock: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 14,
     padding: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
   },
   optionalLabel: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#6D6D72',
+    color: ui.textSecondary,
     marginBottom: 10,
   },
   photoBtn: {
     alignSelf: 'flex-start',
-    backgroundColor: '#F2F2F7',
+    backgroundColor: ui.surfaceGrouped,
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: ui.border,
   },
   photoBtnPressed: {
     opacity: 0.75,
@@ -244,7 +272,7 @@ const styles = StyleSheet.create({
     width: '100%',
     aspectRatio: 4 / 3,
     borderRadius: 10,
-    backgroundColor: '#ECECEC',
+    backgroundColor: ui.surfaceNeutral,
   },
   removePhoto: {
     alignSelf: 'flex-start',
@@ -254,19 +282,19 @@ const styles = StyleSheet.create({
   removePhotoText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#8E8E93',
+    color: ui.textSecondary,
   },
   card: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: ui.background,
     borderRadius: 14,
     padding: 20,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: ui.border,
   },
   confirmLine: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#000',
+    color: ui.textPrimary,
     marginBottom: 10,
     lineHeight: 22,
   },
@@ -286,10 +314,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   primaryBtnPressed: {
-    opacity: ui.pressOpacity,
+    ...primarySolidPressed,
   },
   primaryBtnText: {
-    color: '#FFFFFF',
+    color: ui.primaryOn,
     fontSize: 17,
     fontWeight: '600',
   },
