@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
 import { RequestMetaLines } from './components/RequestMetaLines';
 import { OfferOffererRow } from './components/OfferOffererRow';
-import { getOfferUserPreview, useOffersStore } from './store/offersStore';
+import { getOfferUserPreview, sortOffersForPoster, useOffersStore } from './store/offersStore';
 import {
   getEffectiveRentalStatus,
   getRequestByTimestamp,
@@ -63,9 +63,10 @@ export default function RequestDetailsScreen() {
   const offersFromStore = useOffersStore((s) => s.offers);
   const offers = useMemo(() => {
     if (!Number.isFinite(requestIdNum)) return [];
-    return offersFromStore
-      .filter((o) => o.requestId === requestIdNum && !o.declined)
-      .sort((a, b) => b.timestamp - a.timestamp);
+    const forRequest = offersFromStore.filter(
+      (o) => o.requestId === requestIdNum && !o.declined,
+    );
+    return sortOffersForPoster(forRequest);
   }, [offersFromStore, requestIdNum]);
 
   const matched = !!request?.matched;
@@ -200,27 +201,17 @@ export default function RequestDetailsScreen() {
         {offers.length === 0 ? (
           <Text style={styles.muted}>No offers yet</Text>
         ) : (
-          offers.map((offer) => {
+          offers.map((offer, index) => {
             const who = getOfferUserPreview(offer);
+            const isBestOffer = index === 0;
             return (
-              <Pressable
+              <View
                 key={offer.timestamp}
-                onPress={() => {
-                  if (request.timestamp == null) return;
-                  router.push({
-                    pathname: '/offer-detail',
-                    params: {
-                      requestId: String(request.timestamp),
-                      offerTimestamp: String(offer.timestamp),
-                    },
-                  });
-                }}
-                style={({ pressed }) => [
-                  styles.offerCard,
-                  pressed && styles.offerCardPressed,
-                  matched && styles.offerCardMatched,
-                ]}
+                style={[styles.offerCard, matched && styles.offerCardMatched]}
               >
+                {isBestOffer ? (
+                  <Text style={styles.bestOfferLabel}>Best Offer ⭐</Text>
+                ) : null}
                 <OfferOffererRow
                   name={who.name}
                   rating={who.rating}
@@ -233,14 +224,40 @@ export default function RequestDetailsScreen() {
                     })
                   }
                 />
-                <Text style={styles.offerPriceLine}>
-                  Their total for entire duration: {formatUsd(getNumericOfferPrice(offer))}
-                </Text>
-                <Text style={styles.offerTime}>{getTimeAgo(offer.timestamp)}</Text>
-                <Text style={styles.offerTapHint}>
-                  {matched ? 'Tap for details' : 'Tap to review & accept or decline'}
-                </Text>
-              </Pressable>
+                <Pressable
+                  onPress={() => {
+                    console.log("Pressed parent");
+                    if (request.timestamp == null) return;
+                    router.push({
+                      pathname: '/offer-detail',
+                      params: {
+                        requestId: String(request.timestamp),
+                        offerTimestamp: String(offer.timestamp),
+                      },
+                    });
+                  }}
+                  style={({ pressed }) => [
+                    styles.offerCardTapArea,
+                    pressed && styles.offerCardPressed,
+                  ]}
+                >
+                  <Text style={styles.offerPriceLine}>
+                    Their total for entire duration: {formatUsd(getNumericOfferPrice(offer))}
+                  </Text>
+                  {offer.counterFromPoster ? (
+                    <Text style={styles.offerCounterHint}>Counter-offer (you)</Text>
+                  ) : null}
+                  {offer.message?.trim() ? (
+                    <Text style={styles.offerMessagePreview} numberOfLines={3}>
+                      {offer.message.trim()}
+                    </Text>
+                  ) : null}
+                  <Text style={styles.offerTime}>{getTimeAgo(offer.timestamp)}</Text>
+                  <Text style={styles.offerTapHint}>
+                    {matched ? 'Tap for details' : 'Tap to review & accept or decline'}
+                  </Text>
+                </Pressable>
+              </View>
             );
           })
         )}
@@ -404,6 +421,13 @@ const styles = StyleSheet.create({
     color: ui.textSubtle,
     lineHeight: 22,
   },
+  bestOfferLabel: {
+    alignSelf: 'flex-start',
+    marginBottom: 10,
+    fontSize: 13,
+    fontWeight: '700',
+    color: ui.primary,
+  },
   offerCard: {
     backgroundColor: '#FAFAFA',
     borderRadius: ui.radiusCard,
@@ -412,9 +436,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: ui.border,
   },
+  /** Detail navigation only; keeps `OfferOffererRow` out of this Pressable. */
+  offerCardTapArea: {
+    alignSelf: 'stretch',
+    marginHorizontal: -4,
+    paddingHorizontal: 4,
+    paddingBottom: 2,
+    borderRadius: 10,
+  },
   offerCardPressed: {
     opacity: 0.92,
     backgroundColor: '#F0F4FF',
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: ui.primary,
   },
   offerCardMatched: {
@@ -431,6 +464,18 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#333',
     marginBottom: 4,
+  },
+  offerCounterHint: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: ui.primary,
+    marginBottom: 4,
+  },
+  offerMessagePreview: {
+    fontSize: 14,
+    color: '#555',
+    lineHeight: 20,
+    marginBottom: 6,
   },
   offerTime: {
     fontSize: 14,

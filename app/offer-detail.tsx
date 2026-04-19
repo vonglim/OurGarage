@@ -4,23 +4,30 @@ import React, { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
   Keyboard,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { OfferOffererRow } from './components/OfferOffererRow';
+import { numberPadAccessoryProps } from './components/NumberPadKeyboardAccessory';
 import { formatHowDisplay, needsDeliveryFee } from './lib/deliveryFormat';
 import { formatDurationDisplay } from './lib/durationFormat';
-import { formatUsd, getNumericOfferPrice, getNumericTotalPrice } from './lib/money';
+import { formatUsd, getNumericOfferPrice, getNumericTotalPrice, parseMoneyToNumber, sanitizeMoneyDigits } from './lib/money';
 import {
+  type Offer,
+  addPosterCounterOffer,
   declineOffer,
   getOfferUserPreview,
   useOffersStore,
 } from './store/offersStore';
+import { getProfile } from './store/profileStore';
 import { getEffectiveRentalStatus, getRequestByTimestamp } from './store/requestsStore';
 import { ui } from '@/constants/appUi';
 
@@ -49,6 +56,9 @@ export default function OfferDetailScreen() {
   const requestIdStr = firstParam(params.requestId);
   const offerTsStr = firstParam(params.offerTimestamp);
   const [tick, setTick] = useState(0);
+  const [counterModalVisible, setCounterModalVisible] = useState(false);
+  const [counterPriceDraft, setCounterPriceDraft] = useState('');
+  const [counterMessageDraft, setCounterMessageDraft] = useState('');
 
   const requestIdNum = useMemo(() => Number(requestIdStr), [requestIdStr]);
   const offerTsNum = useMemo(() => Number(offerTsStr), [offerTsStr]);
@@ -58,6 +68,21 @@ export default function OfferDetailScreen() {
       ? s.offers.find((o) => o.requestId === requestIdNum && o.timestamp === offerTsNum)
       : undefined
   );
+
+  const offersFromStore = useOffersStore((s) => s.offers);
+  const { currentOffer, historyOffers } = useMemo(() => {
+    if (!Number.isFinite(requestIdNum)) {
+      return { currentOffer: undefined as Offer | undefined, historyOffers: [] as Offer[] };
+    }
+    const sorted = offersFromStore
+      .filter((o) => o.requestId === requestIdNum)
+      .sort((a, b) => b.timestamp - a.timestamp);
+    const current = sorted[0];
+    return {
+      currentOffer: current,
+      historyOffers: sorted.slice(1),
+    };
+  }, [offersFromStore, requestIdNum]);
 
   useFocusEffect(
     useCallback(() => {
@@ -71,7 +96,6 @@ export default function OfferDetailScreen() {
     return getRequestByTimestamp(requestIdNum);
   }, [requestIdNum, tick]);
 
-  const who = offer ? getOfferUserPreview(offer) : null;
   const rentalStatus = request ? getEffectiveRentalStatus(request) : 'pending';
   const matched = !!request?.matched;
   const isAcceptedOffer =
@@ -79,89 +103,116 @@ export default function OfferDetailScreen() {
     request?.acceptedOfferTimestamp != null &&
     offer != null &&
     request.acceptedOfferTimestamp === offer.timestamp;
-  const canAct = !!offer && !offer.declined && !matched && rentalStatus === 'pending';
+  const isViewerPoster =
+    !!request &&
+    typeof request.posterUserId === 'string' &&
+    request.posterUserId === getProfile().userId;
+  const isPosterCounter = offer?.counterFromPoster === true;
+  const isCurrentPosterCounter = currentOffer?.counterFromPoster === true;
+  const canActOnCurrent =
+    !!currentOffer &&
+    !currentOffer.declined &&
+    !matched &&
+    rentalStatus === 'pending' &&
+    isViewerPoster;
+  const canAcceptCurrent = canActOnCurrent && !isCurrentPosterCounter;
+  const showCounterOffer = canActOnCurrent && !isCurrentPosterCounter;
+  const footerShows = canActOnCurrent && !isCurrentPosterCounter;
 
   const onAccept = () => {
-    if (!canAct || !request?.timestamp || !offer) return;
-    const priceNum = getNumericOfferPrice(offer);
-    router.push({
-      pathname: '/rental-agreement',
-      params: {
-        requestId: String(request.timestamp),
-        offerTimestamp: String(offer.timestamp),
-        price: String(priceNum),
-      },
-    });
+    if (!canAcceptCurrent || !request?.timestamp || !currentOffer) return;
+    const priceNum = getNumericOfferPrice(currentOffer);
+    const priceLabel = formatUsd(priceNum);
+    Alert.alert(
+      'Accept offer',
+      `Accept this offer for ${priceLabel}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Accept',
+          onPress: () => {
+            router.push({
+              pathname: '/rental-agreement',
+              params: {
+                requestId: String(request.timestamp),
+                offerTimestamp: String(currentOffer.timestamp),
+                price: String(priceNum),
+              },
+            });
+          },
+        },
+      ],
+    );
   };
 
   const onDecline = () => {
-    if (!canAct || !request?.timestamp || !offer) return;
+    if (!footerShows || !request?.timestamp || !currentOffer) return;
     Alert.alert('Decline offer?', 'You can still receive other offers on this request.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Decline',
         style: 'destructive',
         onPress: () => {
-          declineOffer(request.timestamp!, offer.timestamp);
+          declineOffer(request.timestamp!, currentOffer.timestamp);
           router.back();
         },
       },
     ]);
   };
 
+  const closeCounterModal = () => {
+    Keyboard.dismiss();
+    setCounterModalVisible(false);
+  };
+
+  const openCounterModal = () => {
+    if (!currentOffer || !showCounterOffer) return;
+    setCounterPriceDraft(sanitizeMoneyDigits(String(getNumericOfferPrice(currentOffer))));
+    setCounterMessageDraft('');
+    setCounterModalVisible(true);
+  };
+
+  const submitCounter = () => {
+    if (!request?.timestamp) return;
+    const n = parseMoneyToNumber(counterPriceDraft);
+    if (n == null || n < 0) {
+      Alert.alert(
+        'Price required',
+        'Enter your counter-offer total for the full rental period.',
+      );
+      return;
+    }
+    addPosterCounterOffer(request.timestamp, {
+      price: n,
+      message: counterMessageDraft.trim(),
+    });
+    closeCounterModal();
+    router.back();
+  };
+
   if (!requestIdStr || !offerTsStr || !Number.isFinite(requestIdNum) || !Number.isFinite(offerTsNum)) {
     return (
-      <Pressable
-        style={{ flex: 1 }}
-        onPress={Keyboard.dismiss}
-        accessible={false}
-      >
+      <View style={{ flex: 1 }}>
         <View style={[styles.screen, styles.centered]}>
           <Text style={styles.muted}>Invalid link.</Text>
           <Pressable onPress={() => router.back()} hitSlop={12} style={styles.textBtn}>
             <Text style={styles.textBtnLabel}>Go back</Text>
           </Pressable>
         </View>
-      </Pressable>
+      </View>
     );
   }
 
   if (!request || !offer) {
     return (
-      <Pressable
-        style={{ flex: 1 }}
-        onPress={Keyboard.dismiss}
-        accessible={false}
-      >
+      <View style={{ flex: 1 }}>
         <View style={[styles.screen, styles.centered]}>
           <Text style={styles.muted}>Offer not found.</Text>
           <Pressable onPress={() => router.back()} hitSlop={12} style={styles.textBtn}>
             <Text style={styles.textBtnLabel}>Go back</Text>
           </Pressable>
         </View>
-      </Pressable>
-    );
-  }
-
-  if (offer.declined) {
-    return (
-      <Pressable
-        style={{ flex: 1 }}
-        onPress={Keyboard.dismiss}
-        accessible={false}
-      >
-        <View style={styles.screen}>
-          <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-            <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
-              <Text style={styles.backLabel}>‹ Back</Text>
-            </Pressable>
-            <Text style={styles.headerTitle}>Offer</Text>
-          </View>
-          <View style={[styles.centered, { flex: 1 }]}>
-            <Text style={styles.muted}>This offer was declined.</Text>
-          </View>
-        </View>
-      </Pressable>
+      </View>
     );
   }
 
@@ -176,14 +227,15 @@ export default function OfferDetailScreen() {
   const feeDisplay =
     feeNum != null && Number.isFinite(feeNum) ? formatUsd(feeNum) : '—';
 
+  const scrollBottomPad = footerShows ? 150 + insets.bottom : 32 + insets.bottom;
+
+  // TODO: Fix accidental navigation when tapping avatar/name inside offer detail
+  // Likely caused by parent Pressable capturing touches
+  // Revisit after current feature work
+
   return (
-    <Pressable
-      style={{ flex: 1 }}
-      onPress={Keyboard.dismiss}
-      accessible={false}
-    >
-      <View style={styles.screen}>
-        <View style={styles.root}>
+    <View style={{ flex: 1, backgroundColor: '#F2F2F7' }}>
+      <View style={{ flex: 1 }}>
         <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
           <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
             <Text style={styles.backLabel}>‹ Back</Text>
@@ -193,41 +245,117 @@ export default function OfferDetailScreen() {
         </View>
 
         <ScrollView
-          style={styles.scrollFlex}
-          contentContainerStyle={[
-            styles.scrollContentContainer,
-            {
-              paddingBottom: canAct ? 140 + insets.bottom : 32 + insets.bottom,
-            },
-          ]}
-          showsVerticalScrollIndicator
+          style={{ flex: 1 }}
+          contentContainerStyle={{
+            padding: 16,
+            paddingBottom: scrollBottomPad,
+          }}
+          showsVerticalScrollIndicator={true}
+          keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
         >
-        <Text style={styles.sectionLabel}>From</Text>
-        {who ? (
-          <View style={styles.userCard}>
-            <OfferOffererRow
-              name={who.name}
-              rating={who.rating}
-              avatar={who.avatar}
-              lastActive={who.lastActive}
-              onPress={() =>
-                router.push({
-                  pathname: '/(tabs)/profile',
-                  params: { viewUserId: who.userId },
-                })
-              }
-            />
-            <Text style={styles.profileHint}>Tap name or avatar to open profile</Text>
+        {matched ? (
+          <View style={[styles.notice, styles.dealInProgressNotice]}>
+            <Text style={styles.dealInProgressTitle}>Deal in progress</Text>
+            <Text style={styles.dealInProgressBody}>
+              This request is matched. Accept, counter, and new offers are locked.
+            </Text>
           </View>
         ) : null}
 
-        <Text style={styles.sectionLabel}>Their offer</Text>
-        <View style={styles.card}>
-          <Text style={styles.priceLine}>{formatUsd(getNumericOfferPrice(offer))}</Text>
-          <Text style={styles.mutedSmall}>Total they are offering for the full rental period</Text>
-          <Text style={styles.timeLine}>Offered {getTimeAgo(offer.timestamp)}</Text>
-        </View>
+        {!isViewerPoster && rentalStatus === 'pending' && !matched ? (
+          <View style={styles.notice}>
+            <Text style={styles.noticeText}>
+              Only the request owner can accept, decline, or counter here.
+            </Text>
+          </View>
+        ) : null}
+
+        {isViewerPoster && isPosterCounter && !matched ? (
+          <View style={styles.notice}>
+            <Text style={styles.noticeText}>
+              This is your counter-offer. It stays in the list with other offers.
+            </Text>
+          </View>
+        ) : null}
+
+        {currentOffer ? (
+          <>
+            <Text style={styles.sectionLabel}>Current Offer</Text>
+            <View style={styles.card}>
+              <Text style={styles.priceLine}>{formatUsd(getNumericOfferPrice(currentOffer))}</Text>
+              {currentOffer.message?.trim() ? (
+                <Text style={styles.offerMessageLine}>{currentOffer.message.trim()}</Text>
+              ) : (
+                <Text style={styles.mutedSmall}>No message with this offer.</Text>
+              )}
+              <Text style={styles.currentOfferName}>
+                {getOfferUserPreview(currentOffer).name}
+              </Text>
+              <Text style={styles.mutedSmall}>
+                {currentOffer.counterFromPoster
+                  ? 'Your proposed total for the full rental period'
+                  : 'Total they are offering for the full rental period'}
+              </Text>
+              <Text style={styles.timeLine}>Offered {getTimeAgo(currentOffer.timestamp)}</Text>
+              {currentOffer.declined ? (
+                <Text style={styles.currentOfferDeclined}>Declined</Text>
+              ) : null}
+              {canAcceptCurrent ? (
+                <Pressable
+                  onPress={onAccept}
+                  style={({ pressed }) => [
+                    styles.primaryBtn,
+                    styles.currentOfferAcceptBtn,
+                    pressed && styles.primaryBtnPressed,
+                  ]}
+                >
+                  <Text style={styles.primaryBtnText}>Accept Offer</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          </>
+        ) : null}
+
+        <Text style={styles.sectionLabel}>Offer History</Text>
+        {historyOffers.length === 0 ? (
+          <Text style={styles.mutedSmall}>No older offers on this request.</Text>
+        ) : (
+          historyOffers.map((h) => {
+            const preview = getOfferUserPreview(h);
+            const isFocused = h.timestamp === offerTsNum;
+            return (
+              <Pressable
+                key={h.timestamp}
+                disabled={matched}
+                onPress={() =>
+                  router.setParams({ offerTimestamp: String(h.timestamp) })
+                }
+                style={({ pressed }) => [
+                  styles.historyRow,
+                  matched && styles.historyRowLocked,
+                  isFocused && styles.historyRowFocused,
+                  !matched && pressed && styles.historyRowPressed,
+                ]}
+              >
+                <Text style={styles.historyRowName} numberOfLines={1}>
+                  {preview.name}
+                </Text>
+                <Text style={styles.historyRowPrice}>{formatUsd(getNumericOfferPrice(h))}</Text>
+                {h.message?.trim() ? (
+                  <Text style={styles.historyRowMessage} numberOfLines={2}>
+                    {h.message.trim()}
+                  </Text>
+                ) : null}
+                <Text style={styles.historyRowMeta}>
+                  {getTimeAgo(h.timestamp)}
+                  {h.declined ? ' · Declined' : ''}
+                  {isFocused ? ' · Viewing' : ''}
+                </Text>
+              </Pressable>
+            );
+          })
+        )}
 
         <Text style={styles.sectionLabel}>Rental period (your request)</Text>
         <View style={styles.card}>
@@ -248,11 +376,13 @@ export default function OfferDetailScreen() {
           </Text>
         </View>
 
-        {offer.toolDescription?.trim() ? (
+        {(currentOffer?.toolDescription ?? offer?.toolDescription)?.trim() ? (
           <>
             <Text style={styles.sectionLabel}>Tool description</Text>
             <View style={styles.card}>
-              <Text style={styles.bodyMultiline}>{offer.toolDescription.trim()}</Text>
+              <Text style={styles.bodyMultiline}>
+                {(currentOffer?.toolDescription ?? offer?.toolDescription)!.trim()}
+              </Text>
             </View>
           </>
         ) : null}
@@ -271,26 +401,93 @@ export default function OfferDetailScreen() {
           </View>
         ) : null}
         </ScrollView>
-
-        {canAct ? (
-          <View style={[styles.buttonContainer, { paddingBottom: 16 + insets.bottom }]}>
-            <Pressable
-              onPress={onAccept}
-              style={({ pressed }) => [styles.primaryBtn, pressed && styles.primaryBtnPressed]}
-            >
-              <Text style={styles.primaryBtnText}>Accept Offer</Text>
-            </Pressable>
-            <Pressable
-              onPress={onDecline}
-              style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
-            >
-              <Text style={styles.secondaryBtnText}>Decline</Text>
-            </Pressable>
-          </View>
-        ) : null}
-        </View>
       </View>
-    </Pressable>
+
+      {footerShows ? (
+        <View style={[styles.buttonContainer, { paddingBottom: 16 + insets.bottom }]}>
+          <Pressable
+            onPress={openCounterModal}
+            style={({ pressed }) => [
+              styles.counterOfferBtn,
+              pressed && styles.counterOfferBtnPressed,
+            ]}
+          >
+            <Text style={styles.counterOfferBtnText}>Counter Offer</Text>
+          </Pressable>
+          <Pressable
+            onPress={onDecline}
+            style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
+          >
+            <Text style={styles.secondaryBtnText}>Decline</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
+      <Modal
+          visible={counterModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={closeCounterModal}
+        >
+          <Pressable style={styles.counterModalBackdrop} onPress={closeCounterModal}>
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+              style={styles.counterModalKb}
+            >
+              <Pressable
+                style={styles.counterModalCard}
+                onPress={(e) => e.stopPropagation()}
+              >
+                <Text style={styles.counterModalTitle}>Counter offer</Text>
+                <Text style={styles.counterModalLabel}>New total price</Text>
+                <View style={styles.counterModalMoneyRow}>
+                  <Text style={styles.counterModalDollar}>$</Text>
+                  <TextInput
+                    placeholder="0"
+                    placeholderTextColor="#888"
+                    value={counterPriceDraft}
+                    onChangeText={(t) => setCounterPriceDraft(sanitizeMoneyDigits(t))}
+                    style={styles.counterModalMoneyInput}
+                    keyboardType="decimal-pad"
+                    {...numberPadAccessoryProps()}
+                    returnKeyType="done"
+                    blurOnSubmit
+                    onSubmitEditing={() => Keyboard.dismiss()}
+                  />
+                </View>
+                <Text style={styles.counterModalHelper}>
+                  Total you are proposing for the full rental period
+                </Text>
+                <Text style={styles.counterModalLabel}>Message (optional)</Text>
+                <TextInput
+                  value={counterMessageDraft}
+                  onChangeText={setCounterMessageDraft}
+                  placeholder="Explain your counter-offer"
+                  placeholderTextColor="#888"
+                  style={styles.counterModalMessageInput}
+                  multiline
+                  maxLength={500}
+                />
+                <Pressable
+                  onPress={submitCounter}
+                  style={({ pressed }) => [
+                    styles.primaryBtn,
+                    pressed && styles.primaryBtnPressed,
+                  ]}
+                >
+                  <Text style={styles.primaryBtnText}>Submit counter-offer</Text>
+                </Pressable>
+                <Pressable
+                  onPress={closeCounterModal}
+                  style={({ pressed }) => [styles.textBtn, pressed && styles.secondaryBtnPressed]}
+                >
+                  <Text style={styles.textBtnLabel}>Cancel</Text>
+                </Pressable>
+              </Pressable>
+            </KeyboardAvoidingView>
+          </Pressable>
+        </Modal>
+    </View>
   );
 }
 
@@ -298,9 +495,6 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: '#F2F2F7',
-  },
-  root: {
-    flex: 1,
   },
   centered: {
     justifyContent: 'center',
@@ -334,13 +528,6 @@ const styles = StyleSheet.create({
     color: '#6D6D72',
     lineHeight: 20,
   },
-  scrollFlex: {
-    flex: 1,
-  },
-  scrollContentContainer: {
-    padding: 16,
-    flexGrow: 1,
-  },
   sectionLabel: {
     fontSize: 13,
     fontWeight: '700',
@@ -350,18 +537,62 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginTop: 4,
   },
-  userCard: {
+  currentOfferName: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111',
+    marginTop: 4,
+    marginBottom: 6,
+  },
+  currentOfferAcceptBtn: {
+    marginTop: 16,
+  },
+  currentOfferDeclined: {
+    marginTop: 8,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#C62828',
+  },
+  historyRow: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    padding: 16,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E5E5EA',
-    marginBottom: 18,
+    alignSelf: 'stretch',
   },
-  profileHint: {
+  historyRowFocused: {
+    borderColor: ui.primary,
+    backgroundColor: '#F8FAFF',
+  },
+  historyRowLocked: {
+    opacity: 0.88,
+  },
+  historyRowPressed: {
+    opacity: 0.92,
+  },
+  historyRowName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111',
+    marginBottom: 4,
+  },
+  historyRowPrice: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+  },
+  historyRowMessage: {
+    fontSize: 14,
+    color: '#555',
+    lineHeight: 20,
+    marginBottom: 6,
+  },
+  historyRowMeta: {
     fontSize: 12,
     color: '#8E8E93',
-    marginTop: 10,
   },
   card: {
     backgroundColor: '#FFFFFF',
@@ -376,6 +607,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#000',
     marginBottom: 6,
+  },
+  offerMessageLine: {
+    fontSize: 15,
+    color: '#333',
+    lineHeight: 22,
+    marginBottom: 10,
   },
   mutedSmall: {
     fontSize: 14,
@@ -411,6 +648,21 @@ const styles = StyleSheet.create({
     color: '#5D4037',
     lineHeight: 22,
   },
+  dealInProgressNotice: {
+    backgroundColor: '#E8F5E9',
+    borderColor: '#A5D6A7',
+  },
+  dealInProgressTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#1B5E20',
+    marginBottom: 6,
+  },
+  dealInProgressBody: {
+    fontSize: 15,
+    color: '#2E7D32',
+    lineHeight: 22,
+  },
   buttonContainer: {
     position: 'absolute',
     bottom: 0,
@@ -421,6 +673,22 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderColor: '#eee',
     gap: 10,
+  },
+  counterOfferBtn: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: ui.radiusButton,
+    paddingVertical: ui.padButtonV,
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: ui.primary,
+  },
+  counterOfferBtnPressed: {
+    opacity: ui.pressOpacity,
+  },
+  counterOfferBtnText: {
+    color: ui.primary,
+    fontSize: 17,
+    fontWeight: '600',
   },
   primaryBtn: {
     backgroundColor: ui.primary,
@@ -466,5 +734,74 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '600',
     color: ui.primary,
+  },
+  counterModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  counterModalKb: {
+    width: '100%',
+  },
+  counterModalCard: {
+    backgroundColor: '#FFF',
+    borderRadius: 14,
+    padding: 20,
+  },
+  counterModalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111',
+    marginBottom: 16,
+  },
+  counterModalLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  counterModalMoneyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#CCC',
+    borderRadius: 10,
+    backgroundColor: '#F8F8F8',
+    paddingLeft: 12,
+    marginBottom: 8,
+  },
+  counterModalDollar: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111',
+    marginRight: 4,
+  },
+  counterModalMoneyInput: {
+    flex: 1,
+    paddingVertical: 14,
+    paddingRight: 12,
+    fontSize: 20,
+    color: '#000',
+  },
+  counterModalHelper: {
+    fontSize: 13,
+    color: '#666',
+    lineHeight: 18,
+    marginBottom: 16,
+  },
+  counterModalMessageInput: {
+    minHeight: 88,
+    maxHeight: 140,
+    borderWidth: 1,
+    borderColor: '#DDD',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: '#000',
+    backgroundColor: '#FAFAFA',
+    textAlignVertical: 'top',
+    marginBottom: 18,
   },
 });

@@ -10,13 +10,20 @@ import { UserActivityDot } from './UserActivityDot';
 const AVATAR = 30;
 const AVATAR_ICON = Math.round(AVATAR * 0.42);
 
-type Props = {
+// TODO: Fix accidental navigation when tapping avatar/name inside offer detail
+// Likely caused by parent Pressable capturing touches
+// Revisit after current feature work
+
+type Common = {
   name: string;
   rating: number;
   avatar: string;
   lastActive: number | null | undefined;
-  onPress: () => void;
 };
+
+export type OfferOffererRowProps =
+  | (Common & { isClickable: false })
+  | (Common & { isClickable?: true; onPress: () => void });
 
 function OfferAvatar({ avatar }: { avatar: string }) {
   const parsed = parseProfileAvatar(avatar);
@@ -55,30 +62,53 @@ function OfferAvatar({ avatar }: { avatar: string }) {
   );
 }
 
-/** Top-of-card identity: avatar, status dot, name, rating — one tappable row. */
-export function OfferOffererRow({
-  name,
-  rating,
-  avatar,
-  lastActive,
-  onPress,
-}: Props) {
+/** Top-of-card identity: avatar, status dot, name, rating — tappable when `isClickable` (default). */
+export function OfferOffererRow(props: OfferOffererRowProps) {
+  const { name, rating, avatar, lastActive } = props;
+  const isClickable = props.isClickable !== false;
+  console.log('isClickable:', isClickable);
+
+  if (!isClickable) {
+    return (
+      <View
+        style={styles.row}
+        accessibilityRole="none"
+        accessibilityLabel={`${name}, rating ${rating.toFixed(1)}`}
+      >
+        <OfferAvatar avatar={avatar} />
+        <View style={styles.identityLine}>
+          <UserActivityDot lastActive={lastActive} style={styles.statusDotSpacing} />
+          <Text style={styles.name} numberOfLines={1}>
+            {name}
+          </Text>
+          <Text style={styles.rating} numberOfLines={1}>
+            ⭐ {rating.toFixed(1)}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
+  const { onPress } = props;
+
   return (
     <Pressable
       onPress={onPress}
-      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+      style={({ pressed }) => [{ alignSelf: 'stretch' }, pressed && styles.rowPressed]}
       accessibilityRole="button"
       accessibilityLabel={`${name}, rating ${rating.toFixed(1)}, open profile`}
     >
-      <OfferAvatar avatar={avatar} />
-      <View style={styles.identityLine}>
-        <UserActivityDot lastActive={lastActive} style={styles.statusDotSpacing} />
-        <Text style={styles.name} numberOfLines={1}>
-          {name}
-        </Text>
-        <Text style={styles.rating} numberOfLines={1}>
-          ⭐ {rating.toFixed(1)}
-        </Text>
+      <View style={styles.row}>
+        <OfferAvatar avatar={avatar} />
+        <View style={styles.identityLine}>
+          <UserActivityDot lastActive={lastActive} style={styles.statusDotSpacing} />
+          <Text style={styles.name} numberOfLines={1}>
+            {name}
+          </Text>
+          <Text style={styles.rating} numberOfLines={1}>
+            ⭐ {rating.toFixed(1)}
+          </Text>
+        </View>
       </View>
     </Pressable>
   );

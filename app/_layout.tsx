@@ -10,6 +10,9 @@ import 'react-native-reanimated';
 import { NumberPadKeyboardAccessory } from './components/NumberPadKeyboardAccessory';
 import { registerAndStorePushTokenAsync } from './lib/notifications';
 import { useNotificationsStore } from './store/notificationsStore';
+import { seedTestData as seedOffersTestData } from './store/offersStore';
+import { seedTestData as seedListingsTestData } from './store/listingsStore';
+import { seedTestData as seedRequestsTestData } from './store/requestsStore';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export const unstable_settings = {
@@ -27,6 +30,13 @@ export default function RootLayout() {
     void useNotificationsStore.getState().hydrate();
   }, []);
 
+  useEffect(() => {
+    if (!__DEV__) return;
+    seedRequestsTestData();
+    seedOffersTestData();
+    seedListingsTestData();
+  }, []);
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
@@ -40,6 +50,7 @@ export default function RootLayout() {
               <Stack.Screen name="list-my-tool" />
               <Stack.Screen name="rental-agreement" />
               <Stack.Screen name="request-details" />
+              <Stack.Screen name="listing-detail" />
               <Stack.Screen name="offer-detail" />
               <Stack.Screen name="match-summary" />
               <Stack.Screen name="chat/[id]" />

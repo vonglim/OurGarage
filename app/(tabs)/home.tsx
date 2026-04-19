@@ -1,6 +1,6 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   Keyboard,
   Pressable,
@@ -20,7 +20,7 @@ import { formatUsd, getNumericTotalPrice } from '../lib/money';
 import { milesFromViewerToRequest } from '../lib/requestDistance';
 import { getOnboardingTermsAccepted } from '../store/agreementsStore';
 import { touchLastActive } from '../store/profileStore';
-import { getRequests } from '../store/requestsStore';
+import { useRequestsStore } from '../store/requestsStore';
 
 const MAX_RECENT = 5;
 
@@ -48,14 +48,22 @@ export default function Home() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const fabBottomReserve = useMainTabFabBottomReserve();
-  const [recent, setRecent] = useState<ReturnType<typeof getRequests>>([]);
+  const [searchQuery, setSearchQuery] = useState('');
   /** Once terms are accepted, skip re-reading AsyncStorage on every tab focus. */
   const onboardingOkRef = useRef<boolean | null>(null);
+
+  const requests = useRequestsStore((s) => s.requests);
+  const recent = useMemo(
+    () =>
+      [...requests]
+        .sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0))
+        .slice(0, MAX_RECENT),
+    [requests]
+  );
 
   useFocusEffect(
     useCallback(() => {
       touchLastActive();
-      setRecent(getRequests().slice(0, MAX_RECENT));
     }, [])
   );
 
@@ -78,6 +86,17 @@ export default function Home() {
     }, [router])
   );
 
+  const submitHomeSearch = useCallback(() => {
+    Keyboard.dismiss();
+    router.push({
+      pathname: '/browse',
+      params: {
+        query: searchQuery,
+        mode: 'tools',
+      },
+    });
+  }, [router, searchQuery]);
+
   return (
     <KeyboardDismissScreen>
       <View style={styles.screenInner}>
@@ -95,14 +114,16 @@ export default function Home() {
 
         <View style={styles.focusSection}>
           <TextInput
+            value={searchQuery}
+            onChangeText={setSearchQuery}
             placeholder="What tool do you need?"
             placeholderTextColor="#8E8E93"
             style={styles.searchInput}
             autoCapitalize="sentences"
             autoCorrect
-            returnKeyType="done"
+            returnKeyType="search"
             blurOnSubmit
-            onSubmitEditing={() => Keyboard.dismiss()}
+            onSubmitEditing={submitHomeSearch}
           />
           <Pressable
             style={({ pressed }) => [

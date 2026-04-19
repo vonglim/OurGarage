@@ -32,7 +32,11 @@ const whenOptions = ['Today', 'This Weekend', 'Flexible'];
 
 export default function RequestAToolScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ editTimestamp?: string | string[] }>();
+  const params = useLocalSearchParams<{
+    editTimestamp?: string | string[];
+    prefillToolName?: string | string[];
+    prefillPrice?: string | string[];
+  }>();
   const insets = useSafeAreaInsets();
 
   const [toolName, setToolName] = useState('');
@@ -107,17 +111,36 @@ export default function RequestAToolScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      const raw = params.editTimestamp;
-      const editTsStr = Array.isArray(raw) ? raw[0] : raw;
-      if (editTsStr == null || editTsStr === '') return;
-      const ts = Number(editTsStr);
-      if (!Number.isFinite(ts)) return;
-      const req = getRequestByTimestamp(ts);
-      if (req && !req.matched) {
-        applyEditFormFromRequest(req);
+      const rawEdit = params.editTimestamp;
+      const editTsStr = Array.isArray(rawEdit) ? rawEdit[0] : rawEdit;
+      if (editTsStr != null && editTsStr !== '') {
+        const ts = Number(editTsStr);
+        if (Number.isFinite(ts)) {
+          const req = getRequestByTimestamp(ts);
+          if (req && !req.matched) {
+            applyEditFormFromRequest(req);
+          }
+        }
+        router.setParams({ editTimestamp: '' });
+        return;
       }
-      router.setParams({ editTimestamp: '' });
-    }, [params.editTimestamp, router, applyEditFormFromRequest])
+
+      const rawName = params.prefillToolName;
+      const rawPrice = params.prefillPrice;
+      const nameStr = Array.isArray(rawName) ? rawName[0] : rawName;
+      const priceStr = Array.isArray(rawPrice) ? rawPrice[0] : rawPrice;
+      if (nameStr?.trim() || priceStr?.trim()) {
+        if (nameStr?.trim()) setToolName(nameStr.trim());
+        if (priceStr?.trim()) setTotalPriceInput(sanitizeMoneyDigits(priceStr));
+        router.setParams({ prefillToolName: '', prefillPrice: '' });
+      }
+    }, [
+      params.editTimestamp,
+      params.prefillToolName,
+      params.prefillPrice,
+      router,
+      applyEditFormFromRequest,
+    ])
   );
 
   return (

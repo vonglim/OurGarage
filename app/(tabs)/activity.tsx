@@ -1,7 +1,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -11,10 +11,11 @@ import {
   RequestListCardInner,
   requestListCardSurface,
 } from '../components/RequestListCardInner';
-import { getOtherPartyDisplayName } from '../lib/rentalParty';
+import { getOtherPartyRentalPreview } from '../lib/rentalParty';
 import { removeOffersForRequest, useOffersStore } from '../store/offersStore';
 import { openChatForRequest } from '../lib/openRequestChat';
 import { getEffectiveRentalStatus, getRequests, removeRequest } from '../store/requestsStore';
+import { useTotalUnreadChatCount } from '../store/chatStore';
 import { ui } from '@/constants/appUi';
 
 type Segment = 'requests' | 'active' | 'tools';
@@ -22,6 +23,21 @@ type Segment = 'requests' | 'active' | 'tools';
 function formatOffersReceived(n: number): string {
   if (n === 1) return '1 offer received';
   return `${n} offers received`;
+}
+
+function formatRentalStart(ts: number): string {
+  try {
+    return new Date(ts).toLocaleString(undefined, {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  } catch {
+    return '—';
+  }
 }
 
 function getTimeAgo(timestamp: number): string {
@@ -40,11 +56,22 @@ function getTimeAgo(timestamp: number): string {
 export default function ActivityScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const offers = useOffersStore((state) => state.offers);
+  const unreadCount = useTotalUnreadChatCount();
   const [segment, setSegment] = useState<Segment>('requests');
   const [requests, setRequests] = useState<ReturnType<typeof getRequests>>([]);
   const swipeRefs = useRef(new Map<number, Swipeable>());
   const fabBottomReserve = useMainTabFabBottomReserve();
+
+  const activeRentals = useMemo(
+    () =>
+      requests.filter(
+        (r) => r.timestamp != null && getEffectiveRentalStatus(r) === 'active',
+      ),
+    [requests],
+  );
+  const singleActiveRental = activeRentals.length === 1;
 
   useFocusEffect(
     useCallback(() => {
@@ -52,11 +79,41 @@ export default function ActivityScreen() {
     }, [])
   );
 
+  const goToChats = useCallback(() => {
+    router.push('/(tabs)/chats');
+  }, [router]);
+
   return (
     <KeyboardDismissScreen style={styles.screen}>
       <View style={styles.screenInner}>
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-        <Text style={styles.screenTitle}>Activity</Text>
+        <View style={styles.headerTopRow}>
+          <Text style={styles.screenTitle} numberOfLines={1}>
+            My Activity
+          </Text>
+          <Pressable
+            onPress={goToChats}
+            style={({ pressed }) => [
+              styles.messagesEntry,
+              pressed && styles.messagesEntryPressed,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={
+              unreadCount > 0
+                ? `Messages, ${unreadCount} unread`
+                : 'Messages'
+            }
+          >
+            <Text style={styles.messagesEntryLabel}>Messages</Text>
+            {unreadCount > 0 ? (
+              <View style={styles.messagesUnreadPill}>
+                <Text style={styles.messagesUnreadPillText}>
+                  {unreadCount > 99 ? '99+' : String(unreadCount)}
+                </Text>
+              </View>
+            ) : null}
+          </Pressable>
+        </View>
         <View style={styles.toggle}>
           <Pressable
             onPress={() => setSegment('requests')}
@@ -106,44 +163,93 @@ export default function ActivityScreen() {
         contentContainerStyle={[
           styles.scrollContent,
           { paddingBottom: fabBottomReserve },
+          segment === 'active' && activeRentals.length > 0
+            ? {
+                flexGrow: 1,
+                minHeight: windowHeight - insets.top - 168,
+              }
+            : null,
         ]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
         {segment === 'active' ? (
-          <View style={styles.section}>
-            {requests.filter((r) => getEffectiveRentalStatus(r) === 'active').length === 0 ? (
-              <Text style={styles.emptyText}>
+          <View
+            style={[
+              styles.section,
+              styles.activeSection,
+              activeRentals.length > 0 && styles.activeSectionFill,
+            ]}
+          >
+            {activeRentals.length === 0 ? (
+              <Text style={[styles.emptyText, styles.activeEmptyCentered]}>
                 No active rentals. Start a rental from a matched request after handoff confirmation.
               </Text>
             ) : (
-              requests
-                .filter(
-                  (r) =>
-                    r.timestamp != null && getEffectiveRentalStatus(r) === 'active'
-                )
-                .map((req) => {
+              activeRentals.map((req) => {
                   const ts = req.timestamp as number;
                   const title = String(req.toolName ?? '').trim() || 'Untitled';
-                  const other = getOtherPartyDisplayName({
+                  const party = getOtherPartyRentalPreview({
                     timestamp: ts,
                     posterUserId: req.posterUserId,
                     matched: req.matched,
                     acceptedOfferTimestamp: req.acceptedOfferTimestamp,
                   });
+                  const rentalStart =
+                    typeof req.rentalStart === 'number' && Number.isFinite(req.rentalStart)
+                      ? req.rentalStart
+                      : null;
                   const rowKey = ts;
                   return (
-                    <View key={rowKey} style={styles.activeCard}>
-                      <Text style={styles.activeTitle} numberOfLines={2}>
-                        {title}
-                      </Text>
-                      <Text style={styles.activeMeta} numberOfLines={1}>
-                        With {other}
-                      </Text>
-                      <View style={styles.activeActions}>
+                    <View
+                      key={rowKey}
+                      style={[
+                        styles.activeCard,
+                        singleActiveRental && styles.activeCardSingle,
+                      ]}
+                    >
+                      <View style={styles.activeCardInfo}>
+                        <Text style={styles.activeToolName} numberOfLines={2}>
+                          {title}
+                        </Text>
+
+                        <View style={styles.activeBlockSpacer} />
+
+                        <Text style={styles.activeWithLine} numberOfLines={2}>
+                          With: {party?.name ?? '—'} ⭐{' '}
+                          {party != null ? party.rating.toFixed(1) : '—'}
+                        </Text>
+
+                        <View style={styles.activeBlockSpacer} />
+
+                        <Text style={styles.activeStartLabel}>Start time</Text>
+                        <Text style={styles.activeStartValue}>
+                          {rentalStart != null ? formatRentalStart(rentalStart) : '—'}
+                        </Text>
+                        {rentalStart != null ? (
+                          <Text style={styles.activeStartedAgo}>
+                            Started {getTimeAgo(rentalStart)}
+                          </Text>
+                        ) : null}
+
+                        <View style={styles.activeBlockSpacer} />
+
+                        <View style={styles.activeStatusRow}>
+                          <View style={styles.activeStatusDot} />
+                          <Text style={styles.activeStatusLabel}>Active</Text>
+                        </View>
+                      </View>
+
+                      {singleActiveRental ? (
+                        <View style={styles.activeActionsPush} />
+                      ) : (
+                        <View style={styles.activeBetweenCardSpacer} />
+                      )}
+
+                      <View style={styles.activeActionsColumn}>
                         <Pressable
                           style={({ pressed }) => [
-                            styles.activeBtnOutline,
+                            styles.activeBtnPrimaryLarge,
                             pressed && styles.activeBtnPressed,
                           ]}
                           onPress={() => {
@@ -151,11 +257,12 @@ export default function ActivityScreen() {
                             openChatForRequest(router, ts);
                           }}
                         >
-                          <Text style={styles.activeBtnOutlineText}>Message</Text>
+                          <Text style={styles.activeBtnPrimaryLargeText}>Message</Text>
                         </Pressable>
+                        <View style={styles.activeBtnStackGap} />
                         <Pressable
                           style={({ pressed }) => [
-                            styles.activeBtnPrimary,
+                            styles.activeBtnPrimaryLarge,
                             pressed && styles.activeBtnPressed,
                           ]}
                           onPress={() => {
@@ -166,7 +273,7 @@ export default function ActivityScreen() {
                             });
                           }}
                         >
-                          <Text style={styles.activeBtnPrimaryText}>End Rental</Text>
+                          <Text style={styles.activeBtnPrimaryLargeText}>End Rental</Text>
                         </Pressable>
                       </View>
                     </View>
@@ -311,12 +418,55 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#E5E5EA',
   },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 14,
+  },
   screenTitle: {
+    flex: 1,
     fontSize: 28,
     fontWeight: '700',
     color: '#000',
     letterSpacing: -0.3,
-    marginBottom: 14,
+    minWidth: 0,
+  },
+  messagesEntry: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 0,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E5E5EA',
+    gap: 8,
+  },
+  messagesEntryPressed: {
+    opacity: ui.pressOpacity,
+    backgroundColor: '#F7F7F9',
+  },
+  messagesEntryLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: ui.primary,
+  },
+  messagesUnreadPill: {
+    minWidth: 22,
+    height: 22,
+    paddingHorizontal: 7,
+    borderRadius: 11,
+    backgroundColor: '#FF3B30',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  messagesUnreadPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   toggle: {
     flexDirection: 'row',
@@ -358,6 +508,18 @@ const styles = StyleSheet.create({
   },
   section: {
     paddingBottom: 8,
+  },
+  activeSection: {
+    alignItems: 'center',
+    width: '100%',
+  },
+  activeSectionFill: {
+    flexGrow: 1,
+  },
+  activeEmptyCentered: {
+    textAlign: 'center',
+    alignSelf: 'center',
+    maxWidth: 320,
   },
   emptyText: {
     fontSize: 15,
@@ -415,55 +577,113 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   activeCard: {
+    width: '100%',
+    alignSelf: 'stretch',
+    alignItems: 'stretch',
     backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 14,
+    borderRadius: 16,
+    paddingVertical: 22,
+    paddingHorizontal: 20,
+    marginBottom: 20,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E5E5EA',
   },
-  activeTitle: {
-    fontSize: 17,
+  activeCardSingle: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  activeCardInfo: {
+    alignItems: 'center',
+  },
+  activeToolName: {
+    fontSize: 20,
     fontWeight: '700',
     color: '#000',
-    marginBottom: 6,
+    textAlign: 'center',
+    alignSelf: 'stretch',
   },
-  activeMeta: {
+  activeBlockSpacer: {
+    height: 16,
+  },
+  activeWithLine: {
+    fontSize: 15,
+    color: '#333',
+    textAlign: 'center',
+    alignSelf: 'stretch',
+    lineHeight: 22,
+  },
+  activeStartLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#6D6D72',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 4,
+    textAlign: 'center',
+    alignSelf: 'stretch',
+  },
+  activeStartValue: {
+    fontSize: 15,
+    color: '#111',
+    textAlign: 'center',
+    alignSelf: 'stretch',
+    lineHeight: 22,
+  },
+  activeStartedAgo: {
+    marginTop: 6,
     fontSize: 14,
     color: ui.textSubtle,
-    marginBottom: 14,
+    textAlign: 'center',
+    alignSelf: 'stretch',
+    lineHeight: 20,
   },
-  activeActions: {
+  activeStatusRow: {
     flexDirection: 'row',
-    gap: 10,
-  },
-  activeBtnOutline: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: ui.radiusButton,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: ui.primary,
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    gap: 8,
   },
-  activeBtnPrimary: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: ui.radiusButton,
+  activeStatusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#2E7D32',
+  },
+  activeStatusLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1B5E20',
+  },
+  activeActionsPush: {
+    flexGrow: 1,
+    flexShrink: 0,
+    minHeight: 48,
+  },
+  activeBetweenCardSpacer: {
+    height: 24,
+  },
+  activeActionsColumn: {
+    width: '100%',
+    alignSelf: 'stretch',
+  },
+  activeBtnStackGap: {
+    height: 14,
+  },
+  activeBtnPrimaryLarge: {
+    alignSelf: 'stretch',
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    borderRadius: 14,
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: ui.primary,
   },
   activeBtnPressed: {
     opacity: ui.pressOpacity,
   },
-  activeBtnOutlineText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: ui.primary,
-  },
-  activeBtnPrimaryText: {
-    fontSize: 15,
-    fontWeight: '600',
+  activeBtnPrimaryLargeText: {
+    fontSize: 17,
+    fontWeight: '700',
     color: '#FFFFFF',
   },
 });

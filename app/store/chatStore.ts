@@ -390,3 +390,11 @@ export function useChatStore<T>(selector: (state: ChatStoreState) => T): T {
 export function useChats(): Chat[] {
   return useChatStore((state) => state.chats);
 }
+
+/** Sum of unread incoming messages for the current user across all chats; updates when chats change. */
+export function useTotalUnreadChatCount(): number {
+  const me = getProfile().userId;
+  return useChatStore((state) =>
+    state.chats.reduce((sum, chat) => sum + getUnreadCountForUser(chat, me), 0)
+  );
+}

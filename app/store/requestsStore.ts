@@ -1,3 +1,5 @@
+import { create } from 'zustand';
+
 import type { HowKey } from '../lib/deliveryFormat';
 import type { DurationType } from '../lib/durationFormat';
 import { needsDeliveryFee } from '../lib/deliveryFormat';
@@ -6,7 +8,17 @@ import { getProfile, touchLastActive } from './profileStore';
 
 export type RentalStatus = 'pending' | 'matched' | 'active' | 'completed';
 
-let requests: any[] = [];
+type RequestsStoreState = {
+  requests: any[];
+};
+
+export const useRequestsStore = create<RequestsStoreState>(() => ({
+  requests: [],
+}));
+
+function setRequests(next: any[]): void {
+  useRequestsStore.setState({ requests: next });
+}
 
 /** Derive lifecycle status; supports legacy rows before `rentalStatus` existed. */
 export function getEffectiveRentalStatus(req: {
@@ -23,7 +35,7 @@ export function getEffectiveRentalStatus(req: {
 }
 
 export function getRequestByTimestamp(timestamp: number) {
-  return requests.find((r) => r.timestamp === timestamp);
+  return useRequestsStore.getState().requests.find((r) => r.timestamp === timestamp);
 }
 
 export function requestAcceptsOffers(timestamp: number): boolean {
@@ -38,7 +50,9 @@ export function acceptOfferForRequest(
   acceptedPrice: number
 ) {
   const before = getRequestByTimestamp(requestTimestamp);
-  requests = requests.map((r) => {
+  if (!before || before.matched === true) return;
+
+  const requests = useRequestsStore.getState().requests.map((r) => {
     if (r.timestamp !== requestTimestamp || r.matched) return r;
     const price = Number.isFinite(acceptedPrice) ? acceptedPrice : 0;
     return {
@@ -50,6 +64,8 @@ export function acceptOfferForRequest(
       acceptedPrice: price,
     };
   });
+  setRequests(requests);
+
   const after = getRequestByTimestamp(requestTimestamp);
   if (before && !before.matched && after?.matched) {
     addNotification({
@@ -79,11 +95,13 @@ export function showMarkRentalComplete(req: {
 
 export function markRequestRentalComplete(requestTimestamp: number): void {
   const before = getRequestByTimestamp(requestTimestamp);
-  requests = requests.map((r) => {
+  const next = useRequestsStore.getState().requests.map((r) => {
     if (r.timestamp !== requestTimestamp || !r.matched) return r;
     if (getEffectiveRentalStatus(r) !== 'active') return r;
     return { ...r, fulfilled: true, rentalStatus: 'completed' satisfies RentalStatus };
   });
+  setRequests(next);
+
   const after = getRequestByTimestamp(requestTimestamp);
   if (
     before?.matched &&
@@ -102,7 +120,7 @@ export function markRequestRentalComplete(requestTimestamp: number): void {
 export function confirmRentalHandoff(requestTimestamp: number): void {
   const before = getRequestByTimestamp(requestTimestamp);
   const now = Date.now();
-  requests = requests.map((r) => {
+  const next = useRequestsStore.getState().requests.map((r) => {
     if (r.timestamp !== requestTimestamp || !r.matched) return r;
     if (r.rentalStart != null) return r;
     return {
@@ -112,6 +130,8 @@ export function confirmRentalHandoff(requestTimestamp: number): void {
       rentalStatus: 'active' satisfies RentalStatus,
     };
   });
+  setRequests(next);
+
   const after = getRequestByTimestamp(requestTimestamp);
   if (before?.rentalStart == null && after?.rentalStart != null) {
     addNotification({
@@ -127,22 +147,91 @@ export function addRequest(request: any) {
   delete copy.duration;
   delete copy.budget;
   const posterUserId = getProfile().userId;
-  requests.push({
+  const row = {
     ...copy,
     matched: false,
     timestamp: Date.now(),
     posterUserId,
     rentalStatus: 'pending' satisfies RentalStatus,
-  });
+  };
+  useRequestsStore.setState((s) => ({
+    requests: [...s.requests, row],
+  }));
   touchLastActive();
 }
 
-export function getRequests() {
-  return requests.sort((a, b) => b.timestamp - a.timestamp);
+/** Newest first; does not mutate store order. */
+export function getRequests(): any[] {
+  return [...useRequestsStore.getState().requests].sort(
+    (a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0)
+  );
 }
 
 export function removeRequest(timestamp: number) {
-  requests = requests.filter((r) => r.timestamp !== timestamp);
+  useRequestsStore.setState((s) => ({
+    requests: s.requests.filter((r) => r.timestamp !== timestamp),
+  }));
+}
+
+const DEV_SEED_TOOL_NAMES = [
+  'Drill',
+  'Circular Saw',
+  'Ladder',
+  'Impact Driver',
+  'Shop Vac',
+  'Pressure Washer',
+  'Tile Saw',
+  'Hammer Drill',
+  'Miter Saw',
+  'Jackhammer',
+] as const;
+
+/** Dev-only: replaces prior dev-seeded rows, then fills up to 10 mock requests. */
+export function seedTestData(): void {
+  if (!__DEV__) return;
+
+  const now = Date.now();
+  const expiresAt = now + 1000 * 60 * 60 * 24;
+  const posterUserId = getProfile().userId;
+
+  const kept = useRequestsStore.getState().requests.filter((r) => !r.devSeedId);
+  useRequestsStore.setState({ requests: kept });
+
+  const current = useRequestsStore.getState().requests;
+  if (current.length >= 10) return;
+
+  const need = 10 - current.length;
+  const appended: any[] = [];
+
+  for (let i = 0; i < need; i++) {
+    const id = `req-seed-${now}-${i}`;
+    const timestamp = now - i * 97_654 - Math.floor(Math.random() * 10_000);
+    appended.push({
+      id,
+      toolName: DEV_SEED_TOOL_NAMES[i % DEV_SEED_TOOL_NAMES.length],
+      description: 'Need for project',
+      createdAt: now - i * 30_000,
+      status: 'active',
+      expiresAt,
+      when: ['Today', 'This Weekend', 'Flexible'][i % 3] as string,
+      how: (i % 2 === 0 ? 'pickup_nearby' : 'delivery_only') as HowKey,
+      pickupRadiusMiles: 10,
+      durationType: 'multiDay' as DurationType,
+      durationValue: 2,
+      totalPrice: 20 + (i % 6) * 5,
+      deliveryFee: null,
+      location: `9410${i % 10} USA`,
+      requestLat: null,
+      requestLng: null,
+      matched: false,
+      fulfilled: false,
+      timestamp,
+      posterUserId,
+      rentalStatus: 'pending' satisfies RentalStatus,
+      devSeedId: id,
+    });
+  }
+  useRequestsStore.setState((s) => ({ requests: [...s.requests, ...appended] }));
 }
 
 export function updateRequest(
@@ -161,14 +250,15 @@ export function updateRequest(
     requestLng: number | null;
   }
 ) {
-  requests = requests.map((r) => {
+  const next = useRequestsStore.getState().requests.map((r) => {
     if (r.timestamp !== timestamp) return r;
-    const next = { ...r, ...patch };
-    delete next.duration;
-    delete next.budget;
+    const nextRow = { ...r, ...patch };
+    delete nextRow.duration;
+    delete nextRow.budget;
     if (!needsDeliveryFee(patch.how)) {
-      next.deliveryFee = null;
+      nextRow.deliveryFee = null;
     }
-    return next;
+    return nextRow;
   });
+  setRequests(next);
 }

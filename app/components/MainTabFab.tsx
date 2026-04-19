@@ -26,7 +26,7 @@ export function useMainTabFabBottomReserve(): number {
 }
 
 /**
- * Floating + button with “Request a Tool” / “List My Tool”. Render only on Home, Browse, and Activity.
+ * Floating + button with “Request a Tool” / “List My Tool”. Render on Home, Browse, and Activity.
  */
 export function MainTabFab() {
   const router = useRouter();

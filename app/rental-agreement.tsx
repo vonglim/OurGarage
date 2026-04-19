@@ -12,7 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
 import { ensureChatForAcceptedOffer } from './store/chatStore';
-import { acceptOfferForRequest } from './store/requestsStore';
+import { acceptOfferForRequest, getRequestByTimestamp } from './store/requestsStore';
 import { ui } from '@/constants/appUi';
 
 const POINTS = [
@@ -54,6 +54,14 @@ export default function RentalAgreementScreen() {
 
   const onAgree = async () => {
     if (parsed == null) return;
+    const existing = getRequestByTimestamp(parsed.requestTs);
+    if (existing?.matched === true) {
+      router.replace({
+        pathname: '/match-summary',
+        params: { requestId: String(parsed.requestTs) },
+      });
+      return;
+    }
     setBusy(true);
     try {
       acceptOfferForRequest(parsed.requestTs, parsed.offerTs, parsed.price);

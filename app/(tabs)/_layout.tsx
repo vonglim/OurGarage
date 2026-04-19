@@ -26,10 +26,10 @@ export default function TabLayout() {
       <Tabs.Screen
         name="browse"
         options={{
-          title: 'Local Requests',
+          title: 'Browse',
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons
-              name={focused ? 'map' : 'map-outline'}
+              name={focused ? 'search' : 'search-outline'}
               size={size}
               color={color}
             />
@@ -39,7 +39,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="activity"
         options={{
-          title: 'Activity',
+          title: 'My Activity',
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons
               name={focused ? 'layers' : 'layers-outline'}
@@ -53,13 +53,7 @@ export default function TabLayout() {
         name="chats"
         options={{
           title: 'Messages',
-          tabBarIcon: ({ color, size, focused }) => (
-            <Ionicons
-              name={focused ? 'chatbubbles' : 'chatbubbles-outline'}
-              size={size}
-              color={color}
-            />
-          ),
+          href: null,
         }}
       />
       <Tabs.Screen
