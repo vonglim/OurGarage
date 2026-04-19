@@ -58,10 +58,10 @@ export function RequestMetaLines({ req, detailStyle, variant = 'default' }: Prop
 
   return (
     <>
-      <Text style={secondaryStyle}>Duration: {formatDurationDisplay(req)}</Text>
       <Text style={secondaryStyle}>
         Total for entire duration: {total != null ? formatUsd(total) : '—'}
       </Text>
+      <Text style={secondaryStyle}>Duration: {formatDurationDisplay(req)}</Text>
       <Text style={secondaryStyle}>Delivery: {formatHowDisplay(req)}</Text>
       {needsDeliveryFee(req.how) && (
         <Text style={secondaryStyle}>Delivery fee you can pay: {feeDisplay}</Text>

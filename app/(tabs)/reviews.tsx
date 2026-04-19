@@ -80,7 +80,7 @@ const MOCK_REVIEWS: MockReviewSeed[] = [
     initials: 'J',
     avatarColor: '#5C6BC0',
     rating: 5,
-    body: 'Great experience—tool was exactly as described and pickup was easy.',
+    body: 'Great experience—item was exactly as described and pickup was easy.',
     createdAt: MOCK_TIME_BASE - 2 * MS_DAY,
   },
   {

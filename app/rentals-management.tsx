@@ -44,7 +44,7 @@ export default function RentalsManagementScreen() {
         </Pressable>
         <Text style={styles.headerTitle}>Manage Rentals</Text>
         <Text style={styles.headerSub}>
-          Offers you’ve sent on tool requests (this device).
+          Offers you’ve sent on equipment requests (this device).
         </Text>
       </View>
 
@@ -60,7 +60,7 @@ export default function RentalsManagementScreen() {
           <View style={styles.emptyCard}>
             <Text style={styles.emptyTitle}>No rentals yet</Text>
             <Text style={styles.emptyBody}>
-              Browse local requests and tap Offer Tool to submit a price for a
+              Browse local requests and tap Send offer to submit a price for a
               request.
             </Text>
           </View>

@@ -16,7 +16,7 @@ import { ui } from '@/constants/appUi';
 
 const POINTS = [
   'You are responsible for any agreements you make with other people on OurGarage.',
-  'OurGarage is here to help neighbors connect. We do not provide the tools or handle payments between you and others.',
+  'OurGarage is here to help neighbors connect. We do not provide the equipment or handle payments between you and others.',
   'Be honest in listings and messages, respond in good faith, and treat people the way you would want to be treated.',
 ];
 

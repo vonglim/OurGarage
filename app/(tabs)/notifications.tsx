@@ -12,7 +12,7 @@ import {
   useNotificationsList,
   useNotificationsStore,
 } from '../store/notificationsStore';
-import { ui } from '@/constants/appUi';
+import { cardChrome, ui } from '@/constants/appUi';
 
 function typeLabel(t: AppNotification['type']): string {
   switch (t) {
@@ -44,6 +44,23 @@ function formatWhen(ts: number): string {
   } catch {
     return '';
   }
+}
+
+function NotificationMessage({ text }: { text: string }) {
+  const lines = text.split('\n').map((s) => s.trim()).filter(Boolean);
+  if (lines.length >= 2) {
+    return (
+      <View style={styles.messageBlock}>
+        <Text style={styles.messagePrimary}>{lines[0]}</Text>
+        {lines.slice(1).map((line, i) => (
+          <Text key={i} style={styles.messageSecondary}>
+            {line}
+          </Text>
+        ))}
+      </View>
+    );
+  }
+  return <Text style={styles.message}>{text}</Text>;
 }
 
 export default function NotificationsScreen() {
@@ -121,7 +138,7 @@ export default function NotificationsScreen() {
                     <Text style={styles.typePill}>{typeLabel(n.type)}</Text>
                     <Text style={styles.time}>{formatWhen(n.timestamp)}</Text>
                   </View>
-                  <Text style={styles.message}>{n.message}</Text>
+                  <NotificationMessage text={n.message} />
                 </Pressable>
               );
             })}
@@ -157,11 +174,8 @@ const styles = StyleSheet.create({
     paddingTop: 16,
   },
   emptyCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 22,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    ...cardChrome,
+    padding: ui.padCard + 6,
   },
   emptyText: {
     fontSize: 15,
@@ -169,11 +183,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   listCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    ...cardChrome,
     overflow: 'hidden',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
   },
   row: {
     paddingVertical: 14,
@@ -228,5 +239,22 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: '#1C1C1E',
     paddingLeft: 16,
+  },
+  messageBlock: {
+    paddingLeft: 16,
+    gap: 4,
+  },
+  messagePrimary: {
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '700',
+    color: '#000',
+    letterSpacing: -0.2,
+  },
+  messageSecondary: {
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '400',
+    color: ui.textSubtle,
   },
 });

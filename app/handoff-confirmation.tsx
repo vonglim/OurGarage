@@ -18,8 +18,8 @@ import { confirmRentalHandoff, getRequestByTimestamp } from './store/requestsSto
 import { ui } from '@/constants/appUi';
 
 const ITEMS: { id: string; label: string }[] = [
-  { id: 'inspected', label: 'I have inspected the tool' },
-  { id: 'working', label: 'The tool is working as expected' },
+  { id: 'inspected', label: 'I have inspected the equipment' },
+  { id: 'working', label: 'The equipment is working as expected' },
   { id: 'how', label: 'I understand how to use it' },
   { id: 'condition', label: 'I agree this reflects the current condition' },
 ];
@@ -139,7 +139,7 @@ export default function HandoffConfirmationScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
         </Pressable>
-        <Text style={styles.headerTitle}>Tool handoff</Text>
+        <Text style={styles.headerTitle}>Equipment handoff</Text>
         <Text style={styles.headerSub}>
           Confirm you are ready to start the rental. All items below are required.
         </Text>

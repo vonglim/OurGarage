@@ -1,6 +1,30 @@
 import { haversineMiles } from './haversine';
 import { getCurrentUserCoordinates } from './userLocation';
 
+/** Above this, show "Far away" instead of an exact mile count. */
+export const DISTANCE_DISPLAY_FAR_THRESHOLD_MI = 100;
+
+/**
+ * Short distance for lists (e.g. "2.4 mi", "Far away", or `nullLabel` when unknown).
+ */
+export function formatMilesShort(
+  miles: number | null | undefined,
+  nullLabel = 'Nearby'
+): string {
+  if (miles == null || !Number.isFinite(miles)) return nullLabel;
+  if (miles > DISTANCE_DISPLAY_FAR_THRESHOLD_MI) return 'Far away';
+  const rounded = Math.round(miles * 10) / 10;
+  return `${rounded.toFixed(1)} mi`;
+}
+
+/** Listing copy: "2.4 mi away" or "Far away". */
+export function formatListingDistanceAway(miles: number): string {
+  if (!Number.isFinite(miles)) return '—';
+  if (miles > DISTANCE_DISPLAY_FAR_THRESHOLD_MI) return 'Far away';
+  const rounded = Math.round(miles * 10) / 10;
+  return `${rounded.toFixed(1)} mi away`;
+}
+
 export function milesFromViewerToRequest(req: {
   requestLat?: unknown;
   requestLng?: unknown;
@@ -19,6 +43,7 @@ export function formatDistanceFromYou(req: {
 }): string {
   const mi = milesFromViewerToRequest(req);
   if (mi == null) return '~ nearby';
+  if (mi > DISTANCE_DISPLAY_FAR_THRESHOLD_MI) return 'Far away';
   const rounded = Math.round(mi * 10) / 10;
   return `${rounded.toFixed(1)} miles away`;
 }

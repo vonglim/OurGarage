@@ -378,7 +378,7 @@ export default function OfferDetailScreen() {
 
         {(currentOffer?.toolDescription ?? offer?.toolDescription)?.trim() ? (
           <>
-            <Text style={styles.sectionLabel}>Tool description</Text>
+            <Text style={styles.sectionLabel}>Item description</Text>
             <View style={styles.card}>
               <Text style={styles.bodyMultiline}>
                 {(currentOffer?.toolDescription ?? offer?.toolDescription)!.trim()}

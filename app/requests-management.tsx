@@ -33,7 +33,7 @@ export default function RequestsManagementScreen() {
         </Pressable>
         <Text style={styles.headerTitle}>Manage Requests</Text>
         <Text style={styles.headerSub}>
-          Tool requests you’ve posted on this device.
+          Equipment requests you’ve posted on this device.
         </Text>
       </View>
 
@@ -49,7 +49,7 @@ export default function RequestsManagementScreen() {
           <View style={styles.emptyCard}>
             <Text style={styles.emptyTitle}>No requests yet</Text>
             <Text style={styles.emptyBody}>
-              Create a request from the Request A Tool tab to see it here.
+              Create a request from the Request equipment flow to see it here.
             </Text>
           </View>
         ) : (

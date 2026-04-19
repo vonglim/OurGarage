@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ui } from '@/constants/appUi';
+import { cardChrome, ui } from '@/constants/appUi';
 
 export const MAIN_TAB_FAB_SIZE = 56;
 export const MAIN_TAB_FAB_GAP = 16;
@@ -26,7 +26,7 @@ export function useMainTabFabBottomReserve(): number {
 }
 
 /**
- * Floating + button with “Request a Tool” / “List My Tool”. Render on Home, Browse, and Activity.
+ * Floating + button with “Request equipment” / “List equipment”. Render on Home, Browse, and Activity.
  */
 export function MainTabFab() {
   const router = useRouter();
@@ -38,7 +38,7 @@ export function MainTabFab() {
     <>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Add request or list a tool"
+        accessibilityLabel="Add request or list equipment"
         onPress={() => setOpen(true)}
         style={({ pressed }) => [
           styles.fab,
@@ -72,7 +72,7 @@ export function MainTabFab() {
               }}
             >
               <Ionicons name="construct-outline" size={22} color={ui.primary} />
-              <Text style={styles.modalRowText}>Request a Tool</Text>
+              <Text style={styles.modalRowText}>Request equipment</Text>
             </Pressable>
             <Pressable
               style={({ pressed }) => [styles.modalRow, pressed && styles.modalRowPressed]}
@@ -82,7 +82,7 @@ export function MainTabFab() {
               }}
             >
               <Ionicons name="cube-outline" size={22} color={ui.primary} />
-              <Text style={styles.modalRowText}>List My Tool</Text>
+              <Text style={styles.modalRowText}>List equipment</Text>
             </Pressable>
             <Pressable onPress={() => setOpen(false)} style={styles.modalCancel}>
               <Text style={styles.modalCancelText}>Cancel</Text>
@@ -119,12 +119,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   modalCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
+    ...cardChrome,
     paddingTop: 12,
     paddingBottom: 6,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
   },
   modalTitle: {
     fontSize: 13,

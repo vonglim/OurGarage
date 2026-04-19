@@ -4,9 +4,9 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
-import { formatUsd } from './lib/money';
-import { getListingById } from './store/listingsStore';
-import { ui } from '@/constants/appUi';
+import { formatListingDistanceAway } from './lib/requestDistance';
+import { formatListingPriceWithUnit, getListingById } from './store/listingsStore';
+import { cardChrome, ui } from '@/constants/appUi';
 
 function firstParam(v: string | string[] | undefined): string | undefined {
   if (v == null) return undefined;
@@ -49,7 +49,7 @@ export default function ListingDetailScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
         </Pressable>
-        <Text style={styles.headerTitle}>Tool listing</Text>
+        <Text style={styles.headerTitle}>Equipment listing</Text>
       </View>
 
       <ScrollView
@@ -60,19 +60,25 @@ export default function ListingDetailScreen() {
         ]}
         keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.toolName}>{listing.toolName}</Text>
-        <Text style={styles.ownerLine}>
-          Listed by {listing.ownerName} · ⭐ {listing.rating.toFixed(1)} · {listing.distance} mi away
+        <Text style={styles.toolName}>{listing.name}</Text>
+        <Text style={styles.priceLine}>
+          {formatListingPriceWithUnit(listing.price, listing.priceUnit)}
         </Text>
-        <Text style={styles.priceLine}>{formatUsd(listing.price)}</Text>
+        <Text style={styles.ownerLine}>
+          Listed by {listing.ownerName} · ⭐ {listing.rating.toFixed(1)}
+        </Text>
+        <Text style={styles.distanceLine}>{formatListingDistanceAway(listing.distance)}</Text>
         <Text style={styles.dateLine}>Listed {formatListedAt(listing.createdAt)}</Text>
 
-        <View style={styles.sectionGap} />
-
-        <Text style={styles.sectionLabel}>Description</Text>
-        <View style={styles.card}>
-          <Text style={styles.body}>{listing.description}</Text>
-        </View>
+        {listing.description?.trim() ? (
+          <>
+            <View style={styles.sectionGap} />
+            <Text style={styles.sectionLabel}>Description</Text>
+            <View style={styles.card}>
+              <Text style={styles.body}>{listing.description.trim()}</Text>
+            </View>
+          </>
+        ) : null}
 
         <View style={styles.sectionGap} />
 
@@ -81,14 +87,14 @@ export default function ListingDetailScreen() {
             router.push({
               pathname: '/request-a-tool',
               params: {
-                prefillToolName: listing.toolName,
+                prefillToolName: listing.name,
                 prefillPrice: String(listing.price),
               },
             })
           }
           style={({ pressed }) => [styles.primaryBtn, pressed && styles.primaryBtnPressed]}
         >
-          <Text style={styles.primaryBtnText}>Request This Tool</Text>
+          <Text style={styles.primaryBtnText}>Request this item</Text>
         </Pressable>
       </ScrollView>
     </KeyboardDismissScreen>
@@ -157,13 +163,19 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#555',
     lineHeight: 22,
-    marginBottom: 12,
+    marginBottom: 4,
+  },
+  distanceLine: {
+    fontSize: 15,
+    color: '#636366',
+    lineHeight: 22,
+    marginBottom: 8,
   },
   priceLine: {
     fontSize: 22,
     fontWeight: '700',
     color: ui.primary,
-    marginBottom: 4,
+    marginBottom: 10,
   },
   dateLine: {
     fontSize: 14,
@@ -181,11 +193,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    padding: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    ...cardChrome,
   },
   body: {
     fontSize: 16,

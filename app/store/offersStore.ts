@@ -121,7 +121,7 @@ export function addOffer(
   touchLastActive();
   addNotification({
     type: 'offer',
-    message: 'You received a new offer on a tool request.',
+      message: 'You received a new offer on an equipment request.',
     requestId,
   });
 }

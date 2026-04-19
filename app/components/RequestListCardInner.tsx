@@ -14,13 +14,11 @@ import {
   type DurationType,
 } from '../lib/durationFormat';
 import { getRequestCardUiStatus } from '../lib/requestCardStatus';
-import { milesFromViewerToRequest } from '../lib/requestDistance';
+import { formatMilesShort, milesFromViewerToRequest } from '../lib/requestDistance';
 import { formatUsd, getNumericTotalPrice } from '../lib/money';
-import { ui } from '@/constants/appUi';
+import { cardChrome, ui } from '@/constants/appUi';
 import { UserActivityDot } from './UserActivityDot';
 
-const CARD_BORDER = '#E5E5EA';
-const CARD_PADDING = 14;
 /** Placeholder poster avatar (until backend provides URLs). */
 const POSTER_AVATAR_SIZE = 32;
 const GAP_AFTER_TITLE = 4;
@@ -35,17 +33,8 @@ const STATUS_BADGE_CLEARANCE = 88;
 export const requestListCardSurface = StyleSheet.create({
   card: {
     position: 'relative',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    padding: CARD_PADDING,
+    ...cardChrome,
     marginBottom: 0,
-    borderWidth: 1,
-    borderColor: CARD_BORDER,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
   },
 });
 
@@ -95,9 +84,7 @@ function priceForDisplay(req: Req, matched: boolean): string {
 
 function distanceCompact(req: Req): string {
   const mi = milesFromViewerToRequest(req);
-  if (mi == null) return '~ nearby';
-  const rounded = Math.round(mi * 10) / 10;
-  return `${rounded.toFixed(1)} mi`;
+  return formatMilesShort(mi, '~ nearby');
 }
 
 function timeCompact(timeAgo: string): string {
@@ -208,7 +195,7 @@ export function RequestListCardInner({
                   offerAction.disabled && styles.offerPillTextDisabled,
                 ]}
               >
-                Offer Tool
+                Send offer
               </Text>
             </Pressable>
           </View>

@@ -1,7 +1,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Image } from 'expo-image';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -22,7 +22,9 @@ import {
 } from '../lib/mockPublicProfiles';
 import { formatPresetAvatar, parseProfileAvatar } from '../lib/profileAvatar';
 import { pickProfileImageFromLibrary } from '../lib/pickProfileImage';
+import { formatUsd } from '../lib/money';
 import { getProfile, updateProfile, type UserProfile } from '../store/profileStore';
+import { cardChrome, ui } from '@/constants/appUi';
 
 /** Profile hero height as fraction of window (30–35%). */
 const HERO_HEIGHT_RATIO = 0.33;
@@ -117,6 +119,13 @@ export default function ProfileScreen() {
   const ratingStarsDisplay = isViewingOther ? viewPublic!.ratingStars : '★★★★☆';
   const hasCustomImage = parsedAvatar.kind === 'custom';
   const heroHeight = Math.round(windowHeight * HERO_HEIGHT_RATIO);
+
+  const impactStats = useMemo(() => {
+    if (__DEV__) {
+      return { totalSaved: 284, totalEarned: 612 };
+    }
+    return { totalSaved: 0, totalEarned: 0 };
+  }, []);
 
   return (
     <>
@@ -241,7 +250,20 @@ export default function ProfileScreen() {
           </>
         ) : (
           <>
-            <Text style={[styles.sectionTitle, styles.sectionFirst]}>Account</Text>
+            <Text style={[styles.sectionTitle, styles.sectionFirst]}>Your Impact</Text>
+            <View style={styles.impactCard}>
+              <View style={styles.impactRow}>
+                <Text style={styles.impactLabel}>Total Saved</Text>
+                <Text style={styles.impactValue}>{formatUsd(impactStats.totalSaved)}</Text>
+              </View>
+              <View style={styles.impactDivider} />
+              <View style={styles.impactRow}>
+                <Text style={styles.impactLabel}>Total Earned</Text>
+                <Text style={styles.impactValue}>{formatUsd(impactStats.totalEarned)}</Text>
+              </View>
+            </View>
+
+            <Text style={styles.sectionTitle}>Account</Text>
             <View style={styles.sectionCard}>
               <ProfileRow
                 label="Edit Profile"
@@ -357,21 +379,16 @@ const styles = StyleSheet.create({
     textShadowRadius: 5,
   },
   identityCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    paddingVertical: 16,
-    paddingHorizontal: 16,
-    marginBottom: 20,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    ...cardChrome,
     alignItems: 'center',
+    marginBottom: 20,
   },
   identityNameRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     alignSelf: 'stretch',
-    marginBottom: 8,
+    marginBottom: 14,
     paddingHorizontal: 4,
     minWidth: 0,
   },
@@ -404,13 +421,47 @@ const styles = StyleSheet.create({
   sectionFirst: {
     marginTop: 4,
   },
-  sectionCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    overflow: 'hidden',
+  impactCard: {
+    backgroundColor: '#F5F8FF',
+    borderRadius: ui.radiusCard,
+    paddingVertical: ui.padCard,
+    paddingHorizontal: ui.padCard + 2,
     marginBottom: 20,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E5E5EA',
+    borderColor: 'rgba(0, 122, 255, 0.14)',
+    shadowColor: ui.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  impactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  impactLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#AEAEB2',
+    letterSpacing: -0.1,
+  },
+  impactValue: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#1C1C1E',
+    letterSpacing: -0.2,
+  },
+  impactDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(60, 60, 67, 0.08)',
+    marginVertical: 12,
+  },
+  sectionCard: {
+    ...cardChrome,
+    overflow: 'hidden',
+    marginBottom: 20,
   },
   row: {
     flexDirection: 'row',

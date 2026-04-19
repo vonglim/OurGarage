@@ -70,7 +70,7 @@ export function acceptOfferForRequest(
   if (before && !before.matched && after?.matched) {
     addNotification({
       type: 'accepted',
-      message: 'An offer was accepted. Complete the rental agreement to continue.',
+      message: 'Your offer was accepted\nComplete your rental to continue',
       requestId: requestTimestamp,
     });
   }

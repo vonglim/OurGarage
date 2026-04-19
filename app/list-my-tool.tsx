@@ -16,11 +16,11 @@ export default function ListMyToolScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
         </Pressable>
-        <Text style={styles.title}>List My Tool</Text>
+        <Text style={styles.title}>List equipment</Text>
       </View>
       <View style={styles.body}>
         <Text style={styles.bodyText}>
-          This flow will let you add tools from your garage for neighbors to rent. We have not built
+          This flow will let you add equipment from your garage for neighbors to rent. We have not built
           it yet—check back soon.
         </Text>
       </View>

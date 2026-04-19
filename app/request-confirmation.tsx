@@ -12,7 +12,7 @@ export default function RequestConfirmation() {
       <Text style={styles.title}>Request Submitted 🎉</Text>
 
       <Text style={styles.text}>
-        We’ll notify tool owners nearby. You’ll start getting responses soon.
+        We’ll notify neighbors with equipment nearby. You’ll start getting responses soon.
       </Text>
 
       <Pressable

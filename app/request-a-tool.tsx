@@ -154,7 +154,7 @@ export default function RequestAToolScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
         </Pressable>
-        <Text style={styles.screenTitle}>Request a tool</Text>
+        <Text style={styles.screenTitle}>Request equipment</Text>
       </View>
       <ScrollView
         style={styles.container}
@@ -168,12 +168,12 @@ export default function RequestAToolScreen() {
           <Text style={styles.title}>What do you need?</Text>
         </View>
 
-      {/* Tool Input */}
+      {/* Item name */}
       <View style={styles.section}>
-        <Text style={styles.label}>Tool Name</Text>
+        <Text style={styles.label}>Item name</Text>
         <TextInput
           ref={refToolName}
-          placeholder="What tool do you need?"
+          placeholder="What equipment do you need?"
           placeholderTextColor="#888"
           value={toolName}
           onChangeText={setToolName}
@@ -336,7 +336,7 @@ export default function RequestAToolScreen() {
       <View style={styles.section}>
         <Text style={styles.label}>Total price for entire duration</Text>
         <Text style={styles.fieldHint}>
-          One total for the full time you need the tool — not a daily rate.
+          One total for the full time you need the item — not a daily rate.
         </Text>
         <View style={styles.moneyRow}>
           <Text style={styles.dollarPrefix}>$</Text>
@@ -390,7 +390,7 @@ export default function RequestAToolScreen() {
         onPress={() => {
           Keyboard.dismiss();
           if (!toolName.trim()) {
-            Alert.alert('Missing info', 'Please enter a tool name');
+            Alert.alert('Missing info', 'Please enter an item name');
             return;
           }
           if (!locationInput.trim()) {
@@ -401,7 +401,7 @@ export default function RequestAToolScreen() {
             return;
           }
           if (!durationType) {
-            Alert.alert('Missing info', 'Please choose how long you need the tool.');
+            Alert.alert('Missing info', 'Please choose how long you need the item.');
             return;
           }
           if (!how) {

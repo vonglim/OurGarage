@@ -46,7 +46,7 @@ export default function ChatDetailScreen() {
     typeof requestForChat.toolName === 'string' &&
     requestForChat.toolName.trim().length > 0
       ? requestForChat.toolName.trim()
-      : 'Tool request';
+      : 'Equipment request';
   const subtitle =
     other != null
       ? `${(other.displayName ?? '').trim() || 'Neighbor'} • ⭐ ${getPublicProfileForView(
