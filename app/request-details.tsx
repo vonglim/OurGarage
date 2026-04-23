@@ -1,30 +1,71 @@
-import { useFocusEffect } from '@react-navigation/native';
-import { router, useLocalSearchParams } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
+import { useFocusEffect } from '@react-navigation/native';
+import { router, useLocalSearchParams } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
-import { RequestMetaLines } from './components/RequestMetaLines';
-import { OfferOffererRow } from './components/OfferOffererRow';
-import { getOfferUserPreview, sortOffersForPoster, useOffersStore } from './store/offersStore';
-import {
-  getEffectiveRentalStatus,
-  getRequestByTimestamp,
-  isLeaveReviewEligible,
-  showMarkRentalComplete,
-} from './store/requestsStore';
-import { useUserReviews } from './store/userReviewsStore';
-import { openChatForRequest } from './lib/openRequestChat';
-import { formatUsd, getNumericOfferPrice } from './lib/money';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { OfferOffererRow } from '@/components/OfferOffererRow';
+import { RequestMetaLines } from '@/components/RequestMetaLines';
 import {
   destructiveOutlinePressed,
   outlinePrimaryPressed,
   primarySolidPressed,
   ui,
 } from '@/constants/appUi';
+import { useAuthUserId } from '@/lib/authUser';
+import { formatUsd, getNumericOfferPrice, getNumericTotalPrice } from '@/lib/money';
+import { openChatForRequest } from '@/lib/openRequestChat';
+import { getRequestOwnerId, isUuidString } from '@/lib/requestOwnership';
+import { billingDayCountForRequest, formatPerDayUsd } from '@/lib/requestPriceContext';
+import { fetchAndMergeProfileNames } from '@/lib/remoteProfileCache';
+import { fetchOffersByRequestIdWithProfiles } from '@/lib/supabaseOffers';
+import { getSupabase } from '@/lib/supabase';
+import { mapSupabaseOfferRowToOffer } from '@/lib/supabaseOffers';
+import {
+  type Offer,
+  getOfferUserPreview,
+  sortOffersForPoster,
+  useOffersStore,
+} from '@/store/offersStore';
+import {
+  getEffectiveRentalStatus,
+  getRequestBySupabaseId,
+  isLeaveReviewEligible,
+  requestAcceptsOffers,
+  showMarkRentalComplete,
+} from '@/store/requestsStore';
+import { useUserReviews } from '@/store/userReviewsStore';
+
+const EMPTY_OFFERS: Offer[] = [];
+
+function formatOwnerOfferCountMessage(count: number): string {
+  if (count <= 0) return '';
+  if (count === 1) return 'You have 1 offer';
+  return `You have ${count} offers`;
+}
+
+/** Combine Supabase-backed rows with in-memory threads for the same app request (`requestId` = timestamp). */
+function mergeOfferThreadsForRequest(
+  fromServer: Offer[],
+  fromStore: Offer[],
+  requestTs: number
+): Offer[] {
+  const byRenter = new Map<string, Offer>();
+  for (const o of fromServer) {
+    if (typeof o.renterId !== 'string' || o.renterId === '') continue;
+    byRenter.set(o.renterId, o);
+  }
+  for (const o of fromStore) {
+    if (o.requestId !== requestTs) continue;
+    if (typeof o.renterId !== 'string' || o.renterId === '') continue;
+    const prev = byRenter.get(o.renterId);
+    if (!prev || o.updatedAt >= prev.updatedAt) byRenter.set(o.renterId, o);
+  }
+  return sortOffersForPoster([...byRenter.values()]);
+}
 
 function getTimeAgo(timestamp: number): string {
   const diffMs = Date.now() - timestamp;
@@ -41,12 +82,21 @@ function getTimeAgo(timestamp: number): string {
 
 export default function RequestDetailsScreen() {
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ requestId?: string | string[] }>();
-  const rawId = params.requestId;
-  const requestIdStr = Array.isArray(rawId) ? rawId[0] : rawId;
+  const params = useLocalSearchParams() as {
+  requestId?: string;
+  requestTimestamp?: string;
+  offerId?: string;
+};
+
+const requestTimestampParam = params.requestTimestamp ?? '';
+const offerId = params.offerId ?? '';
+const requestId = params.requestId ?? '';
 
   const [tick, setTick] = useState(0);
+  /** Mapped from Supabase `offers` rows for this request. */
+  const [offers, setOffers] = useState<Offer[]>([]);
   const userReviews = useUserReviews();
+  const currentUserId = useAuthUserId();
 
   useFocusEffect(
     useCallback(() => {
@@ -56,34 +106,102 @@ export default function RequestDetailsScreen() {
 
   const request = useMemo(() => {
     void tick;
-    const id = Number(requestIdStr);
-    if (!Number.isFinite(id)) return undefined;
-    return getRequestByTimestamp(id);
-  }, [requestIdStr, tick]);
+    if (!isUuidString(requestId)) return undefined;
+    return getRequestBySupabaseId(requestId);
+  }, [requestId, tick]);
 
-  const requestIdNum = useMemo(() => {
-    const n = Number(requestIdStr);
-    return Number.isFinite(n) ? n : NaN;
-  }, [requestIdStr]);
+  const fetchOffers = useCallback(async () => {
+    if (!isUuidString(requestId)) {
+      setOffers([]);
+      return;
+    }
 
-  /** Subscribe to store array only — filtered list must be `useMemo` so Zustand is not given a new [] every render. */
-  const offersFromStore = useOffersStore((s) => s.offers);
-  const offers = useMemo(() => {
-    if (!Number.isFinite(requestIdNum)) return [];
-    const forRequest = offersFromStore.filter(
-      (o) => o.requestId === requestIdNum && !o.declined,
+    const supabase = getSupabase();
+    const { data, error } = await fetchOffersByRequestIdWithProfiles(supabase, requestId);
+
+    if (error) {
+      if (__DEV__) console.warn('[Request details] offers fetch:', error.message);
+      setOffers([]);
+      return;
+    }
+
+    const req = getRequestBySupabaseId(requestId);
+    const ts =
+      req != null &&
+      typeof (req as { timestamp?: unknown }).timestamp === 'number' &&
+      Number.isFinite((req as { timestamp: number }).timestamp)
+        ? (req as { timestamp: number }).timestamp
+        : NaN;
+    if (!Number.isFinite(ts)) {
+      setOffers([]);
+      return;
+    }
+
+    const rows = (data ?? []) as unknown[];
+    const userIds = (rows as Record<string, unknown>[])
+      .map((r) => (typeof r.user_id === 'string' ? r.user_id.trim() : ''))
+      .filter((s) => s.length > 0);
+    await fetchAndMergeProfileNames(supabase, userIds);
+
+    const mapped = rows.map((r) => mapSupabaseOfferRowToOffer(r as Record<string, unknown>, ts));
+    setOffers(mapped);
+
+    const { upsertOffer } = useOffersStore.getState();
+    for (const o of mapped) {
+      upsertOffer(o);
+    }
+  }, [requestId]);
+
+  useEffect(() => {
+    void fetchOffers();
+  }, [fetchOffers, tick]);
+
+  const requestTimestamp = request?.timestamp;
+  const storeOffers = useOffersStore((s) => s.offers);
+  const offersFromStore = useMemo(() => {
+    const ts = requestTimestamp;
+    if (typeof ts !== 'number' || !Number.isFinite(ts)) return EMPTY_OFFERS;
+    const out = storeOffers.filter((o) => o.requestId === ts);
+    return out.length === 0 ? EMPTY_OFFERS : out;
+  }, [storeOffers, requestTimestamp]);
+
+  const displayOffers = useMemo(() => {
+    const ts = requestTimestamp;
+    if (typeof ts !== 'number' || !Number.isFinite(ts)) {
+      return sortOffersForPoster(offers);
+    }
+    return mergeOfferThreadsForRequest(offers, offersFromStore, ts);
+  }, [offers, offersFromStore, requestTimestamp]);
+
+  /** Owner sees all negotiation threads; renters only see their own thread. */
+  const visibleOffers = useMemo(() => {
+    if (!request) return [];
+    const ownerId = getRequestOwnerId(request as Record<string, unknown>);
+    if (ownerId != null && ownerId === currentUserId) return displayOffers;
+    return displayOffers.filter(
+      (o) => typeof o.renterId === 'string' && o.renterId === currentUserId
     );
-    return sortOffersForPoster(forRequest);
-  }, [offersFromStore, requestIdNum]);
+  }, [request, currentUserId, displayOffers]);
+
+  const requestDayCount = useMemo(
+    () => (request ? billingDayCountForRequest(request) : 1),
+    [request]
+  );
+  const listedTotalNum = useMemo(() => (request ? getNumericTotalPrice(request) : null), [request]);
+  const listedPerDayLine = useMemo(() => {
+    if (listedTotalNum == null || !Number.isFinite(listedTotalNum) || listedTotalNum <= 0) return null;
+    return `Listed at ${formatPerDayUsd(listedTotalNum, requestDayCount)}`;
+  }, [listedTotalNum, requestDayCount]);
 
   const matched = !!request?.matched;
   const rentalStatus = request ? getEffectiveRentalStatus(request) : 'pending';
   const requestTs = request?.timestamp;
+  
   const reviewed =
     requestTs != null && userReviews.some((r) => r.requestTimestamp === requestTs);
   const reviewType = 'renter';
 
-  if (!requestIdStr || !Number.isFinite(Number(requestIdStr))) {
+  if (!requestId || !isUuidString(requestId)) {
     return (
       <KeyboardDismissScreen style={styles.centered}>
         <ScreenEntrance style={styles.entranceFillCentered}>
@@ -102,12 +220,54 @@ export default function RequestDetailsScreen() {
       </KeyboardDismissScreen>
     );
   }
+  const requestOwnerId = getRequestOwnerId(request as Record<string, unknown>);
+  
+  const isOwner = requestOwnerId != null && requestOwnerId !== '' && requestOwnerId === currentUserId;
+
+  const ownerOpenForOffers =
+    isOwner &&
+    !matched &&
+    request.timestamp != null &&
+    requestAcceptsOffers(request.timestamp);
+
+  const showOwnerWaitingForOffers = ownerOpenForOffers && visibleOffers.length === 0;
+  const showOwnerHasOffersSummary = ownerOpenForOffers && visibleOffers.length > 0;
 
   const onEditRequest = () => {
-    if (request.timestamp == null || matched) return;
+    if (request.timestamp == null || matched || !isOwner) return;
     router.push({
       pathname: '/request-a-tool',
       params: { editTimestamp: String(request.timestamp) },
+    });
+  };
+
+  const canMakeOffer =
+    request.timestamp != null &&
+    !matched &&
+    !isOwner &&
+    requestAcceptsOffers(request.timestamp) &&
+    !visibleOffers.some(
+      (o) =>
+        typeof o.renterId === 'string' &&
+        o.renterId === currentUserId &&
+        o.status === 'pending_confirmation'
+    );
+
+  const onMakeOffer = () => {
+    if (request.timestamp == null || matched || isOwner || !requestAcceptsOffers(request.timestamp))
+      return;
+    if (
+      visibleOffers.some(
+        (o) =>
+          typeof o.renterId === 'string' &&
+          o.renterId === currentUserId &&
+          o.status === 'pending_confirmation'
+      )
+    )
+      return;
+    router.push({
+      pathname: '/make-offer',
+      params: { requestId: requestId },
     });
   };
 
@@ -135,11 +295,47 @@ export default function RequestDetailsScreen() {
     <KeyboardDismissScreen style={styles.screen}>
       <ScreenEntrance style={styles.entranceFlex}>
         <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
-          <Text style={styles.backLabel}>‹ Back</Text>
-        </Pressable>
-        <Text style={styles.headerTitle}>Request details</Text>
-      </View>
+          <View style={styles.headerRow}>
+            <View style={styles.headerLeft}>
+              <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
+                <Text style={styles.backLabel}>‹ Back</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.headerTitleCenter} numberOfLines={1}>
+              Request details
+            </Text>
+            <View style={styles.headerRight}>
+              {!isOwner && canMakeOffer ? (
+                <Pressable
+                  pressOpacityFeedback={false}
+                  haptic
+                  onPress={onMakeOffer}
+                  style={({ pressed }) => [
+                    styles.headerMakeOfferBtn,
+                    pressed && primarySolidPressed,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Make offer"
+                >
+                  <Text style={styles.headerMakeOfferBtnText}>Make Offer</Text>
+                </Pressable>
+              ) : isOwner ? (
+                <Text
+                  style={styles.headerOwnerCaption}
+                  numberOfLines={2}
+                  accessibilityRole="text"
+                  accessibilityLabel={
+                    showOwnerWaitingForOffers ? 'Waiting for offers' : 'Your request'
+                  }
+                >
+                  {showOwnerWaitingForOffers ? 'Waiting for offers' : 'Your request'}
+                </Text>
+              ) : (
+                <View style={styles.headerRightSpacer} />
+              )}
+            </View>
+          </View>
+        </View>
 
       <ScrollView
         style={styles.container}
@@ -171,14 +367,25 @@ export default function RequestDetailsScreen() {
         <Text style={styles.detail}>When: {request.when || 'N/A'}</Text>
         <RequestMetaLines req={request} detailStyle={styles.detail} />
 
+        {showOwnerWaitingForOffers ? (
+          <Text style={styles.waitingForOffersHint}>Waiting for offers</Text>
+        ) : showOwnerHasOffersSummary ? (
+          <Text style={styles.ownerHasOffersHint}>
+            {formatOwnerOfferCountMessage(visibleOffers.length)}
+          </Text>
+        ) : null}
+
         {!matched ? (
-          <Pressable
-            pressOpacityFeedback={false}
-            onPress={onEditRequest}
-            style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
-          >
-            <Text style={styles.secondaryBtnText}>Edit Request</Text>
-          </Pressable>
+          isOwner ? (
+            <Pressable
+              pressOpacityFeedback={false}
+              haptic
+              onPress={onEditRequest}
+              style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
+            >
+              <Text style={styles.secondaryBtnText}>Edit Request</Text>
+            </Pressable>
+          ) : null
         ) : (
           <Pressable
             pressOpacityFeedback={false}
@@ -215,15 +422,26 @@ export default function RequestDetailsScreen() {
         ) : null}
 
         <Text style={styles.sectionTitle}>Offers</Text>
-        {offers.length === 0 ? (
-          <Text style={styles.muted}>No offers yet</Text>
+        {ownerOpenForOffers && visibleOffers.length > 0 ? (
+          <Text style={styles.ownerOfferActionsHint}>
+            Open an offer to accept, send a counter-offer, or decline. You can negotiate on price.
+          </Text>
+        ) : null}
+        {listedPerDayLine != null ? <Text style={styles.listedContextLine}>{listedPerDayLine}</Text> : null}
+        {visibleOffers.length === 0 ? (
+          ownerOpenForOffers ? null : (
+            <Text style={styles.muted}>No offers yet</Text>
+          )
         ) : (
-          offers.map((offer, index) => {
+          visibleOffers.map((offer, index) => {
             const who = getOfferUserPreview(offer);
             const isBestOffer = index === 0;
+            const offerTotal = getNumericOfferPrice(offer);
+            const theirPerDay =
+              offerTotal > 0 ? formatPerDayUsd(offerTotal, requestDayCount) : '—';
             return (
               <View
-                key={offer.timestamp}
+                key={offer.id}
                 style={[styles.offerCard, matched && styles.offerCardMatched]}
               >
                 {isBestOffer ? (
@@ -247,9 +465,10 @@ export default function RequestDetailsScreen() {
                     router.push({
                       pathname: '/offer-detail',
                       params: {
-                        requestId: String(request.timestamp),
-                        offerTimestamp: String(offer.timestamp),
-                      },
+                        requestId: String(requestId),
+                        requestTimestamp: String(request.timestamp ?? ''),
+                        offerId: String(offer.id),
+                      } as Record<string, string>,
                     });
                   }}
                   style={({ pressed }) => [
@@ -258,19 +477,25 @@ export default function RequestDetailsScreen() {
                   ]}
                 >
                   <Text style={styles.offerPriceLine}>
-                    Their total for entire duration: {formatUsd(getNumericOfferPrice(offer))}
+                    Their offer: {formatUsd(offerTotal)} total ({theirPerDay})
                   </Text>
-                  {offer.counterFromPoster ? (
-                    <Text style={styles.offerCounterHint}>Counter-offer (you)</Text>
+                  {requestOwnerId != null &&
+                  offer.lastUpdatedBy === requestOwnerId &&
+                  offer.lastUpdatedBy !== offer.renterId ? (
+                    <Text style={styles.offerCounterHint}>Your last counter is shown above</Text>
                   ) : null}
                   {offer.message?.trim() ? (
                     <Text style={styles.offerMessagePreview} numberOfLines={3}>
                       {offer.message.trim()}
                     </Text>
                   ) : null}
-                  <Text style={styles.offerTime}>{getTimeAgo(offer.timestamp)}</Text>
+                  <Text style={styles.offerTime}>{getTimeAgo(offer.updatedAt)}</Text>
                   <Text style={styles.offerTapHint}>
-                    {matched ? 'Tap for details' : 'Tap to review & accept or decline'}
+                    {matched
+                      ? 'Tap for details'
+                      : offer.status === 'pending_confirmation'
+                        ? 'Tap to confirm rental or decline'
+                        : 'Tap to accept, counter, or decline'}
                   </Text>
                 </Pressable>
               </View>
@@ -297,25 +522,70 @@ const styles = StyleSheet.create({
     backgroundColor: ui.surfaceGrouped,
   },
   header: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,
     backgroundColor: ui.surfaceGrouped,
   },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 40,
+  },
+  headerLeft: {
+    width: 108,
+    flexShrink: 0,
+    justifyContent: 'center',
+  },
+  headerRight: {
+    width: 108,
+    flexShrink: 0,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  headerRightSpacer: {
+    width: 108,
+    minHeight: 36,
+  },
   backHit: {
     alignSelf: 'flex-start',
-    marginBottom: 4,
+    paddingVertical: 4,
   },
   backLabel: {
     fontSize: 17,
     fontWeight: '500',
     color: ui.primary,
   },
-  headerTitle: {
-    fontSize: 22,
+  headerTitleCenter: {
+    flex: 1,
+    fontSize: 17,
     fontWeight: '700',
     color: ui.textPrimary,
+    textAlign: 'center',
+  },
+  headerMakeOfferBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: ui.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerMakeOfferBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: ui.primaryOn,
+    letterSpacing: -0.2,
+  },
+  headerOwnerCaption: {
+    maxWidth: 108,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 15,
+    color: ui.primary,
+    textAlign: 'right',
+    opacity: 0.88,
   },
   container: {
     flex: 1,
@@ -332,14 +602,42 @@ const styles = StyleSheet.create({
     backgroundColor: ui.background,
   },
   toolName: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: '700',
     color: ui.textPrimary,
-    marginBottom: 6,
+    marginBottom: 8,
   },
   detailMuted: {
+    fontSize: 13,
+    color: ui.textSecondary,
+    marginBottom: 6,
+  },
+  waitingForOffersHint: {
+    marginTop: 4,
+    marginBottom: 2,
+    fontSize: 14,
+    fontWeight: '600',
+    color: ui.textSecondary,
+    letterSpacing: -0.1,
+  },
+  ownerHasOffersHint: {
+    marginTop: 4,
+    marginBottom: 2,
+    fontSize: 15,
+    fontWeight: '700',
+    color: ui.primary,
+    letterSpacing: -0.2,
+  },
+  ownerOfferActionsHint: {
     fontSize: 14,
     color: ui.textSecondary,
+    lineHeight: 20,
+    marginBottom: 10,
+  },
+  listedContextLine: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: ui.textPrimary,
     marginBottom: 10,
   },
   statusMatched: {
@@ -361,15 +659,14 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   acceptedPriceBanner: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '700',
     color: '#1B5E20',
-    marginBottom: 14,
-    paddingVertical: 10,
+    marginBottom: 12,
+    paddingVertical: 8,
     paddingHorizontal: 12,
     backgroundColor: '#E8F5E9',
-    borderRadius: 10,
-    overflow: 'hidden',
+    borderRadius: 12,
   },
   detail: {
     fontSize: 15,
@@ -377,7 +674,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   secondaryBtn: {
-    marginTop: 18,
+    marginTop: 16,
     alignSelf: 'stretch',
     paddingVertical: 12,
     borderRadius: ui.radiusButton,
@@ -395,7 +692,7 @@ const styles = StyleSheet.create({
     color: ui.primary,
   },
   primaryOutlineBtn: {
-    marginTop: 12,
+    marginTop: 10,
     alignSelf: 'stretch',
     paddingVertical: 12,
     borderRadius: ui.radiusButton,
@@ -413,7 +710,7 @@ const styles = StyleSheet.create({
     color: '#C62828',
   },
   leaveReviewBtn: {
-    marginTop: 12,
+    marginTop: 10,
     alignSelf: 'stretch',
     paddingVertical: 12,
     borderRadius: ui.radiusButton,
@@ -438,7 +735,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: ui.textPrimary,
-    marginTop: 24,
+    marginTop: 28,
     marginBottom: 12,
   },
   muted: {
@@ -456,8 +753,8 @@ const styles = StyleSheet.create({
   offerCard: {
     backgroundColor: ui.surfaceInput,
     borderRadius: ui.radiusCard,
-    padding: ui.padCard,
-    marginBottom: 14,
+    padding: 12,
+    marginBottom: 10,
     borderWidth: 1,
     borderColor: ui.border,
   },
@@ -485,8 +782,8 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   offerPriceLine: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '700',
     color: ui.textPrimary,
     marginBottom: 4,
   },

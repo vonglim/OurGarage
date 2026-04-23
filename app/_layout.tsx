@@ -1,32 +1,38 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import type { Session } from '@supabase/supabase-js';
 import { Stack, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Platform, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { View } from 'react-native';
 import 'react-native-reanimated';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { FeedbackToastHost } from '@/components/FeedbackToastHost';
+import { LoginScreen } from '@/components/LoginScreen';
+import { NumberPadKeyboardAccessory } from '@/components/NumberPadKeyboardAccessory';
 import { STACK_TRANSITION_DURATION_MS } from '@/constants/navigation';
-import { FeedbackToastHost } from './components/FeedbackToastHost';
-import { NumberPadKeyboardAccessory } from './components/NumberPadKeyboardAccessory';
-import { registerAndStorePushTokenAsync } from './lib/notifications';
-import { useNotificationsStore } from './store/notificationsStore';
-import { seedTestData as seedOffersTestData } from './store/offersStore';
-import { seedTestData as seedListingsTestData } from './store/listingsStore';
-import { seedTestData as seedRequestsTestData } from './store/requestsStore';
+
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { lightImpact } from '@/lib/haptics';
+import { ensureUserProfileRow } from '@/lib/ensureUserProfile';
+import { startNotificationsServerSync } from '@/lib/notificationsServerSync';
+import { registerAndStorePushTokenAsync } from '@/lib/notifications';
+import { clearRemoteProfileCache } from '@/lib/remoteProfileCache';
+import { supabase } from '../lib/supabase';
+import { applySessionToAuthStore } from '@/store/authSessionStore';
 
 function NavigationHaptics() {
   const pathname = usePathname();
   const prevPath = useRef<string | null>(null);
+
   useEffect(() => {
     if (prevPath.current !== null && prevPath.current !== pathname) {
       lightImpact();
     }
     prevPath.current = pathname;
   }, [pathname]);
+
   return null;
 }
 
@@ -36,21 +42,67 @@ export const unstable_settings = {
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+  const [session, setSession] = useState<Session | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    void registerAndStorePushTokenAsync();
+    supabase.auth
+      .getSession()
+      .then(({ data: { session: next } }) => {
+        setSession(next);
+        setLoading(false);
+        applySessionToAuthStore(next);
+        if (next?.user) {
+          void ensureUserProfileRow();
+        } else {
+          clearRemoteProfileCache();
+        }
+      })
+      .catch(() => {
+        setSession(null);
+        setLoading(false);
+        applySessionToAuthStore(null);
+        clearRemoteProfileCache();
+      });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, next) => {
+      setSession(next);
+      applySessionToAuthStore(next);
+      if (next?.user) {
+        void ensureUserProfileRow();
+      } else {
+        clearRemoteProfileCache();
+      }
+    });
+
+    return () => {
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
-    void useNotificationsStore.getState().hydrate();
-  }, []);
+    if (loading) return;
+    if (!session?.user?.id) return;
+    return startNotificationsServerSync(session.user.id);
+  }, [loading, session?.user?.id]);
 
   useEffect(() => {
-    if (!__DEV__) return;
-    seedRequestsTestData();
-    seedOffersTestData();
-    seedListingsTestData();
-  }, []);
+    if (loading) return;
+    if (!session) return;
+    if (Platform.OS !== 'web') {
+      void registerAndStorePushTokenAsync();
+    }
+  }, [loading, session]);
+
+  if (loading) return null;
+
+  if (!session) {
+    return (
+      <SafeAreaProvider>
+        <LoginScreen />
+      </SafeAreaProvider>
+    );
+  }
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
@@ -69,9 +121,13 @@ export default function RootLayout() {
               <Stack.Screen name="(tabs)" />
               <Stack.Screen name="request-a-tool" />
               <Stack.Screen name="list-my-tool" />
+              <Stack.Screen name="create-listing" />
               <Stack.Screen name="rental-agreement" />
               <Stack.Screen name="request-details" />
+              <Stack.Screen name="make-offer" />
               <Stack.Screen name="listing-detail" />
+              <Stack.Screen name="renby/index" />
+              <Stack.Screen name="renby/[id]" />
               <Stack.Screen name="offer-detail" />
               <Stack.Screen name="match-summary" />
               <Stack.Screen name="chat/[id]" />

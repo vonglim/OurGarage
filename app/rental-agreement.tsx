@@ -11,10 +11,14 @@ import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
-import { ensureChatForAcceptedOffer } from './store/chatStore';
-import { showFeedbackToast } from './store/feedbackToastStore';
-import { acceptOfferForRequest, getRequestByTimestamp } from './store/requestsStore';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { getRequestSupabaseRowId, isUuidString } from '@/lib/requestOwnership';
+import { syncRequestAndOffersFromSupabase } from '@/lib/supabaseOfferSync';
+import { ensureChatForAcceptedOffer } from '@/store/chatStore';
+import { showFeedbackToast } from '@/store/feedbackToastStore';
+import { getNumericOfferPrice } from '@/lib/money';
+import { getOfferById } from '@/store/offersStore';
+import { getRequestBySupabaseId, getRequestByTimestamp } from '@/store/requestsStore';
 import { primarySolidPressed, ui } from '@/constants/appUi';
 
 const POINTS = [
@@ -33,47 +37,78 @@ export default function RentalAgreementScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{
     requestId?: string | string[];
-    offerTimestamp?: string | string[];
+    offerId?: string | string[];
     price?: string | string[];
   }>();
   const [busy, setBusy] = useState(false);
 
   const requestIdStr = firstParam(params.requestId);
-  const offerTsStr = firstParam(params.offerTimestamp);
+  const offerIdStr = firstParam(params.offerId);
   const priceStr = firstParam(params.price);
 
   const parsed = useMemo(() => {
+    const offerId = (offerIdStr ?? '').trim();
+    let price = Number(priceStr);
+    if (offerId.length > 0 && (!Number.isFinite(price) || price < 0)) {
+      const o = getOfferById(offerId);
+      if (o) price = getNumericOfferPrice(o);
+    }
+    if (offerId.length === 0 || !Number.isFinite(price) || price < 0) return null;
+    if (requestIdStr && isUuidString(String(requestIdStr).trim())) {
+      const u = getRequestBySupabaseId(String(requestIdStr).trim());
+      const ts = u && typeof (u as { timestamp?: number }).timestamp === 'number' ? (u as { timestamp: number }).timestamp : null;
+      if (ts == null || !Number.isFinite(ts)) return null;
+      return { requestTs: ts, offerId, price } as const;
+    }
     const requestTs = Number(requestIdStr);
-    const offerTs = Number(offerTsStr);
-    const price = Number(priceStr);
     const ok =
       Number.isFinite(requestTs) &&
-      Number.isFinite(offerTs) &&
+      offerId.length > 0 &&
       Number.isFinite(price) &&
       price >= 0;
-    return ok ? { requestTs, offerTs, price } : null;
-  }, [requestIdStr, offerTsStr, priceStr]);
+    return ok ? ({ requestTs, offerId, price } as const) : null;
+  }, [requestIdStr, offerIdStr, priceStr]);
 
   const onAgree = async () => {
     if (parsed == null) return;
+    const toMatchParam =
+      requestIdStr && isUuidString(String(requestIdStr).trim())
+        ? String(requestIdStr).trim()
+        : String(parsed.requestTs);
     const existing = getRequestByTimestamp(parsed.requestTs);
     if (existing?.matched === true) {
       showFeedbackToast('Offer accepted');
       router.replace({
         pathname: '/match-summary',
-        params: { requestId: String(parsed.requestTs) },
+        params: { requestId: toMatchParam },
       });
       return;
     }
     setBusy(true);
     try {
-      acceptOfferForRequest(parsed.requestTs, parsed.offerTs, parsed.price);
-      ensureChatForAcceptedOffer(parsed.requestTs, parsed.offerTs);
-      showFeedbackToast('Offer accepted');
-      router.replace({
-        pathname: '/match-summary',
-        params: { requestId: String(parsed.requestTs) },
-      });
+      const row = getRequestByTimestamp(parsed.requestTs);
+      const requestRowId = row ? getRequestSupabaseRowId(row as Record<string, unknown>) : null;
+      if (requestRowId) {
+        const synced = await syncRequestAndOffersFromSupabase(
+          requestRowId,
+          parsed.requestTs
+        );
+        if (!synced) {
+          showFeedbackToast('Could not sync. Check connection and try again.');
+          return;
+        }
+      }
+      const after = getRequestByTimestamp(parsed.requestTs);
+      if (after?.matched === true) {
+        ensureChatForAcceptedOffer(parsed.requestTs, parsed.offerId);
+        showFeedbackToast('Offer accepted');
+        router.replace({
+          pathname: '/match-summary',
+          params: { requestId: toMatchParam },
+        });
+        return;
+      }
+      showFeedbackToast('This request is not matched yet. Return to the offer and complete accept there.');
     } finally {
       setBusy(false);
     }

@@ -4,7 +4,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import { ui } from '@/constants/appUi';
 
 export default function ListMyToolScreen() {

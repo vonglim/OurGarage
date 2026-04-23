@@ -10,8 +10,8 @@ import {
 import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
-import { setOnboardingTermsAccepted } from './store/agreementsStore';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { setOnboardingTermsAccepted } from '@/store/agreementsStore';
 import { primarySolidPressed, ui } from '@/constants/appUi';
 
 const POINTS = [

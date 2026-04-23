@@ -1,31 +1,53 @@
+import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import type { AppNotification } from '@/store/notificationsStore';
 import { CardPressable } from '@/components/CardPressable';
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { Swipeable } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
-import { MainTabFab, useMainTabFabBottomReserve } from '../components/MainTabFab';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
 import {
   RequestListCardInner,
   requestListCardSurface,
-} from '../components/RequestListCardInner';
-import { formatMilesShort } from '../lib/requestDistance';
-import { getOtherPartyRentalPreview } from '../lib/rentalParty';
-import { removeOffersForRequest, useOffersStore } from '../store/offersStore';
-import { openChatForRequest } from '../lib/openRequestChat';
+} from '@/components/RequestListCardInner';
+import { formatMilesShort } from '@/lib/requestDistance';
+import { getOtherPartyRentalPreview } from '@/lib/rentalParty';
+import {
+  activityRequestInvolvesUser,
+  getRequestOwnerId,
+  offerCountsForActivityRow,
+  rentalRequestInvolvesUser,
+} from '@/lib/activityScope';
+import { markAllNotificationsAsRead } from '@/lib/markNotificationsRead';
+import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
+import { formatUsd, getNumericOfferPrice } from '@/lib/money';
+import type { Offer } from '@/store/offersStore';
+import { removeOffersForRequest, useOffersStore } from '@/store/offersStore';
+import { openChatForRequest } from '@/lib/openRequestChat';
+import { refreshActivityScreenFromSupabase } from '@/lib/supabaseActivityRefresh';
 import {
   getEffectiveRentalStatus,
   removeRequest,
+  resolveRequestFromRouteId,
   useRequestsStore,
-} from '../store/requestsStore';
-import { useTotalUnreadChatCount } from '../store/chatStore';
-import { formatListingPriceWithUnit, useListingsStore } from '../store/listingsStore';
-import { useProfile } from '../store/profileStore';
-import { cardChrome, primarySolidPressed, shadowKey, ui } from '@/constants/appUi';
+} from '@/store/requestsStore';
+import { useNotificationsStore } from '@/store/notificationsStore';
+import { useTotalUnreadChatCount } from '@/store/chatStore';
+import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
+import { useAuthUserId } from '@/lib/authUser';
+import {
+  cardChrome,
+  primarySolidPressed,
+  shadowKey,
+  shadowSegmentActive,
+  shadowSegmentAttention,
+  ui,
+} from '@/constants/appUi';
 
 function formatOffersReceived(n: number): string {
   if (n === 1) return '1 offer received';
@@ -47,6 +69,22 @@ function formatRentalStart(ts: number): string {
   }
 }
 
+function visibleUnreadForUser(n: AppNotification, userId: string): boolean {
+  return !n.read && (n.forUserId == null || n.forUserId === '' || n.forUserId === userId);
+}
+
+function formatSectionCount(n: number): string {
+  if (n <= 0) return '';
+  return n > 99 ? '99+' : String(n);
+}
+
+function byTimestampDesc(
+  a: { timestamp?: number | null },
+  b: { timestamp?: number | null }
+): number {
+  return (b.timestamp ?? 0) - (a.timestamp ?? 0);
+}
+
 function getTimeAgo(timestamp: number): string {
   const diffMs = Date.now() - timestamp;
   const seconds = Math.floor(diffMs / 1000);
@@ -60,71 +98,462 @@ function getTimeAgo(timestamp: number): string {
   return days === 1 ? '1 day ago' : `${days} days ago`;
 }
 
+type OutgoingOfferStatus = 'pending' | 'countered' | 'awaiting_poster' | 'accepted' | 'declined';
+
+function getOutgoingOfferStatus(o: Offer, req: unknown): OutgoingOfferStatus {
+  if (o.status === 'declined' || o.status === 'closed') return 'declined';
+  if (o.status === 'accepted') return 'accepted';
+  if (o.status === 'pending_confirmation') return 'awaiting_poster';
+  if (!req || typeof (req as { timestamp?: number }).timestamp !== 'number') return 'pending';
+  const r = req as { matched?: boolean; acceptedOfferId?: string | null };
+  if (r.matched === true && typeof r.acceptedOfferId === 'string' && r.acceptedOfferId.trim() !== '') {
+    if (r.acceptedOfferId === o.id) return 'accepted';
+    return 'declined';
+  }
+  const st = getEffectiveRentalStatus(req as Parameters<typeof getEffectiveRentalStatus>[0]);
+  if (st !== 'pending') return 'declined';
+  const hasRenterAccepts = o.messageHistory?.some((h) => h.kind === 'renter_accepts') === true;
+  if (hasRenterAccepts && o.lastUpdatedBy === o.renterId) {
+    return 'awaiting_poster';
+  }
+  const ownerId = getRequestOwnerId(req as Record<string, unknown>);
+  if (ownerId != null && o.lastUpdatedBy === ownerId && o.lastUpdatedBy !== o.renterId) {
+    return 'countered';
+  }
+  return 'pending';
+}
+
+type ActivityTab = 'requests' | 'offers' | 'rentals';
+
+function outgoingOfferStatusLabel(s: OutgoingOfferStatus): string {
+  switch (s) {
+    case 'pending':
+      return 'Pending';
+    case 'countered':
+      return 'Countered';
+    case 'awaiting_poster':
+      return 'Awaiting owner';
+    case 'accepted':
+      return 'Accepted';
+    case 'declined':
+      return 'Declined';
+    default:
+      return s;
+  }
+}
+
 export default function ActivityScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [mode, setMode] = useState('requests');
-  const profile = useProfile();
+  const [tab, setTab] = useState<ActivityTab>('requests');
+  const me = useAuthUserId();
   const listings = useListingsStore((s) => s.listings);
   const offers = useOffersStore((state) => state.offers);
+  const notifications = useNotificationsStore((s) => s.notifications);
   const unreadCount = useTotalUnreadChatCount();
   const requests = useRequestsStore((s) => s.requests);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshActivityScreenFromSupabase();
+      markAllNotificationsAsRead();
+    }, [])
+  );
 
   const myEquipment = useMemo(
     () =>
       listings.filter(
-        (l) => l.ownerUserId != null && l.ownerUserId !== '' && l.ownerUserId === profile.userId
+        (l) => l.ownerUserId != null && l.ownerUserId !== '' && l.ownerUserId === me
       ),
-    [listings, profile.userId]
+    [listings, me]
   );
-  const sortedRequests = useMemo(
-    () => [...requests].sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0)),
-    [requests]
+  const activityRequests = useMemo(
+    () => requests.filter((r) => activityRequestInvolvesUser(r as Record<string, unknown>, me)),
+    [requests, me]
+  );
+  const sortedActivityPool = useMemo(
+    () => [...activityRequests].sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0)),
+    [activityRequests]
+  );
+  /** Requests tab: only rows you own (not other users' browse listings). */
+  const ownedRequestsSorted = useMemo(
+    () =>
+      sortedActivityPool.filter(
+        (r) => getRequestOwnerId(r as Record<string, unknown>) === me
+      ),
+    [sortedActivityPool, me]
   );
   const swipeRefs = useRef(new Map<number, Swipeable>());
   const fabBottomReserve = useMainTabFabBottomReserve();
 
   const activeRentals = useMemo(
     () =>
-      sortedRequests.filter(
-        (r) => r.timestamp != null && getEffectiveRentalStatus(r) === 'active'
+      sortedActivityPool.filter(
+        (r) =>
+          r.timestamp != null &&
+          getEffectiveRentalStatus(r) === 'active' &&
+          rentalRequestInvolvesUser(r as Record<string, unknown>, me)
       ),
-    [sortedRequests]
+    [sortedActivityPool, me]
   );
+
+  const matchedRentals = useMemo(
+    () =>
+      sortedActivityPool.filter(
+        (r) =>
+          getEffectiveRentalStatus(r) === 'matched' &&
+          rentalRequestInvolvesUser(r as Record<string, unknown>, me)
+      ),
+    [sortedActivityPool, me]
+  );
+
+  const pastRentals = useMemo(
+    () =>
+      [...sortedActivityPool]
+        .filter(
+          (r) =>
+            getEffectiveRentalStatus(r) === 'completed' &&
+            rentalRequestInvolvesUser(r as Record<string, unknown>, me)
+        )
+        .sort(byTimestampDesc),
+    [sortedActivityPool, me]
+  );
+
+  const activeRentalsSorted = useMemo(
+    () => [...activeRentals].sort(byTimestampDesc),
+    [activeRentals]
+  );
+
+  const matchedRentalsSorted = useMemo(
+    () => [...matchedRentals].sort(byTimestampDesc),
+    [matchedRentals]
+  );
+
+  const activeRequestsSorted = useMemo(
+    () =>
+      [...ownedRequestsSorted]
+        .filter((r) => getEffectiveRentalStatus(r) !== 'completed')
+        .sort(byTimestampDesc),
+    [ownedRequestsSorted]
+  );
+
+  const pastRequestsSorted = useMemo(
+    () =>
+      [...ownedRequestsSorted]
+        .filter((r) => getEffectiveRentalStatus(r) === 'completed')
+        .sort(byTimestampDesc),
+    [ownedRequestsSorted]
+  );
+
+  const myLenderOffers = useMemo(
+    () =>
+      offers
+        .filter((o) => {
+          if (typeof o.renterId !== 'string' || o.renterId !== me) return false;
+          if (o.status === 'declined' || o.status === 'closed' || o.status === 'accepted') {
+            return false;
+          }
+          const req = requests.find((r) => r.timestamp === o.requestId);
+          const st = getOutgoingOfferStatus(o, req);
+          return st !== 'accepted';
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt),
+    [offers, me, requests]
+  );
+
+  const offersSectionBadgeCount = useMemo(() => {
+    let n = 0;
+    for (const o of myLenderOffers) {
+      const req = requests.find((r) => r.timestamp === o.requestId);
+      const st = getOutgoingOfferStatus(o, req);
+      if (st === 'pending' || st === 'countered') n += 1;
+    }
+    return n;
+  }, [myLenderOffers, requests, offers]);
+
+  const rentalsTotalCount =
+    matchedRentalsSorted.length + activeRentalsSorted.length + pastRentals.length;
+
+  const requestsActivityCount = useMemo(() => {
+    let total = 0;
+    for (const n of notifications) {
+      if (!visibleUnreadForUser(n, me)) continue;
+      if (n.type === 'new_offer' || n.type === 'counter_offer') total += 1;
+    }
+    for (const r of ownedRequestsSorted) {
+      const row = r as Record<string, unknown>;
+      if (getRequestOwnerId(row) !== me || r.matched) continue;
+      if (getEffectiveRentalStatus(r) !== 'pending') continue;
+      const ts = r.timestamp;
+      if (ts == null || !Number.isFinite(ts)) continue;
+      const hasOffer = offers.some(
+        (o) => o.requestId === ts && offerCountsForActivityRow(o, row, me)
+      );
+      if (!hasOffer) continue;
+      const hasUnreadOfferNotif = notifications.some(
+        (x) =>
+          visibleUnreadForUser(x, me) &&
+          (x.type === 'new_offer' || x.type === 'counter_offer') &&
+          resolveRequestFromRouteId(x.requestId)?.timestamp === ts
+      );
+      if (!hasUnreadOfferNotif) total += 1;
+    }
+    return total;
+  }, [notifications, ownedRequestsSorted, offers, me]);
+
+  /** Active + matched rentals (pipeline items to attend to in this tab). */
+  const rentalsActivityCount = useMemo(() => {
+    let total = 0;
+    for (const r of sortedActivityPool) {
+      const st = getEffectiveRentalStatus(r);
+      if (st !== 'active' && st !== 'matched') continue;
+      if (!rentalRequestInvolvesUser(r as Record<string, unknown>, me)) continue;
+      total += 1;
+    }
+    return total;
+  }, [sortedActivityPool, me]);
 
   const goToChats = useCallback(() => {
     router.push('/(tabs)/chats');
   }, [router]);
 
+  function renderRequestRow(request: (typeof ownedRequestsSorted)[number], idx: number) {
+    const matched = !!request.matched;
+    const rowKey = request.timestamp ?? idx;
+    const ts = request.timestamp;
+    const requestDetailsId = getRequestSupabaseRowId(request as Record<string, unknown>);
+    const offerCount =
+      ts != null && Number.isFinite(ts)
+        ? offers.filter(
+            (o) =>
+              o.requestId === ts &&
+              offerCountsForActivityRow(o, request as Record<string, unknown>, me)
+          ).length
+        : 0;
+    const card = (
+      <CardPressable
+        style={[
+          requestListCardSurface.card,
+          matched && styles.requestCardMatched,
+        ]}
+        onPress={() => {
+          if (!requestDetailsId) return;
+          router.push({
+            pathname: '/request-details',
+            params: { requestId: requestDetailsId },
+          });
+        }}
+        disabled={!requestDetailsId}
+      >
+        <RequestListCardInner
+          insideParentPressable
+          req={request}
+          matched={matched}
+          timeAgoText={
+            request.timestamp != null ? getTimeAgo(request.timestamp) : null
+          }
+        />
+        {request.timestamp != null && (
+          <Text style={styles.offersReceived}>{formatOffersReceived(offerCount)}</Text>
+        )}
+      </CardPressable>
+    );
+
+    if (matched) {
+      return (
+        <View key={rowKey} style={styles.cardRowWrap}>
+          {card}
+        </View>
+      );
+    }
+
+    const isOwner =
+      getRequestOwnerId(request as Record<string, unknown>) === me;
+    if (!isOwner) {
+      return (
+        <View key={rowKey} style={styles.cardRowWrap}>
+          {card}
+        </View>
+      );
+    }
+
+    return (
+      <View key={rowKey} style={styles.cardRowWrap}>
+        <Swipeable
+          ref={(el) => {
+            const ts = request.timestamp;
+            if (ts == null) return;
+            if (el) swipeRefs.current.set(ts, el);
+            else swipeRefs.current.delete(ts);
+          }}
+          overshootRight={false}
+          renderRightActions={() => (
+            <View style={styles.rightActionsRow}>
+              <Pressable
+                style={styles.editAction}
+                onPress={() => {
+                  if (request.timestamp == null) return;
+                  swipeRefs.current.get(request.timestamp)?.close();
+                  router.push({
+                    pathname: '/request-a-tool',
+                    params: { editTimestamp: String(request.timestamp) },
+                  });
+                }}
+              >
+                <Text style={styles.editActionText}>Edit</Text>
+              </Pressable>
+              <Pressable
+                style={styles.deleteAction}
+                onPress={() => {
+                  if (request.timestamp == null) return;
+                  removeOffersForRequest(request.timestamp);
+                  removeRequest(request.timestamp);
+                }}
+              >
+                <Text style={styles.deleteActionText}>Delete</Text>
+              </Pressable>
+            </View>
+          )}
+        >
+          {card}
+        </Swipeable>
+      </View>
+    );
+  }
+
+  function statusPillStyle(s: OutgoingOfferStatus) {
+    switch (s) {
+      case 'accepted':
+        return { bg: '#E8F5E9', fg: '#1B5E20' };
+      case 'countered':
+        return { bg: '#FFF8E1', fg: '#F57F17' };
+      case 'awaiting_poster':
+        return { bg: '#E3F2FD', fg: '#1565C0' };
+      case 'declined':
+        return { bg: '#FCE8E6', fg: '#B71C1C' };
+      default:
+        return { bg: ui.surfaceNeutral, fg: ui.textSecondary };
+    }
+  }
+
+  function renderMyOfferRow(o: Offer) {
+    const req = requests.find((r) => r.timestamp === o.requestId);
+    const title = String((req as { toolName?: string } | undefined)?.toolName ?? '').trim() || 'Equipment request';
+    const st = getOutgoingOfferStatus(o, req);
+    const pill = statusPillStyle(st);
+    const price = getNumericOfferPrice(o);
+    return (
+      <CardPressable
+        key={o.id}
+        onPress={() =>
+          router.push({
+            pathname: '/offer-detail',
+            params: { requestId: String(o.requestId), offerId: o.id },
+          })
+        }
+        style={({ pressed }) => [styles.offerRowCard, pressed && styles.offerRowCardPressed]}
+      >
+        <View style={styles.offerRowTop}>
+          <Text style={styles.offerRowTitle} numberOfLines={2}>
+            {title}
+          </Text>
+          <View style={[styles.statusPill, { backgroundColor: pill.bg }]}>
+            <Text style={[styles.statusPillText, { color: pill.fg }]}>{outgoingOfferStatusLabel(st)}</Text>
+          </View>
+        </View>
+        <Text style={styles.offerRowMeta}>
+          Your offer {formatUsd(price)} · {getTimeAgo(o.updatedAt)}
+        </Text>
+      </CardPressable>
+    );
+  }
+
   return (
     <KeyboardDismissScreen style={styles.screen}>
       <ScreenEntrance style={styles.screenInner}>
         <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-          <Text style={styles.screenTitle}>My Activity</Text>
-          <View style={styles.segment}>
+          <View style={styles.headerTitleRow}>
+            <Text style={styles.screenTitle} numberOfLines={1}>
+              My Activity
+            </Text>
             <Pressable
-              onPress={() => setMode('requests')}
-              style={({ pressed }) => [
-                styles.segmentItem,
-                mode === 'requests' && styles.segmentItemActive,
-                pressed && styles.segmentPressed,
-              ]}
+              pressOpacityFeedback={false}
+              haptic
+              onPress={goToChats}
+              style={({ pressed }) => [styles.messagesPill, pressed && styles.messagesPillPressed]}
+              accessibilityRole="button"
+              accessibilityLabel={unreadCount > 0 ? `Messages, ${unreadCount} unread` : 'Messages'}
             >
-              <Text style={[styles.segmentLabel, mode === 'requests' && styles.segmentLabelActive]}>
-                My Requests
-              </Text>
+              <Text style={styles.messagesPillLabel}>Messages</Text>
+              {unreadCount > 0 ? (
+                <View style={styles.messagesPillBadge}>
+                  <Text style={styles.messagesPillBadgeText}>{formatSectionCount(unreadCount)}</Text>
+                </View>
+              ) : null}
+            </Pressable>
+          </View>
+
+          <View style={styles.tabRow}>
+            <Pressable
+              onPress={() => setTab('requests')}
+              style={({ pressed }) => [
+                styles.tabCell,
+                tab === 'requests' ? styles.tabCellActive : styles.tabCellInactive,
+                tab !== 'requests' && requestsActivityCount > 0 && styles.tabCellMutedAttention,
+                pressed && styles.tabPressed,
+              ]}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: tab === 'requests' }}
+              accessibilityLabel={`Requests, ${requestsActivityCount} updates`}
+            >
+              <Text style={[styles.tabLabel, tab === 'requests' && styles.tabLabelActive]}>Requests</Text>
+              {requestsActivityCount > 0 ? (
+                <View style={styles.tabBadge}>
+                  <Text style={styles.tabBadgeText}>{formatSectionCount(requestsActivityCount)}</Text>
+                </View>
+              ) : null}
             </Pressable>
             <Pressable
-              onPress={() => setMode('equipment')}
+              onPress={() => setTab('offers')}
               style={({ pressed }) => [
-                styles.segmentItem,
-                mode === 'equipment' && styles.segmentItemActive,
-                pressed && styles.segmentPressed,
+                styles.tabCell,
+                tab === 'offers' ? styles.tabCellActive : styles.tabCellInactive,
+                tab !== 'offers' && offersSectionBadgeCount > 0 && styles.tabCellMutedAttention,
+                pressed && styles.tabPressed,
               ]}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: tab === 'offers' }}
+              accessibilityLabel={`Offers, ${offersSectionBadgeCount} need attention`}
             >
-              <Text style={[styles.segmentLabel, mode === 'equipment' && styles.segmentLabelActive]}>
-                My Equipment
-              </Text>
+              <Text style={[styles.tabLabel, tab === 'offers' && styles.tabLabelActive]}>Offers</Text>
+              {offersSectionBadgeCount > 0 ? (
+                <View style={styles.tabBadge}>
+                  <Text style={styles.tabBadgeText}>{formatSectionCount(offersSectionBadgeCount)}</Text>
+                </View>
+              ) : null}
+            </Pressable>
+            <Pressable
+              onPress={() => setTab('rentals')}
+              style={({ pressed }) => [
+                styles.tabCell,
+                tab === 'rentals' ? styles.tabCellActive : styles.tabCellInactive,
+                tab !== 'rentals' &&
+                  (rentalsActivityCount > 0 || pastRentals.length > 0) &&
+                  styles.tabCellMutedAttention,
+                pressed && styles.tabPressed,
+              ]}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: tab === 'rentals' }}
+              accessibilityLabel={`Rentals, ${rentalsTotalCount} items`}
+            >
+              <Text style={[styles.tabLabel, tab === 'rentals' && styles.tabLabelActive]}>Rentals</Text>
+              {rentalsTotalCount > 0 ? (
+                <View style={tab === 'rentals' ? styles.tabBadge : styles.tabBadgeMuted}>
+                  <Text style={tab === 'rentals' ? styles.tabBadgeText : styles.tabBadgeMutedText}>
+                    {formatSectionCount(rentalsTotalCount)}
+                  </Text>
+                </View>
+              ) : null}
             </Pressable>
           </View>
         </View>
@@ -135,229 +564,41 @@ export default function ActivityScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <View style={styles.sectionBlock}>
-            <CardPressable
-              onPress={goToChats}
-              style={({ pressed }) => [
-                styles.messagesBanner,
-                pressed && styles.messagesBannerPressed,
+          {tab === 'requests' ? (
+            <View
+              style={[
+                styles.tabPanel,
+                requestsActivityCount > 0 && styles.tabPanelAttention,
               ]}
-              accessibilityRole="button"
-              accessibilityLabel={
-                unreadCount > 0 ? `Messages, ${unreadCount} unread` : 'Messages'
-              }
             >
-              <Text style={styles.messagesRowLabel}>Messages →</Text>
-              {unreadCount > 0 ? (
-                <View style={styles.messagesUnreadPill}>
-                  <Text style={styles.messagesUnreadPillText}>
-                    {unreadCount > 99 ? '99+' : String(unreadCount)}
-                  </Text>
-                </View>
-              ) : null}
-            </CardPressable>
-          </View>
-
-          <View style={styles.sectionRule} />
-
-          {mode === 'requests' ? (
-            <View style={styles.sectionBlock}>
-              <Text style={styles.sectionHeading}>Active Rentals</Text>
-              {activeRentals.length === 0 ? (
-                <View style={styles.emptyBlock}>
-                  <Text style={styles.emptyTitle}>No active rentals yet</Text>
-                  <Text style={styles.emptySubline}>
-                    Start by accepting an offer or listing equipment
-                  </Text>
-                </View>
-              ) : (
-                activeRentals.map((req) => {
-                const ts = req.timestamp as number;
-                const title = String(req.toolName ?? '').trim() || 'Untitled';
-                const party = getOtherPartyRentalPreview({
-                  timestamp: ts,
-                  posterUserId: req.posterUserId,
-                  matched: req.matched,
-                  acceptedOfferTimestamp: req.acceptedOfferTimestamp,
-                });
-                const rentalStart =
-                  typeof req.rentalStart === 'number' && Number.isFinite(req.rentalStart)
-                    ? req.rentalStart
-                    : null;
-                return (
-                  <View key={ts} style={styles.activeCard}>
-                    <View style={styles.activeCardInfo}>
-                      <Text style={styles.activeToolName} numberOfLines={2}>
-                        {title}
-                      </Text>
-                      <View style={styles.activeBlockSpacer} />
-                      <Text style={styles.activeWithLine} numberOfLines={2}>
-                        With: {party?.name ?? '—'} ⭐{' '}
-                        {party != null ? party.rating.toFixed(1) : '—'}
-                      </Text>
-                      <View style={styles.activeBlockSpacer} />
-                      <Text style={styles.activeStartLabel}>Start time</Text>
-                      <Text style={styles.activeStartValue}>
-                        {rentalStart != null ? formatRentalStart(rentalStart) : '—'}
-                      </Text>
-                      {rentalStart != null ? (
-                        <Text style={styles.activeStartedAgo}>
-                          Started {getTimeAgo(rentalStart)}
-                        </Text>
-                      ) : null}
-                      <View style={styles.activeBlockSpacer} />
-                      <View style={styles.activeStatusRow}>
-                        <View style={styles.activeStatusDot} />
-                        <Text style={styles.activeStatusLabel}>Active</Text>
-                      </View>
-                    </View>
-                    <View style={styles.activeBetweenCardSpacer} />
-                    <View style={styles.activeActionsColumn}>
-                      <Pressable
-                        pressOpacityFeedback={false}
-                        haptic
-                        style={({ pressed }) => [
-                          styles.activeBtnPrimaryLarge,
-                          pressed && styles.activeBtnPressed,
-                        ]}
-                        onPress={() => {
-                          if (ts == null) return;
-                          openChatForRequest(router, ts);
-                        }}
-                      >
-                        <Text style={styles.activeBtnPrimaryLargeText}>Message</Text>
-                      </Pressable>
-                      <View style={styles.activeBtnStackGap} />
-                      <Pressable
-                        pressOpacityFeedback={false}
-                        haptic
-                        style={({ pressed }) => [
-                          styles.activeBtnPrimaryLarge,
-                          pressed && styles.activeBtnPressed,
-                        ]}
-                        onPress={() => {
-                          if (ts == null) return;
-                          router.push({
-                            pathname: '/end-rental',
-                            params: { requestId: String(ts) },
-                          });
-                        }}
-                      >
-                        <Text style={styles.activeBtnPrimaryLargeText}>End Rental</Text>
-                      </Pressable>
-                    </View>
-                  </View>
-                );
-              })
-              )}
-            </View>
-          ) : null}
-
-          {mode === 'requests' ? <View style={styles.sectionRule} /> : null}
-
-          {mode === 'requests' ? (
-            <View style={[styles.sectionBlock, styles.sectionBlockLast]}>
-              {sortedRequests.length === 0 ? (
+              <Text style={styles.tabPanelSubline}>
+                Your open and past requests · offers received on each card
+              </Text>
+              {activeRequestsSorted.length === 0 && pastRequestsSorted.length === 0 ? (
                 <Text style={styles.emptyText}>No requests yet. Tap + to request equipment.</Text>
               ) : (
-                sortedRequests.map((request, idx) => {
-                const matched = !!request.matched;
-                const rowKey = request.timestamp ?? idx;
-                const r = request as { id?: number | string; timestamp?: number | null };
-                const requestKey = r.id ?? r.timestamp;
-                const offerCount =
-                  requestKey != null && requestKey !== ''
-                    ? offers.filter(
-                        (o) =>
-                          !o.declined && String(o.requestId) === String(requestKey)
-                      ).length
-                    : 0;
-                const card = (
-                  <CardPressable
-                    style={[
-                      requestListCardSurface.card,
-                      matched && styles.requestCardMatched,
-                    ]}
-                    onPress={() => {
-                      if (request.timestamp == null) return;
-                      router.push({
-                        pathname: '/request-details',
-                        params: { requestId: String(request.timestamp) },
-                      });
-                    }}
-                  >
-                    <RequestListCardInner
-                      req={request}
-                      matched={matched}
-                      timeAgoText={
-                        request.timestamp != null
-                          ? getTimeAgo(request.timestamp)
-                          : null
-                      }
-                    />
-                    {request.timestamp != null && (
-                      <Text style={styles.offersReceived}>
-                        {formatOffersReceived(offerCount)}
-                      </Text>
-                    )}
-                  </CardPressable>
-                );
-
-                if (matched) {
-                  return (
-                    <View key={rowKey} style={styles.cardRowWrap}>
-                      {card}
-                    </View>
-                  );
-                }
-
-                return (
-                  <View key={rowKey} style={styles.cardRowWrap}>
-                    <Swipeable
-                      ref={(el) => {
-                        const ts = request.timestamp;
-                        if (ts == null) return;
-                        if (el) swipeRefs.current.set(ts, el);
-                        else swipeRefs.current.delete(ts);
-                      }}
-                      overshootRight={false}
-                      renderRightActions={() => (
-                        <View style={styles.rightActionsRow}>
-                          <Pressable
-                            style={styles.editAction}
-                            onPress={() => {
-                              if (request.timestamp == null) return;
-                              swipeRefs.current.get(request.timestamp)?.close();
-                              router.push({
-                                pathname: '/request-a-tool',
-                                params: { editTimestamp: String(request.timestamp) },
-                              });
-                            }}
-                          >
-                            <Text style={styles.editActionText}>Edit</Text>
-                          </Pressable>
-                          <Pressable
-                            style={styles.deleteAction}
-                            onPress={() => {
-                              if (request.timestamp == null) return;
-                              removeOffersForRequest(request.timestamp);
-                              removeRequest(request.timestamp);
-                            }}
-                          >
-                            <Text style={styles.deleteActionText}>Delete</Text>
-                          </Pressable>
-                        </View>
+                <>
+                  {activeRequestsSorted.length > 0 ? (
+                    <>
+                      <Text style={styles.activePastHeading}>Active</Text>
+                      {activeRequestsSorted.map((request, idx) => renderRequestRow(request, idx))}
+                    </>
+                  ) : null}
+                  {pastRequestsSorted.length > 0 ? (
+                    <>
+                      {activeRequestsSorted.length > 0 ? (
+                        <View style={[styles.sectionRule, styles.sectionRuleTight]} />
+                      ) : null}
+                      <Text style={styles.activePastHeading}>Past</Text>
+                      {pastRequestsSorted.map((request, idx) =>
+                        renderRequestRow(request, idx + activeRequestsSorted.length)
                       )}
-                    >
-                      {card}
-                    </Swipeable>
-                  </View>
-                );
-              })
+                    </>
+                  ) : null}
+                </>
               )}
-            </View>
-          ) : (
-            <View style={[styles.sectionBlock, styles.sectionBlockLast]}>
+              <View style={[styles.sectionRule, styles.sectionRuleTight]} />
+              <Text style={styles.activePastHeading}>Your equipment</Text>
               {myEquipment.length === 0 ? (
                 <Text style={styles.emptyText}>
                   No equipment listed yet. Tap + and choose List equipment.
@@ -384,11 +625,7 @@ export default function ActivityScreen() {
                       {formatMilesShort(item.distance)}
                     </Text>
                     {item.description?.trim() ? (
-                      <Text
-                        style={styles.listingDesc}
-                        numberOfLines={1}
-                        ellipsizeMode="tail"
-                      >
+                      <Text style={styles.listingDesc} numberOfLines={1} ellipsizeMode="tail">
                         {item.description.trim()}
                       </Text>
                     ) : null}
@@ -396,7 +633,207 @@ export default function ActivityScreen() {
                 ))
               )}
             </View>
-          )}
+          ) : null}
+
+          {tab === 'offers' ? (
+            <View
+              style={[
+                styles.tabPanel,
+                offersSectionBadgeCount > 0 && styles.tabPanelAttention,
+              ]}
+            >
+              <Text style={styles.tabPanelSubline}>
+                Bids you placed · status reflects the poster’s response
+              </Text>
+              {myLenderOffers.length === 0 ? (
+                <Text style={styles.emptyText}>No offers yet. Browse requests and tap Make offer.</Text>
+              ) : (
+                myLenderOffers.map((o) => renderMyOfferRow(o))
+              )}
+            </View>
+          ) : null}
+
+          {tab === 'rentals' ? (
+            <View
+              style={[
+                styles.tabPanel,
+                (rentalsActivityCount > 0 || pastRentals.length > 0) && styles.tabPanelAttention,
+              ]}
+            >
+              <Text style={styles.tabPanelSubline}>
+                Accepted matches, active rentals, and completed history
+              </Text>
+              {activeRentalsSorted.length === 0 &&
+              matchedRentalsSorted.length === 0 &&
+              pastRentals.length === 0 ? (
+                <View style={styles.emptyBlock}>
+                  <Text style={styles.emptyTitle}>No rentals yet</Text>
+                  <Text style={styles.emptySubline}>
+                    When an offer is accepted you will see it here, then active and completed stages.
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  {matchedRentalsSorted.length > 0 ? (
+                    <>
+                      <Text style={styles.activePastHeading}>Accepted</Text>
+                      {matchedRentalsSorted.map((req) => {
+                      const ts = req.timestamp as number | undefined;
+                      const title = String(req.toolName ?? '').trim() || 'Untitled';
+                      const detailsId = getRequestSupabaseRowId(req as Record<string, unknown>);
+                      return (
+                        <CardPressable
+                          key={ts != null ? `m-${ts}` : title}
+                          onPress={() => {
+                            if (!detailsId) return;
+                            router.push({
+                              pathname: '/request-details',
+                              params: { requestId: detailsId },
+                            });
+                          }}
+                          disabled={!detailsId}
+                          style={({ pressed }) => [
+                            styles.matchedRentalCard,
+                            pressed && styles.matchedRentalCardPressed,
+                          ]}
+                        >
+                          <Text style={styles.matchedRentalTitle} numberOfLines={2}>
+                            {title}
+                          </Text>
+                          <Text style={styles.matchedRentalHint}>
+                            Open for agreement, handoff, or messages
+                          </Text>
+                        </CardPressable>
+                      );
+                    })}
+                  </>
+                ) : null}
+                {activeRentalsSorted.length > 0 ? (
+                  <>
+                    {matchedRentalsSorted.length > 0 ? (
+                      <View style={[styles.sectionRule, styles.sectionRuleTight]} />
+                    ) : null}
+                    <Text style={styles.activePastHeading}>Active</Text>
+                    {activeRentalsSorted.map((req) => {
+                        const ts = req.timestamp as number;
+                        const title = String(req.toolName ?? '').trim() || 'Untitled';
+                        const party = getOtherPartyRentalPreview({
+                          timestamp: ts,
+                          posterUserId: req.posterUserId,
+                          matched: req.matched,
+                          acceptedOfferId: req.acceptedOfferId,
+                        });
+                        const rentalStart =
+                          typeof req.rentalStart === 'number' && Number.isFinite(req.rentalStart)
+                            ? req.rentalStart
+                            : null;
+                        return (
+                          <View key={ts} style={styles.activeCard}>
+                            <View style={styles.activeCardInfo}>
+                              <Text style={styles.activeToolName} numberOfLines={2}>
+                                {title}
+                              </Text>
+                              <View style={styles.activeBlockSpacer} />
+                              <Text style={styles.activeWithLine} numberOfLines={2}>
+                                With: {party?.name ?? '—'} ⭐{' '}
+                                {party != null ? party.rating.toFixed(1) : '—'}
+                              </Text>
+                              <View style={styles.activeBlockSpacer} />
+                              <Text style={styles.activeStartLabel}>Start time</Text>
+                              <Text style={styles.activeStartValue}>
+                                {rentalStart != null ? formatRentalStart(rentalStart) : '—'}
+                              </Text>
+                              {rentalStart != null ? (
+                                <Text style={styles.activeStartedAgo}>
+                                  Started {getTimeAgo(rentalStart)}
+                                </Text>
+                              ) : null}
+                              <View style={styles.activeBlockSpacer} />
+                              <View style={styles.activeStatusRow}>
+                                <View style={styles.activeStatusDot} />
+                                <Text style={styles.activeStatusLabel}>Active</Text>
+                              </View>
+                            </View>
+                            <View style={styles.activeBetweenCardSpacer} />
+                            <View style={styles.activeActionsColumn}>
+                              <Pressable
+                                pressOpacityFeedback={false}
+                                haptic
+                                style={({ pressed }) => [
+                                  styles.activeBtnPrimaryLarge,
+                                  pressed && styles.activeBtnPressed,
+                                ]}
+                                onPress={() => {
+                                  if (ts == null) return;
+                                  openChatForRequest(router, ts);
+                                }}
+                              >
+                                <Text style={styles.activeBtnPrimaryLargeText}>Message</Text>
+                              </Pressable>
+                              <View style={styles.activeBtnStackGap} />
+                              <Pressable
+                                pressOpacityFeedback={false}
+                                haptic
+                                style={({ pressed }) => [
+                                  styles.activeBtnPrimaryLarge,
+                                  pressed && styles.activeBtnPressed,
+                                ]}
+                                onPress={() => {
+                                  if (ts == null) return;
+                                  router.push({
+                                    pathname: '/end-rental',
+                                    params: { requestId: String(ts) },
+                                  });
+                                }}
+                              >
+                                <Text style={styles.activeBtnPrimaryLargeText}>End Rental</Text>
+                              </Pressable>
+                            </View>
+                          </View>
+                        );
+                      })}
+                    </>
+                  ) : null}
+                  {pastRentals.length > 0 ? (
+                    <>
+                      {activeRentalsSorted.length + matchedRentalsSorted.length > 0 ? (
+                        <View style={[styles.sectionRule, styles.sectionRuleTight]} />
+                      ) : null}
+                      <Text style={styles.activePastHeading}>Completed</Text>
+                      {pastRentals.map((req) => {
+                        const ts = req.timestamp as number | undefined;
+                        const title = String(req.toolName ?? '').trim() || 'Untitled';
+                        const detailsId = getRequestSupabaseRowId(req as Record<string, unknown>);
+                        return (
+                          <CardPressable
+                            key={ts != null ? String(ts) : title}
+                            onPress={() => {
+                              if (!detailsId) return;
+                              router.push({
+                                pathname: '/request-details',
+                                params: { requestId: detailsId },
+                              });
+                            }}
+                            disabled={!detailsId}
+                            style={({ pressed }) => [
+                              styles.matchedRentalCard,
+                              styles.pastRentalCard,
+                              pressed && styles.matchedRentalCardPressed,
+                            ]}
+                          >
+                            <Text style={styles.matchedRentalTitle} numberOfLines={2}>
+                              {title}
+                            </Text>
+                            <Text style={styles.matchedRentalHint}>Completed rental — tap for details</Text>
+                          </CardPressable>
+                        );
+                      })}
+                    </>
+                  ) : null}
+                </>
+              )}
+            </View>
+          ) : null}
         </ScrollView>
 
         <MainTabFab />
@@ -419,44 +856,219 @@ const styles = StyleSheet.create({
     backgroundColor: ui.surfaceGrouped,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,
+    zIndex: 2,
+  },
+  headerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
   },
   screenTitle: {
     fontSize: 28,
     fontWeight: '800',
     color: ui.textPrimary,
     letterSpacing: -0.3,
-    marginBottom: ui.spaceSm + 6,
-  },
-  segment: {
-    flexDirection: 'row',
-    backgroundColor: ui.surfaceNeutral,
-    borderRadius: ui.radiusInput,
-    padding: 3,
-  },
-  segmentItem: {
     flex: 1,
-    paddingVertical: 10,
+    minWidth: 0,
+  },
+  messagesPill: {
+    flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: ui.radiusInput - 4,
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: ui.surfaceNeutral,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
   },
-  segmentItemActive: {
-    backgroundColor: ui.background,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 2,
-    elevation: 1,
+  messagesPillPressed: {
+    opacity: 0.9,
   },
-  segmentPressed: {
+  messagesPillLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: ui.primary,
+  },
+  messagesPillBadge: {
+    minWidth: 22,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+    backgroundColor: ui.primary,
+    alignItems: 'center',
+  },
+  messagesPillBadgeText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#fff',
+  },
+  tabRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+    marginTop: ui.spaceMd,
+  },
+  tabCell: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
+    borderRadius: 12,
+    minHeight: 44,
+  },
+  tabCellInactive: {
+    backgroundColor: ui.surfaceNeutral,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+  },
+  tabCellActive: {
+    backgroundColor: ui.surfaceTintPrimary,
+    borderWidth: 2,
+    borderColor: ui.primary,
+    ...shadowSegmentActive,
+  },
+  tabCellMutedAttention: {
+    borderColor: 'rgba(11, 31, 58, 0.14)',
+    ...shadowSegmentAttention,
+  },
+  tabPressed: {
     opacity: 0.92,
   },
-  segmentLabel: {
-    fontSize: 15,
-    fontWeight: '600',
+  tabLabel: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: ui.textSecondary,
+    letterSpacing: -0.1,
+  },
+  tabLabelActive: {
+    color: ui.primary,
+  },
+  tabBadge: {
+    minWidth: 22,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+    backgroundColor: ui.primary,
+    alignItems: 'center',
+  },
+  tabBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#fff',
+  },
+  tabBadgeMuted: {
+    minWidth: 22,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+    backgroundColor: ui.surfaceGrouped,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+    alignItems: 'center',
+  },
+  tabBadgeMutedText: {
+    fontSize: 11,
+    fontWeight: '800',
     color: ui.textSecondary,
   },
-  segmentLabelActive: {
+  tabPanel: {
+    ...cardChrome,
+    padding: ui.padCard + 2,
+  },
+  tabPanelAttention: {
+    borderColor: 'rgba(11, 31, 58, 0.12)',
+    ...shadowSegmentAttention,
+  },
+  tabPanelSubline: {
+    fontSize: 14,
+    color: ui.textSecondary,
+    lineHeight: 20,
+    marginBottom: ui.spaceMd,
+  },
+  offerRowCard: {
+    ...cardChrome,
+    marginBottom: 10,
+    paddingVertical: 12,
+    paddingHorizontal: ui.padCard,
+  },
+  offerRowCardPressed: {
+    backgroundColor: ui.surfaceTintPrimary,
+  },
+  offerRowTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 6,
+  },
+  offerRowTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '700',
     color: ui.textPrimary,
+  },
+  offerRowMeta: {
+    fontSize: 14,
+    color: ui.textSecondary,
+  },
+  statusPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  statusPillText: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  subSectionHeading: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: ui.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.55,
+    marginBottom: 10,
+    marginTop: 4,
+  },
+  sectionRuleTight: {
+    marginVertical: ui.spaceMd,
+  },
+  matchedRentalCard: {
+    ...cardChrome,
+    marginBottom: 12,
+    paddingVertical: 14,
+    paddingHorizontal: ui.padCard,
+  },
+  matchedRentalCardPressed: {
+    backgroundColor: ui.surfaceTintPrimary,
+  },
+  matchedRentalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    marginBottom: 4,
+  },
+  matchedRentalHint: {
+    fontSize: 14,
+    color: ui.textSecondary,
+    lineHeight: 20,
+  },
+  activePastHeading: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: ui.textPrimary,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    marginBottom: 10,
+    marginTop: 2,
+  },
+  pastRentalCard: {
+    opacity: 0.92,
+    backgroundColor: ui.surfaceStriped,
   },
   scroll: {
     flex: 1,
@@ -465,64 +1077,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: ui.padScreenH,
     paddingTop: ui.padScreenH,
   },
-  sectionBlock: {
-    marginBottom: ui.spaceSm,
-  },
-  sectionBlockLast: {
-    marginBottom: 0,
-  },
-  sectionHeading: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: ui.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    marginBottom: ui.spaceMd,
-  },
   sectionRule: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: ui.border,
     marginVertical: ui.spaceSection,
     alignSelf: 'stretch',
   },
-  messagesBanner: {
-    ...cardChrome,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  messagesBannerPressed: {
-    backgroundColor: ui.surfaceInput,
-  },
-  messagesRowLabel: {
-    flex: 1,
-    fontSize: 17,
-    fontWeight: '600',
-    color: ui.textPrimary,
-    letterSpacing: -0.2,
-  },
-  messagesUnreadPill: {
-    minWidth: 22,
-    height: 22,
-    paddingHorizontal: 7,
-    borderRadius: 11,
-    backgroundColor: '#FF3B30',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  messagesUnreadPillText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: ui.primaryOn,
-  },
   emptyText: {
     fontSize: 15,
     color: ui.textSubtle,
     lineHeight: 22,
   },
-  emptyBlock: {
-    gap: 6,
-  },
+  emptyBlock: {},
   emptyTitle: {
     fontSize: 16,
     fontWeight: '600',
@@ -530,6 +1096,7 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   emptySubline: {
+    marginTop: 6,
     fontSize: 15,
     fontWeight: '400',
     color: ui.textSubtle,
@@ -635,7 +1202,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
   },
   activeStatusDot: {
     width: 10,
@@ -644,6 +1210,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#2E7D32',
   },
   activeStatusLabel: {
+    marginLeft: 8,
     fontSize: 15,
     fontWeight: '700',
     color: '#1B5E20',

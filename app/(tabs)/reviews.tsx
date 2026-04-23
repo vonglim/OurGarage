@@ -10,15 +10,15 @@ import {
 import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from '@/app/components/KeyboardDismissScreen';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import { ui } from '@/constants/appUi';
-import type { UserReview } from '@/app/store/userReviewsStore';
-import { useUserReviews } from '@/app/store/userReviewsStore';
-import { UserActivityDot } from '@/app/components/UserActivityDot';
+import type { UserReview } from '@/store/userReviewsStore';
+import { useUserReviews } from '@/store/userReviewsStore';
+import { UserActivityDot } from '@/components/UserActivityDot';
 
 type ReviewType = 'renter' | 'rentee';
 
-type MockReview = {
+type ReviewRow = {
   id: string;
   type: ReviewType;
   name: string;
@@ -29,9 +29,6 @@ type MockReview = {
   createdAt: number;
   lastActive: number;
 };
-
-const MS_DAY = 24 * 60 * 60 * 1000;
-const MOCK_TIME_BASE = 1_735_000_800_000;
 
 function starLineFromRating(rating: number): string {
   const r = Math.max(0, Math.min(5, Math.round(rating)));
@@ -46,13 +43,11 @@ function avatarColorForName(name: string): string {
   return AVATAR_PALETTE[Math.abs(h) % AVATAR_PALETTE.length];
 }
 
-function mockReviewerLastActive(id: string): number {
-  const n = Math.abs(id.split('').reduce((a, c) => a + c.charCodeAt(0), 0));
-  const minsAgo = [8, 180, 20, 400, 12, 90][n % 6];
-  return Date.now() - minsAgo * 60 * 1000;
+function reviewerLastActive(): number {
+  return Date.now();
 }
 
-function userReviewToMock(r: UserReview): MockReview {
+function userReviewToRow(r: UserReview): ReviewRow {
   const name = r.reviewerName.trim() || 'You';
   const first = name.trim().slice(0, 1).toUpperCase();
   const initials = first || '?';
@@ -70,61 +65,6 @@ function userReviewToMock(r: UserReview): MockReview {
   };
 }
 
-type MockReviewSeed = Omit<MockReview, 'lastActive'>;
-
-const MOCK_REVIEWS: MockReviewSeed[] = [
-  {
-    id: '1',
-    type: 'renter',
-    name: 'Jordan Lee',
-    initials: 'J',
-    avatarColor: '#5C6BC0',
-    rating: 5,
-    body: 'Great experience—item was exactly as described and pickup was easy.',
-    createdAt: MOCK_TIME_BASE - 2 * MS_DAY,
-  },
-  {
-    id: '2',
-    type: 'rentee',
-    name: 'Sam Rivera',
-    initials: 'S',
-    avatarColor: '#00897B',
-    rating: 4,
-    body: 'Solid renter, quick responses. Would rent again.',
-    createdAt: MOCK_TIME_BASE - 9 * MS_DAY,
-  },
-  {
-    id: '3',
-    type: 'renter',
-    name: 'Taylor Kim',
-    initials: 'T',
-    avatarColor: '#E53935',
-    rating: 5,
-    body: 'Five stars. Communication was clear and the item worked perfectly for my project.',
-    createdAt: MOCK_TIME_BASE - 1 * MS_DAY,
-  },
-  {
-    id: '4',
-    type: 'rentee',
-    name: 'Riley Chen',
-    initials: 'R',
-    avatarColor: '#8E24AA',
-    rating: 4,
-    body: 'Good overall. A small delay on return time but we sorted it out.',
-    createdAt: MOCK_TIME_BASE - 14 * MS_DAY,
-  },
-  {
-    id: '5',
-    type: 'renter',
-    name: 'Casey Morgan',
-    initials: 'C',
-    avatarColor: '#F9A825',
-    rating: 5,
-    body: 'Friendly and professional. The garage pickup option saved me a trip.',
-    createdAt: MOCK_TIME_BASE - 5 * MS_DAY,
-  },
-];
-
 type FilterKey = 'all' | ReviewType;
 type SortKey = 'newest' | 'oldest' | 'highest' | 'lowest';
 
@@ -141,12 +81,12 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: 'lowest', label: 'Lowest Rated' },
 ];
 
-function applyFilter(list: MockReview[], filter: FilterKey): MockReview[] {
+function applyFilter(list: ReviewRow[], filter: FilterKey): ReviewRow[] {
   if (filter === 'all') return [...list];
   return list.filter((r) => r.type === filter);
 }
 
-function applySort(list: MockReview[], sort: SortKey): MockReview[] {
+function applySort(list: ReviewRow[], sort: SortKey): ReviewRow[] {
   const copy = [...list];
   if (sort === 'newest') {
     copy.sort((a, b) => b.createdAt - a.createdAt);
@@ -171,10 +111,11 @@ export default function ReviewsScreen() {
   const [pickerKind, setPickerKind] = useState<PickerKind | null>(null);
 
   const combined = useMemo(
-    () => [
-      ...storedReviews.map(userReviewToMock),
-      ...MOCK_REVIEWS.map((r) => ({ ...r, lastActive: mockReviewerLastActive(r.id) })),
-    ],
+    () =>
+      storedReviews.map((r) => ({
+        ...userReviewToRow(r),
+        lastActive: reviewerLastActive(),
+      })),
     [storedReviews]
   );
 
@@ -317,7 +258,7 @@ export default function ReviewsScreen() {
         onRequestClose={closePicker}
       >
         <Pressable style={styles.modalBackdrop} onPress={closePicker}>
-          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+          <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>
               {pickerKind === 'filter' ? 'Filter' : 'Sort'}
             </Text>
@@ -354,7 +295,7 @@ export default function ReviewsScreen() {
             <Pressable onPress={closePicker} style={styles.modalCancel}>
               <Text style={styles.modalCancelText}>Cancel</Text>
             </Pressable>
-          </Pressable>
+          </View>
         </Pressable>
       </Modal>
     </KeyboardDismissScreen>

@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   ScrollView,
   StyleSheet,
@@ -9,16 +9,18 @@ import {
 import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import {
   getLastMessagePreview,
   getOtherParticipant,
   getUnreadCountForUser,
   useChats,
   type Chat,
-} from '../store/chatStore';
-import { getProfile } from '../store/profileStore';
+} from '@/store/chatStore';
+import { useAuthUserId } from '@/lib/authUser';
+import { prefetchProfileNamesForUserIds } from '@/lib/profileDisplayName';
 import { ui } from '@/constants/appUi';
+import { useProfileCacheVersion } from '@/hooks/useProfileCacheVersion';
 
 function sortByLatest(a: Chat, b: Chat): number {
   const ta = a.messages.length ? a.messages[a.messages.length - 1].timestamp : a.createdAt;
@@ -30,7 +32,22 @@ export default function ChatsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const chats = useChats();
-  const me = getProfile();
+  const me = useAuthUserId();
+  useProfileCacheVersion();
+
+  useEffect(() => {
+    const ids: string[] = [];
+    for (const c of chats) {
+      for (const p of c.participants) {
+        if (p.userId) ids.push(p.userId);
+      }
+      for (const m of c.messages) {
+        if (m.senderId) ids.push(m.senderId);
+        if (m.receiverId) ids.push(m.receiverId);
+      }
+    }
+    void prefetchProfileNamesForUserIds(ids);
+  }, [chats]);
   const active = chats.filter((c) => !c.archived).sort(sortByLatest);
   const archived = chats.filter((c) => c.archived).sort(sortByLatest);
   const hasAny = active.length > 0 || archived.length > 0;
@@ -65,9 +82,9 @@ export default function ChatsScreen() {
             ) : (
               <View style={styles.listCard}>
                 {active.map((chat, index) => {
-                  const other = getOtherParticipant(chat, me.userId);
+                  const other = getOtherParticipant(chat, me);
                   const preview = getLastMessagePreview(chat);
-                  const unread = getUnreadCountForUser(chat, me.userId);
+                  const unread = getUnreadCountForUser(chat, me);
                   const isLast = index === active.length - 1;
                   return (
                     <Pressable
@@ -111,9 +128,9 @@ export default function ChatsScreen() {
             ) : (
               <View style={[styles.listCard, styles.listCardArchived]}>
                 {archived.map((chat, index) => {
-                  const other = getOtherParticipant(chat, me.userId);
+                  const other = getOtherParticipant(chat, me);
                   const preview = getLastMessagePreview(chat);
-                  const unread = getUnreadCountForUser(chat, me.userId);
+                  const unread = getUnreadCountForUser(chat, me);
                   const isLast = index === archived.length - 1;
                   return (
                     <Pressable

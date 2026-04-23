@@ -4,9 +4,15 @@ import { PlatformPressable } from '@react-navigation/elements';
 import { Tabs } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 
+import { useActivityTabBadgeCount } from '@/hooks/useActivityTabBadgeCount';
 import { ui } from '@/constants/appUi';
 import { pressedVisual } from '@/lib/pressFeedback';
-import { useUnreadNotificationCount } from '../store/notificationsStore';
+import { useUnreadNotificationCount } from '@/store/notificationsStore';
+
+function formatTabBadge(count: number): string | undefined {
+  if (count <= 0) return undefined;
+  return count > 99 ? '99+' : String(count);
+}
 
 function TabBarButton(props: BottomTabBarButtonProps) {
   const { style: styleProp, ...rest } = props;
@@ -34,7 +40,8 @@ function TabBarButton(props: BottomTabBarButtonProps) {
 }
 
 export default function TabLayout() {
-  const unread = useUnreadNotificationCount();
+  const unreadAlerts = useUnreadNotificationCount();
+  const activityBadge = useActivityTabBadgeCount();
 
   return (
     <Tabs
@@ -45,13 +52,23 @@ export default function TabLayout() {
           justifyContent: 'center',
           alignItems: 'center',
         },
-        
+        tabBarBadgeStyle: {
+          backgroundColor: '#FF3B30',
+          color: '#FFFFFF',
+          fontSize: 10,
+          fontWeight: '700',
+          minWidth: 18,
+          height: 18,
+          lineHeight: 16,
+          borderRadius: 9,
+          paddingHorizontal: 4,
+          overflow: 'hidden',
+        },
         tabBarLabelStyle: {
           fontSize: 11,
           marginTop: 0,
           marginBottom: 2,
         },
-        
         tabBarIconStyle: {
           marginTop: 0,
         },
@@ -95,12 +112,13 @@ export default function TabLayout() {
         name="activity"
         options={{
           title: 'Activity',
+          tabBarBadge: formatTabBadge(activityBadge),
           tabBarIcon: ({ color, size, focused }) => (
             <View
               style={{
                 transform: [
                   { translateY: -2 },
-                  { translateX: 4 },
+                  { translateX: 5 },
                 ],
               }}
             >
@@ -124,7 +142,7 @@ export default function TabLayout() {
         name="notifications"
         options={{
           title: 'Alerts',
-          tabBarBadge: unread > 0 ? (unread > 99 ? '99+' : unread) : undefined,
+          tabBarBadge: formatTabBadge(unreadAlerts),
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons
               name={focused ? 'notifications' : 'notifications-outline'}

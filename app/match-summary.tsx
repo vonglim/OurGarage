@@ -5,13 +5,18 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
-import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
-import { formatHowDisplay } from './lib/deliveryFormat';
-import { formatDurationDisplay } from './lib/durationFormat';
-import { formatUsd } from './lib/money';
-import { formatDistanceFromYou } from './lib/requestDistance';
-import { openChatForRequest } from './lib/openRequestChat';
-import { getEffectiveRentalStatus, getRequestByTimestamp } from './store/requestsStore';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { formatHowDisplay } from '@/lib/deliveryFormat';
+import { formatDurationDisplay } from '@/lib/durationFormat';
+import { formatUsd } from '@/lib/money';
+import { formatDistanceFromYou } from '@/lib/requestDistance';
+import { isUuidString } from '@/lib/requestOwnership';
+import { openChatForRequest } from '@/lib/openRequestChat';
+import {
+  getEffectiveRentalStatus,
+  getRequestBySupabaseId,
+  getRequestByTimestamp,
+} from '@/store/requestsStore';
 import { primarySolidPressed, shadowCard, shadowKey, ui } from '@/constants/appUi';
 
 function dashLocation(loc: unknown): string {
@@ -34,12 +39,31 @@ export default function MatchSummaryScreen() {
 
   const request = useMemo(() => {
     void tick;
+    if (!requestIdStr) return undefined;
+    const s = String(requestIdStr).trim();
+    if (isUuidString(s)) {
+      return getRequestBySupabaseId(s);
+    }
     const id = Number(requestIdStr);
     if (!Number.isFinite(id)) return undefined;
     return getRequestByTimestamp(id);
   }, [requestIdStr, tick]);
 
-  if (!requestIdStr || !Number.isFinite(Number(requestIdStr))) {
+  if (!requestIdStr) {
+    return (
+      <KeyboardDismissScreen style={styles.centered}>
+        <ScreenEntrance style={styles.entranceFillCentered}>
+          <Text style={styles.muted}>Invalid request.</Text>
+        </ScreenEntrance>
+      </KeyboardDismissScreen>
+    );
+  }
+
+  const isValidId =
+    (String(requestIdStr).trim() !== '' && isUuidString(String(requestIdStr).trim())) ||
+    Number.isFinite(Number(requestIdStr));
+
+  if (!isValidId) {
     return (
       <KeyboardDismissScreen style={styles.centered}>
         <ScreenEntrance style={styles.entranceFillCentered}>

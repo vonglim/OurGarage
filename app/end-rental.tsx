@@ -7,15 +7,16 @@ import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
-import { pickPhotoFromLibrary } from './lib/pickProfileImage';
-import { archiveChatForRequest } from './store/chatStore';
-import { useRentalConditionStore } from './store/rentalConditionStore';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
+import { pickPhotoFromLibrary } from '@/lib/pickProfileImage';
+import { archiveChatForRequest } from '@/store/chatStore';
+import { useRentalConditionStore } from '@/store/rentalConditionStore';
 import {
   getEffectiveRentalStatus,
   getRequestByTimestamp,
   markRequestRentalComplete,
-} from './store/requestsStore';
+} from '@/store/requestsStore';
 import { primarySolidPressed, ui } from '@/constants/appUi';
 import { IMAGE_TRANSITION_MS } from '@/constants/interactionTiming';
 
@@ -106,12 +107,17 @@ export default function EndRentalScreen() {
           <Pressable
             pressOpacityFeedback={false}
             haptic
-            onPress={() =>
-              router.replace({
-                pathname: '/request-details',
-                params: { requestId: String(request.timestamp) },
-              })
-            }
+            onPress={() => {
+              const rid = getRequestSupabaseRowId(request as Record<string, unknown>);
+              if (rid) {
+                router.replace({
+                  pathname: '/request-details',
+                  params: { requestId: rid },
+                });
+              } else {
+                router.replace('/(tabs)/activity');
+              }
+            }}
             style={({ pressed }) => [styles.primaryBtn, pressed && styles.primaryBtnPressed]}
           >
             <Text style={styles.primaryBtnText}>Open request</Text>

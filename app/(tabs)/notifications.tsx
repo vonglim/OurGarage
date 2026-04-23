@@ -1,26 +1,83 @@
+import { Pressable } from '@/components/Pressable';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React, { useCallback } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
-import type { AppNotification } from '../store/notificationsStore';
-import { openChatForRequest } from '../lib/openRequestChat';
+import { cardChrome, ui } from '@/constants/appUi';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
+import { openChatForRequest } from '@/lib/openRequestChat';
+import type { AppNotification } from '@/store/notificationsStore';
+import { resolveRequestFromRouteId } from '@/store/requestsStore';
+import { markNotificationAsRead } from '@/lib/markNotificationsRead';
 import {
-  markAsRead,
   useNotificationsList,
   useNotificationsStore,
-} from '../store/notificationsStore';
-import { cardChrome, ui } from '@/constants/appUi';
+} from '@/store/notificationsStore';
 
+function typePillStyle(t: AppNotification['type']) {
+  switch (t) {
+    case 'accepted':
+    case 'offer_accepted':
+      return {
+        backgroundColor: '#E8F5E9',
+        color: '#2E7D32',
+      };
+    case 'new_offer':
+    case 'counter_offer':
+    case 'agreement_pending':
+      return {
+        backgroundColor: '#F3F4F6',
+        color: ui.textSecondary,
+      };
+    case 'declined':
+      return {
+        backgroundColor: '#FCE8E6',
+        color: '#C62828',
+      };
+    case 'review':
+      return {
+        backgroundColor: '#EEF2FF',
+        color: '#4F46E5',
+      };
+    case 'completed':
+      return {
+        backgroundColor: '#F5F5F4',
+        color: '#6D4C41',
+      };
+    case 'started':
+      return {
+        backgroundColor: '#E8F4FD',
+        color: ui.primary,
+      };
+    case 'message':
+      return {
+        backgroundColor: '#E3F2FD',
+        color: ui.primary,
+      };
+    default:
+      return {
+        backgroundColor: ui.surfaceNeutral,
+        color: ui.textSecondary,
+      };
+  }
+}
 function typeLabel(t: AppNotification['type']): string {
   switch (t) {
-    case 'offer':
-      return 'Offer';
+    case 'new_offer':
+      return 'New offer';
+    case 'counter_offer':
+      return 'Counter';
+    case 'agreement_pending':
+      return 'Agreement';
     case 'accepted':
-      return 'Match';
+      return 'Accepted';
+    case 'offer_accepted':
+      return 'Offer accepted';
+    case 'declined':
+      return 'Declined';
     case 'started':
       return 'Rental';
     case 'completed':
@@ -86,15 +143,49 @@ export default function NotificationsScreen() {
         return;
       }
       if (n.requestId != null) {
-        openChatForRequest(router, n.requestId);
+        const req = resolveRequestFromRouteId(n.requestId);
+        const ts = req != null ? (req as { timestamp?: number }).timestamp : undefined;
+        if (typeof ts === 'number' && Number.isFinite(ts)) {
+          openChatForRequest(router, ts);
+        }
         return;
       }
     }
+    if (
+      (n.type === 'new_offer' ||
+        n.type === 'counter_offer' ||
+        n.type === 'agreement_pending' ||
+        n.type === 'offer_accepted' ||
+        n.type === 'accepted' ||
+        n.type === 'declined') &&
+      n.requestId != null &&
+      n.offerId != null &&
+      String(n.offerId).trim() !== ''
+    ) {
+      const resolved = resolveRequestFromRouteId(n.requestId);
+      const ts = resolved != null ? (resolved as { timestamp?: number }).timestamp : undefined;
+      if (typeof ts === 'number' && Number.isFinite(ts)) {
+        router.push({
+          pathname: '/offer-detail',
+          params: {
+            requestId: String(ts),
+            offerId: String(n.offerId).trim(),
+          },
+        });
+      }
+      return;
+    }
     if (n.requestId != null) {
-      router.push({
-        pathname: '/request-details',
-        params: { requestId: String(n.requestId) },
-      });
+      const resolved = resolveRequestFromRouteId(n.requestId);
+      const rid = resolved
+        ? getRequestSupabaseRowId(resolved as Record<string, unknown>)
+        : null;
+      if (rid) {
+        router.push({
+          pathname: '/request-details',
+          params: { requestId: rid },
+        });
+      }
     }
   };
 
@@ -120,11 +211,12 @@ export default function NotificationsScreen() {
           <View style={styles.listCard}>
             {list.map((n, index) => {
               const isLast = index === list.length - 1;
+              const pillStyle = typePillStyle(n.type);
               return (
                 <Pressable
                   key={n.id}
                   onPress={() => {
-                    markAsRead(n.id);
+                    markNotificationAsRead(n.id);
                     navigateFromNotification(n);
                   }}
                   style={({ pressed }) => [
@@ -136,7 +228,17 @@ export default function NotificationsScreen() {
                 >
                   <View style={styles.rowTop}>
                     {!n.read ? <View style={styles.unreadDot} /> : <View style={styles.readSpacer} />}
-                    <Text style={styles.typePill}>{typeLabel(n.type)}</Text>
+                    <Text
+                      style={[
+                            styles.typePill,
+                            {
+                              backgroundColor: pillStyle.backgroundColor,
+                              color: pillStyle.color,
+                            },
+                          ]}
+                        >
+                          {typeLabel(n.type)}
+                        </Text>
                     <Text style={styles.time}>{formatWhen(n.timestamp)}</Text>
                   </View>
                   <NotificationMessage text={n.message} />
@@ -156,7 +258,8 @@ const styles = StyleSheet.create({
     backgroundColor: ui.surfaceGrouped,
   },
   header: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
+alignItems: 'flex-start',
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,
@@ -171,7 +274,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingTop: 16,
   },
   emptyCard: {
@@ -185,14 +288,18 @@ const styles = StyleSheet.create({
   },
   listCard: {
     ...cardChrome,
+    marginLeft: 0,
+    marginRight: 0,
     overflow: 'hidden',
   },
   row: {
     paddingVertical: 14,
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
   },
   rowUnread: {
     backgroundColor: ui.surfaceTintPrimary,
+    borderLeftWidth: 3,
+    borderLeftColor: ui.primary,
   },
   rowBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -205,33 +312,32 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 6,
-    gap: 8,
   },
   unreadDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
     backgroundColor: ui.primary,
+    marginRight: 6,
   },
   readSpacer: {
-    width: 8,
-    height: 8,
+    width: 0,
+    height: 0,
   },
   typePill: {
     fontSize: 11,
     fontWeight: '700',
-    color: ui.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.4,
-    backgroundColor: ui.surfaceNeutral,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
     overflow: 'hidden',
   },
   time: {
     flex: 1,
     textAlign: 'right',
+    marginLeft: 8,
     fontSize: 12,
     color: ui.textSecondary,
   },
@@ -239,10 +345,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 22,
     color: ui.textPrimary,
-    paddingLeft: 16,
   },
   messageBlock: {
-    paddingLeft: 16,
     gap: 4,
   },
   messagePrimary: {

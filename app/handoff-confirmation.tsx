@@ -12,10 +12,11 @@ import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
-import { pickPhotoFromLibrary } from './lib/pickProfileImage';
-import { useRentalConditionStore } from './store/rentalConditionStore';
-import { confirmRentalHandoff, getRequestByTimestamp } from './store/requestsStore';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
+import { pickPhotoFromLibrary } from '@/lib/pickProfileImage';
+import { useRentalConditionStore } from '@/store/rentalConditionStore';
+import { confirmRentalHandoff, getRequestByTimestamp } from '@/store/requestsStore';
 import { primarySolidPressed, ui } from '@/constants/appUi';
 import { IMAGE_TRANSITION_MS } from '@/constants/interactionTiming';
 
@@ -66,10 +67,15 @@ export default function HandoffConfirmationScreen() {
   const onConfirm = () => {
     if (!allChecked || request?.timestamp == null) return;
     confirmRentalHandoff(request.timestamp);
-    router.replace({
-      pathname: '/request-details',
-      params: { requestId: String(request.timestamp) },
-    });
+    const rid = getRequestSupabaseRowId(request as Record<string, unknown>);
+    if (rid) {
+      router.replace({
+        pathname: '/request-details',
+        params: { requestId: rid },
+      });
+    } else {
+      router.replace('/(tabs)/activity');
+    }
   };
 
   if (!requestIdStr || !Number.isFinite(Number(requestIdStr))) {
@@ -120,12 +126,17 @@ export default function HandoffConfirmationScreen() {
         <Pressable
           pressOpacityFeedback={false}
           haptic
-          onPress={() =>
-            router.replace({
-              pathname: '/request-details',
-              params: { requestId: String(request.timestamp) },
-            })
-          }
+          onPress={() => {
+            const rid = getRequestSupabaseRowId(request as Record<string, unknown>);
+            if (rid) {
+              router.replace({
+                pathname: '/request-details',
+                params: { requestId: rid },
+              });
+            } else {
+              router.replace('/(tabs)/activity');
+            }
+          }}
           style={({ pressed }) => [styles.primaryBtn, pressed && styles.primaryBtnPressed]}
         >
           <Text style={styles.primaryBtnText}>Open request</Text>

@@ -14,19 +14,19 @@ import {
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { ScrollView } from 'react-native-gesture-handler';
-import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
-import { numberPadAccessoryProps } from './components/NumberPadKeyboardAccessory';
-import { getRequestEditFormValues } from './lib/getRequestEditFormValues';
-import { showFeedbackToast } from './store/feedbackToastStore';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { numberPadAccessoryProps } from '@/components/NumberPadKeyboardAccessory';
+import { getRequestEditFormValues } from '@/lib/getRequestEditFormValues';
+import { showFeedbackToast } from '@/store/feedbackToastStore';
 import {
   addRequest,
   getRequestByTimestamp,
   updateRequest,
-} from './store/requestsStore';
-import { DELIVERY_OPTIONS, needsDeliveryFee, type HowKey } from './lib/deliveryFormat';
-import { DURATION_OPTIONS, type DurationType } from './lib/durationFormat';
-import { parseMoneyToNumber, sanitizeMoneyDigits } from './lib/money';
-import { coordinatesFromLocationField } from './lib/zipCoordinates';
+} from '@/store/requestsStore';
+import { DELIVERY_OPTIONS, needsDeliveryFee, type HowKey } from '@/lib/deliveryFormat';
+import { DURATION_OPTIONS, type DurationType } from '@/lib/durationFormat';
+import { parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
+import { coordinatesFromLocationField } from '@/lib/zipCoordinates';
 import { primarySolidPressed, subtleControlPressed, ui } from '@/constants/appUi';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -400,7 +400,7 @@ export default function RequestAToolScreen() {
           styles.submitButton,
           pressed && styles.submitButtonPressed,
         ]}
-        onPress={() => {
+        onPress={async () => {
           Keyboard.dismiss();
           if (!toolName.trim()) {
             Alert.alert('Missing info', 'Please enter an item name');
@@ -502,9 +502,13 @@ export default function RequestAToolScreen() {
             router.back();
             return;
           }
-          addRequest(payload);
-          showFeedbackToast('Request sent');
-          router.push('/request-confirmation');
+          try {
+            await addRequest(payload);
+            showFeedbackToast('Request sent');
+            router.push('/request-confirmation');
+          } catch {
+            Alert.alert('Could not save', 'Check your connection and try again.');
+          }
         }}
       >
         <Text style={styles.submitText}>

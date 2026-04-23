@@ -4,11 +4,12 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
-import { getRequestCardUiStatus } from './lib/requestCardStatus';
-import { formatUsd, getNumericTotalPrice } from './lib/money';
-import { getRequests, isLeaveReviewEligible } from './store/requestsStore';
-import { useUserReviews } from './store/userReviewsStore';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
+import { getRequestCardUiStatus } from '@/lib/requestCardStatus';
+import { formatUsd, getNumericTotalPrice } from '@/lib/money';
+import { getRequests, isLeaveReviewEligible } from '@/store/requestsStore';
+import { useUserReviews } from '@/store/userReviewsStore';
 
 import { outlinePrimaryPressed, ui } from '@/constants/appUi';
 
@@ -68,6 +69,7 @@ export default function RequestsManagementScreen() {
               const when = req.when != null ? String(req.when) : '—';
               const isLast = index === list.length - 1;
               const ts = req.timestamp;
+              const detailsId = getRequestSupabaseRowId(req as Record<string, unknown>);
               const canReview = ts != null && isLeaveReviewEligible(req);
               const reviewed =
                 ts != null &&
@@ -80,10 +82,10 @@ export default function RequestsManagementScreen() {
                   <Pressable
                     style={({ pressed }) => [styles.rowMainHit, pressed && styles.rowPressed]}
                     onPress={() => {
-                      if (ts == null) return;
+                      if (!detailsId) return;
                       router.push({
                         pathname: '/request-details',
-                        params: { requestId: String(ts) },
+                        params: { requestId: detailsId },
                       });
                     }}
                   >

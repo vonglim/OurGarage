@@ -7,6 +7,7 @@ import {
   KeyboardAvoidingView,
   Modal,
   Platform,
+  Pressable as RNPressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -17,20 +18,31 @@ import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { numberPadAccessoryProps } from './components/NumberPadKeyboardAccessory';
-import { formatHowDisplay, needsDeliveryFee } from './lib/deliveryFormat';
-import { formatDurationDisplay } from './lib/durationFormat';
-import { formatUsd, getNumericOfferPrice, getNumericTotalPrice, parseMoneyToNumber, sanitizeMoneyDigits } from './lib/money';
+import { numberPadAccessoryProps } from '@/components/NumberPadKeyboardAccessory';
+import { getAuthUserIdSync } from '@/lib/authUser';
+import { formatHowDisplay, needsDeliveryFee } from '@/lib/deliveryFormat';
+import { formatDurationDisplay } from '@/lib/durationFormat';
+import { formatUsd, getNumericOfferPrice, getNumericTotalPrice, parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
 import {
-  type Offer,
+  getRequestOwnerId,
+  getRequestSupabaseRowId,
+  isUuidString,
+} from '@/lib/requestOwnership';
+import { finalizeOfferAcceptance } from '@/lib/finalizeOfferAcceptance';
+import {
   addPosterCounterOffer,
+  addRenterAcceptsPosterProposed,
   declineOffer,
   getOfferUserPreview,
+  posterCounterOffersRemainingForRenter,
   useOffersStore,
-} from './store/offersStore';
-import { showFeedbackToast } from './store/feedbackToastStore';
-import { getProfile } from './store/profileStore';
-import { getEffectiveRentalStatus, getRequestByTimestamp } from './store/requestsStore';
+} from '@/store/offersStore';
+import { showFeedbackToast } from '@/store/feedbackToastStore';
+import {
+  getEffectiveRentalStatus,
+  getRequestBySupabaseId,
+  getRequestByTimestamp,
+} from '@/store/requestsStore';
 import {
   outlinePrimaryPressed,
   primarySolidPressed,
@@ -58,38 +70,33 @@ export default function OfferDetailScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{
     requestId?: string | string[];
-    offerTimestamp?: string | string[];
+    offerId?: string | string[];
   }>();
-  const requestIdStr = firstParam(params.requestId);
-  const offerTsStr = firstParam(params.offerTimestamp);
+  const requestIdStr = (firstParam(params.requestId) ?? '').trim();
+  const offerIdStr = firstParam(params.offerId);
+  const offerIdTrim = (offerIdStr ?? '').trim();
   const [tick, setTick] = useState(0);
   const [counterModalVisible, setCounterModalVisible] = useState(false);
   const [counterPriceDraft, setCounterPriceDraft] = useState('');
   const [counterMessageDraft, setCounterMessageDraft] = useState('');
 
-  const requestIdNum = useMemo(() => Number(requestIdStr), [requestIdStr]);
-  const offerTsNum = useMemo(() => Number(offerTsStr), [offerTsStr]);
-
-  const offer = useOffersStore((s) =>
-    Number.isFinite(requestIdNum) && Number.isFinite(offerTsNum)
-      ? s.offers.find((o) => o.requestId === requestIdNum && o.timestamp === offerTsNum)
-      : undefined
-  );
-
   const offersFromStore = useOffersStore((s) => s.offers);
-  const { currentOffer, historyOffers } = useMemo(() => {
-    if (!Number.isFinite(requestIdNum)) {
-      return { currentOffer: undefined as Offer | undefined, historyOffers: [] as Offer[] };
+
+  const offer = useMemo(() => {
+    if (offerIdTrim.length === 0) return undefined;
+    const byId = offersFromStore.find((o) => o.id === offerIdTrim);
+    if (byId) return byId;
+    const ts = Number(requestIdStr);
+    if (!Number.isFinite(ts)) return undefined;
+    const me = getAuthUserIdSync();
+    if (typeof me === 'string' && me.length > 0) {
+      const m = me.trim();
+      return offersFromStore.find(
+        (o) => o.requestId === ts && o.renterId.trim() === m
+      );
     }
-    const sorted = offersFromStore
-      .filter((o) => o.requestId === requestIdNum)
-      .sort((a, b) => b.timestamp - a.timestamp);
-    const current = sorted[0];
-    return {
-      currentOffer: current,
-      historyOffers: sorted.slice(1),
-    };
-  }, [offersFromStore, requestIdNum]);
+    return undefined;
+  }, [offerIdTrim, requestIdStr, offersFromStore]);
 
   useFocusEffect(
     useCallback(() => {
@@ -99,69 +106,157 @@ export default function OfferDetailScreen() {
 
   const request = useMemo(() => {
     void tick;
-    if (!Number.isFinite(requestIdNum)) return undefined;
-    return getRequestByTimestamp(requestIdNum);
-  }, [requestIdNum, tick]);
+    if (requestIdStr) {
+      if (isUuidString(requestIdStr)) {
+        const u = getRequestBySupabaseId(requestIdStr);
+        if (u) return u;
+      }
+      const n = Number(requestIdStr);
+      if (Number.isFinite(n)) {
+        const t = getRequestByTimestamp(n);
+        if (t) return t;
+      }
+    }
+    if (offer) return getRequestByTimestamp(offer.requestId);
+    return undefined;
+  }, [requestIdStr, tick, offer]);
 
+  const posterRemaining = useMemo(() => {
+    if (!offer || !request?.id) return 0;
+    return posterCounterOffersRemainingForRenter(request.id, offer.renterId);
+  }, [offer, request, offersFromStore]);
+
+  const historyEntries = useMemo(() => {
+    if (!offer?.messageHistory?.length) return [];
+    return [...offer.messageHistory].sort((a, b) => b.at - a.at);
+  }, [offer]);
+
+  const me = getAuthUserIdSync();
   const rentalStatus = request ? getEffectiveRentalStatus(request) : 'pending';
   const matched = !!request?.matched;
   const isAcceptedOffer =
     matched &&
-    request?.acceptedOfferTimestamp != null &&
+    request != null &&
     offer != null &&
-    request.acceptedOfferTimestamp === offer.timestamp;
+    typeof (request as { acceptedOfferId?: string }).acceptedOfferId === 'string' &&
+    (request as { acceptedOfferId: string }).acceptedOfferId === offer.id;
   const isViewerPoster =
     !!request &&
-    typeof request.posterUserId === 'string' &&
-    request.posterUserId === getProfile().userId;
-  const isPosterCounter = offer?.counterFromPoster === true;
-  const isCurrentPosterCounter = currentOffer?.counterFromPoster === true;
-  const canActOnCurrent =
-    !!currentOffer &&
-    !currentOffer.declined &&
+    typeof me === 'string' &&
+    me.length > 0 &&
+    getRequestOwnerId(request as Record<string, unknown>) === me;
+  const isRenterOnThread =
+    !!offer &&
+    typeof me === 'string' &&
+    me.length > 0 &&
+    offer.renterId.trim() === me;
+  const lastMoverIsMe = offer != null && offer.lastUpdatedBy === me;
+  const isPosterCounter = !!(offer && isViewerPoster && offer.lastUpdatedBy === me);
+  const posterCanRespond =
+    !!offer &&
+    isViewerPoster &&
+    !lastMoverIsMe &&
     !matched &&
     rentalStatus === 'pending' &&
+    offer.status === 'pending';
+  const renterCanRespond =
+    !!offer &&
+    typeof me === 'string' &&
+    me.length > 0 &&
+    offer.renterId.trim() === me &&
+    !lastMoverIsMe &&
+    !matched &&
+    rentalStatus === 'pending' &&
+    offer.status === 'pending';
+  const renterIsWaitingOwnerConfirm =
+    !!offer &&
+    isRenterOnThread &&
+    !matched &&
+    rentalStatus === 'pending' &&
+    offer.status === 'pending_confirmation';
+  const posterCanConfirmRental =
+    !!offer &&
+    isViewerPoster &&
+    !matched &&
+    rentalStatus === 'pending' &&
+    offer.status === 'pending_confirmation';
+  const canActOnCurrent =
+    !!offer &&
+    !matched &&
+    rentalStatus === 'pending' &&
+    offer.status !== 'declined' &&
+    offer.status !== 'closed' &&
+    offer.status !== 'pending_confirmation' &&
     isViewerPoster;
-  const canAcceptCurrent = canActOnCurrent && !isCurrentPosterCounter;
-  const showCounterOffer = canActOnCurrent && !isCurrentPosterCounter;
-  const footerShows = canActOnCurrent && !isCurrentPosterCounter;
+  const posterIdForRequest =
+    request == null
+      ? undefined
+      : getRequestOwnerId(request as Record<string, unknown>) ??
+        (typeof (request as { posterUserId?: string }).posterUserId === 'string'
+          ? (request as { posterUserId: string }).posterUserId
+          : undefined);
+  const canAcceptCurrent = !!(
+    isViewerPoster &&
+    offer &&
+    !matched &&
+    offer.status === 'pending' &&
+    rentalStatus === 'pending' &&
+    offer.lastUpdatedBy === offer.renterId
+  );
+  const showCounterOffer =
+    canActOnCurrent && offer != null && offer.lastUpdatedBy === offer.renterId;
+  const footerShows = posterCanRespond || renterCanRespond || posterCanConfirmRental;
 
-  const onAccept = () => {
-    if (!canAcceptCurrent || !request?.timestamp || !currentOffer) return;
-    const priceNum = getNumericOfferPrice(currentOffer);
-    const priceLabel = formatUsd(priceNum);
-    Alert.alert(
-      'Accept offer',
-      `Accept this offer for ${priceLabel}?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Accept',
-          onPress: () => {
-            router.push({
-              pathname: '/rental-agreement',
-              params: {
-                requestId: String(request.timestamp),
-                offerTimestamp: String(currentOffer.timestamp),
-                price: String(priceNum),
-              },
-            });
-          },
-        },
-      ],
-    );
+  const handleAcceptOffer = () => {
+    if (!canAcceptCurrent || !request || !offer) return;
+    if (!getRequestSupabaseRowId(request as Record<string, unknown>)) {
+      showFeedbackToast('This request is not linked to the server. Open the request from Activity and try again.');
+      return;
+    }
+    const priceLabel = formatUsd(getNumericOfferPrice(offer));
+    const doAccept = () => {
+      void (async () => {
+        const r = await finalizeOfferAcceptance(offer.requestId, String(offer.id));
+        if (!r.ok) {
+          showFeedbackToast(
+            r.error && r.error.length > 0
+              ? r.error
+              : 'Could not complete accept. Check connection and try again.',
+          );
+          return;
+        }
+        // Navigation runs inside finalizeOfferAcceptance on success
+      })();
+    };
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      if (window.confirm(`Accept this offer for ${priceLabel}?`)) {
+        doAccept();
+      }
+      return;
+    }
+    Alert.alert('Accept offer', `Accept this offer for ${priceLabel}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Accept', onPress: doAccept },
+    ]);
   };
 
   const onDecline = () => {
-    if (!footerShows || !request?.timestamp || !currentOffer) return;
+    if (!footerShows || !request?.id || !offer) return;
+    if (!isViewerPoster) {
+      router.back();
+      return;
+    }
     Alert.alert('Decline offer?', 'You can still receive other offers on this request.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Decline',
         style: 'destructive',
         onPress: () => {
-          declineOffer(request.timestamp!, currentOffer.timestamp);
-          router.back();
+          void (async () => {
+            const ok = await declineOffer(request.id, offer.id);
+            if (ok) router.back();
+            else showFeedbackToast('Could not decline. Check connection and try again.');
+          })();
         },
       },
     ]);
@@ -173,14 +268,29 @@ export default function OfferDetailScreen() {
   };
 
   const openCounterModal = () => {
-    if (!currentOffer || !showCounterOffer) return;
-    setCounterPriceDraft(sanitizeMoneyDigits(String(getNumericOfferPrice(currentOffer))));
+    if (!offer || !showCounterOffer) return;
+    if (posterRemaining <= 0) {
+      Alert.alert('No counters left', 'You have used the maximum number of counter-offers for this thread.');
+      return;
+    }
+    setCounterPriceDraft(sanitizeMoneyDigits(String(getNumericOfferPrice(offer))));
     setCounterMessageDraft('');
     setCounterModalVisible(true);
   };
 
+  const onCounterOfferPress = () => {
+    if (!offer || !request) return;
+    if (isViewerPoster) {
+      openCounterModal();
+    } else {
+      const rowId = getRequestSupabaseRowId(request as Record<string, unknown>);
+      if (!rowId) return;
+      router.push({ pathname: '/make-offer', params: { requestId: rowId } });
+    }
+  };
+
   const submitCounter = () => {
-    if (!request?.timestamp) return;
+    if (!request?.id || !offer) return;
     const n = parseMoneyToNumber(counterPriceDraft);
     if (n == null || n < 0) {
       Alert.alert(
@@ -189,26 +299,65 @@ export default function OfferDetailScreen() {
       );
       return;
     }
-    addPosterCounterOffer(request.timestamp, {
-      price: n,
-      message: counterMessageDraft.trim(),
-    });
-    closeCounterModal();
-    showFeedbackToast('Counter sent');
-    router.back();
+    void (async () => {
+      const ok = await addPosterCounterOffer(request.id, offer.id, {
+        price: n,
+        message: counterMessageDraft.trim(),
+      });
+      if (ok) {
+        closeCounterModal();
+        showFeedbackToast('Counter sent');
+        router.back();
+      } else {
+        showFeedbackToast('Could not send counter. Check connection and try again.');
+      }
+    })();
   };
 
-  if (!requestIdStr || !offerTsStr || !Number.isFinite(requestIdNum) || !Number.isFinite(offerTsNum)) {
-    return (
-      <View style={{ flex: 1 }}>
-        <ScreenEntrance style={styles.entranceFillCentered}>
-          <Text style={styles.muted}>Invalid link.</Text>
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.textBtn}>
-            <Text style={styles.textBtnLabel}>Go back</Text>
-          </Pressable>
-        </ScreenEntrance>
-      </View>
-    );
+  const onAcceptCounter = () => {
+    if (!offer || !renterCanRespond) return;
+    void (async () => {
+      const ok = await addRenterAcceptsPosterProposed(offer.id);
+      if (ok) {
+        showFeedbackToast('Owner will confirm the rental next.');
+      } else {
+        showFeedbackToast('Could not accept. Check connection and try again.');
+      }
+    })();
+  };
+
+  const onConfirmRental = () => {
+    if (!posterCanConfirmRental || !request || !offer) return;
+    if (!getRequestSupabaseRowId(request as Record<string, unknown>)) {
+      showFeedbackToast('This request is not linked to the server. Open the request from Activity and try again.');
+      return;
+    }
+    const priceNum = getNumericOfferPrice(offer);
+    const priceLabel = formatUsd(priceNum);
+    Alert.alert('Confirm rental', `Finalize this match for ${priceLabel}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Confirm rental',
+        onPress: () => {
+          void (async () => {
+            const r = await finalizeOfferAcceptance(offer.requestId, String(offer.id));
+            if (!r.ok) {
+              showFeedbackToast(
+                r.error && r.error.length > 0
+                  ? r.error
+                  : 'Could not confirm. Check connection and try again.'
+              );
+              return;
+            }
+            // Navigation runs inside finalizeOfferAcceptance on success
+          })();
+        },
+      },
+    ]);
+  };
+
+  if (!requestIdStr || offerIdTrim.length === 0) {
+    return null;
   }
 
   if (!request || !offer) {
@@ -235,11 +384,11 @@ export default function OfferDetailScreen() {
   const feeDisplay =
     feeNum != null && Number.isFinite(feeNum) ? formatUsd(feeNum) : '—';
 
-  const scrollBottomPad = footerShows ? 150 + insets.bottom : 32 + insets.bottom;
-
-  // TODO: Fix accidental navigation when tapping avatar/name inside offer detail
-  // Likely caused by parent Pressable capturing touches
-  // Revisit after current feature work
+  const scrollBottomPad = footerShows
+    ? (renterCanRespond && isRenterOnThread ? 200 : 150) + insets.bottom
+    : renterIsWaitingOwnerConfirm
+      ? 120 + insets.bottom
+      : 32 + insets.bottom;
 
   return (
     <View style={{ flex: 1, backgroundColor: ui.surfaceGrouped }}>
@@ -272,7 +421,28 @@ export default function OfferDetailScreen() {
           </View>
         ) : null}
 
-        {!isViewerPoster && rentalStatus === 'pending' && !matched ? (
+        {renterIsWaitingOwnerConfirm ? (
+          <View style={styles.notice}>
+            <Text style={styles.noticeText}>
+              Waiting for owner confirmation. You will be notified when they confirm the rental.
+            </Text>
+          </View>
+        ) : null}
+
+        {posterCanConfirmRental ? (
+          <View style={styles.notice}>
+            <Text style={styles.noticeText}>
+              The renter accepted your counter. Confirm the rental below to match and open the
+              agreement.
+            </Text>
+          </View>
+        ) : null}
+
+        {!isViewerPoster &&
+        !isRenterOnThread &&
+        !renterCanRespond &&
+        rentalStatus === 'pending' &&
+        !matched ? (
           <View style={styles.notice}>
             <Text style={styles.noticeText}>
               Only the request owner can accept, decline, or counter here.
@@ -288,84 +458,74 @@ export default function OfferDetailScreen() {
           </View>
         ) : null}
 
-        {currentOffer ? (
+        {offer ? (
           <>
             <Text style={styles.sectionLabel}>Current Offer</Text>
             <View style={styles.card}>
-              <Text style={styles.priceLine}>{formatUsd(getNumericOfferPrice(currentOffer))}</Text>
-              {currentOffer.message?.trim() ? (
-                <Text style={styles.offerMessageLine}>{currentOffer.message.trim()}</Text>
+              <Text style={styles.priceLine}>{formatUsd(getNumericOfferPrice(offer))}</Text>
+              {offer.message?.trim() ? (
+                <Text style={styles.offerMessageLine}>{offer.message.trim()}</Text>
               ) : (
                 <Text style={styles.mutedSmall}>No message with this offer.</Text>
               )}
               <Text style={styles.currentOfferName}>
-                {getOfferUserPreview(currentOffer).name}
+                {getOfferUserPreview(offer).name}
               </Text>
               <Text style={styles.mutedSmall}>
-                {currentOffer.counterFromPoster
-                  ? 'Your proposed total for the full rental period'
-                  : 'Total they are offering for the full rental period'}
+                {offer.lastUpdatedBy === offer.renterId
+                  ? 'Total they are offering for the full rental period'
+                  : 'Your proposed total for the full rental period'}
               </Text>
-              <Text style={styles.timeLine}>Offered {getTimeAgo(currentOffer.timestamp)}</Text>
-              {currentOffer.declined ? (
+              <Text style={styles.timeLine}>Offered {getTimeAgo(offer.updatedAt)}</Text>
+              {offer.status === 'declined' ? (
                 <Text style={styles.currentOfferDeclined}>Declined</Text>
+              ) : offer.status === 'pending_confirmation' ? (
+                <Text style={styles.mutedSmall}>
+                  {isViewerPoster
+                    ? 'Renter accepted your counter — confirm the rental in the bar below.'
+                    : 'You accepted the counter. Waiting for the owner to confirm.'}
+                </Text>
               ) : null}
               {canAcceptCurrent ? (
-                <Pressable
-                  pressOpacityFeedback={false}
-                  haptic
-                  onPress={onAccept}
+                <RNPressable
+                  onPress={() => {
+                    console.log('ACCEPT CLICKED');
+                    handleAcceptOffer();
+                  }}
                   style={({ pressed }) => [
                     styles.primaryBtn,
                     styles.currentOfferAcceptBtn,
                     pressed && styles.primaryBtnPressed,
+                    Platform.OS === 'web' && styles.acceptOfferPressableWeb,
                   ]}
                 >
                   <Text style={styles.primaryBtnText}>Accept Offer</Text>
-                </Pressable>
+                </RNPressable>
               ) : null}
             </View>
           </>
         ) : null}
 
         <Text style={styles.sectionLabel}>Offer History</Text>
-        {historyOffers.length === 0 ? (
+        {historyEntries.length === 0 ? (
           <Text style={styles.mutedSmall}>No older offers on this request.</Text>
         ) : (
-          historyOffers.map((h) => {
-            const preview = getOfferUserPreview(h);
-            const isFocused = h.timestamp === offerTsNum;
-            return (
-              <Pressable
-                key={h.timestamp}
-                disabled={matched}
-                onPress={() =>
-                  router.setParams({ offerTimestamp: String(h.timestamp) })
-                }
-                style={({ pressed }) => [
-                  styles.historyRow,
-                  matched && styles.historyRowLocked,
-                  isFocused && styles.historyRowFocused,
-                  !matched && pressed && styles.historyRowPressed,
-                ]}
-              >
-                <Text style={styles.historyRowName} numberOfLines={1}>
-                  {preview.name}
+          historyEntries.map((h) => (
+            <View
+              key={`${h.at}-${h.authorId}-${h.kind}`}
+              style={styles.historyRow}
+            >
+              <Text style={styles.historyRowName} numberOfLines={1}>
+                {h.kind} · {getTimeAgo(h.at)}
+                {h.price != null && Number.isFinite(h.price) ? ` · ${formatUsd(h.price)}` : ''}
+              </Text>
+              {h.body?.trim() ? (
+                <Text style={styles.historyRowMessage} numberOfLines={4}>
+                  {h.body.trim()}
                 </Text>
-                <Text style={styles.historyRowPrice}>{formatUsd(getNumericOfferPrice(h))}</Text>
-                {h.message?.trim() ? (
-                  <Text style={styles.historyRowMessage} numberOfLines={2}>
-                    {h.message.trim()}
-                  </Text>
-                ) : null}
-                <Text style={styles.historyRowMeta}>
-                  {getTimeAgo(h.timestamp)}
-                  {h.declined ? ' · Declined' : ''}
-                  {isFocused ? ' · Viewing' : ''}
-                </Text>
-              </Pressable>
-            );
-          })
+              ) : null}
+            </View>
+          ))
         )}
 
         <Text style={styles.sectionLabel}>Rental period (your request)</Text>
@@ -387,12 +547,12 @@ export default function OfferDetailScreen() {
           </Text>
         </View>
 
-        {(currentOffer?.toolDescription ?? offer?.toolDescription)?.trim() ? (
+        {offer?.toolDescription?.trim() ? (
           <>
             <Text style={styles.sectionLabel}>Item description</Text>
             <View style={styles.card}>
               <Text style={styles.bodyMultiline}>
-                {(currentOffer?.toolDescription ?? offer?.toolDescription)!.trim()}
+                {offer.toolDescription.trim()}
               </Text>
             </View>
           </>
@@ -416,23 +576,71 @@ export default function OfferDetailScreen() {
 
       {footerShows ? (
         <View style={[styles.buttonContainer, { paddingBottom: 16 + insets.bottom }]}>
-          <Pressable
-            pressOpacityFeedback={false}
-            onPress={openCounterModal}
-            style={({ pressed }) => [
-              styles.counterOfferBtn,
-              pressed && styles.counterOfferBtnPressed,
-            ]}
-          >
-            <Text style={styles.counterOfferBtnText}>Counter Offer</Text>
-          </Pressable>
-          <Pressable
-            pressOpacityFeedback={false}
-            onPress={onDecline}
-            style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
-          >
-            <Text style={styles.secondaryBtnText}>Decline</Text>
-          </Pressable>
+          {posterCanConfirmRental ? (
+            <>
+              <Pressable
+                pressOpacityFeedback={false}
+                haptic
+                onPress={onConfirmRental}
+                style={({ pressed }) => [
+                  styles.primaryBtn,
+                  pressed && styles.primaryBtnPressed,
+                ]}
+              >
+                <Text style={styles.primaryBtnText}>Confirm Rental</Text>
+              </Pressable>
+              <Pressable
+                pressOpacityFeedback={false}
+                onPress={onDecline}
+                style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
+              >
+                <Text style={styles.secondaryBtnText}>Decline</Text>
+              </Pressable>
+            </>
+          ) : isRenterOnThread && renterCanRespond ? (
+            <>
+              <Pressable
+                pressOpacityFeedback={false}
+                haptic
+                onPress={onAcceptCounter}
+                style={({ pressed }) => [styles.primaryBtn, pressed && styles.primaryBtnPressed]}
+              >
+                <Text style={styles.primaryBtnText}>Accept Counter</Text>
+              </Pressable>
+              <Pressable
+                pressOpacityFeedback={false}
+                onPress={onCounterOfferPress}
+                style={({ pressed }) => [
+                  styles.counterOfferBtn,
+                  pressed && styles.counterOfferBtnPressed,
+                ]}
+              >
+                <Text style={styles.counterOfferBtnText}>Update Offer</Text>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <Pressable
+                pressOpacityFeedback={false}
+                onPress={onCounterOfferPress}
+                style={({ pressed }) => [
+                  styles.counterOfferBtn,
+                  pressed && styles.counterOfferBtnPressed,
+                ]}
+              >
+                <Text style={styles.counterOfferBtnText}>Counter Offer</Text>
+              </Pressable>
+              {isViewerPoster ? (
+                <Pressable
+                  pressOpacityFeedback={false}
+                  onPress={onDecline}
+                  style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
+                >
+                  <Text style={styles.secondaryBtnText}>Decline</Text>
+                </Pressable>
+              ) : null}
+            </>
+          )}
         </View>
       ) : null}
       </ScreenEntrance>
@@ -448,10 +656,7 @@ export default function OfferDetailScreen() {
               behavior={Platform.OS === 'ios' ? 'padding' : undefined}
               style={styles.counterModalKb}
             >
-              <Pressable
-                style={styles.counterModalCard}
-                onPress={(e) => e.stopPropagation()}
-              >
+              <View style={styles.counterModalCard}>
                 <Text style={styles.counterModalTitle}>Counter offer</Text>
                 <Text style={styles.counterModalLabel}>New total price</Text>
                 <View style={styles.counterModalMoneyRow}>
@@ -499,7 +704,7 @@ export default function OfferDetailScreen() {
                 >
                   <Text style={styles.textBtnLabel}>Cancel</Text>
                 </Pressable>
-              </Pressable>
+              </View>
             </KeyboardAvoidingView>
           </Pressable>
         </Modal>
@@ -572,6 +777,9 @@ const styles = StyleSheet.create({
   },
   currentOfferAcceptBtn: {
     marginTop: 16,
+  },
+  acceptOfferPressableWeb: {
+    cursor: 'pointer' as const,
   },
   currentOfferDeclined: {
     marginTop: 8,

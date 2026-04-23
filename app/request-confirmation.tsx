@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
-import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import { primarySolidPressed, ui } from '@/constants/appUi';
 
 export default function RequestConfirmation() {

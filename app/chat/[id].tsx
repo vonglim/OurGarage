@@ -1,6 +1,6 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   KeyboardAvoidingView,
@@ -14,20 +14,23 @@ import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
-import { getPublicProfileForView } from '../lib/mockPublicProfiles';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { getProfileNameForUserId, prefetchProfileNamesForUserIds } from '@/lib/profileDisplayName';
+import { getPublicProfileForView } from '@/lib/publicProfiles';
 import {
   addChatMessage,
-  addMessage,
   getOtherParticipant,
+  isUserChatMessage,
   markChatRead,
+  syncChatWithSupabase,
   useChatStore,
   type ChatMessage,
-} from '../store/chatStore';
-import { getProfile } from '../store/profileStore';
-import { showFeedbackToast } from '../store/feedbackToastStore';
-import { getRequestByTimestamp } from '../store/requestsStore';
+} from '@/store/chatStore';
+import { useAuthUserId } from '@/lib/authUser';
+import { showFeedbackToast } from '@/store/feedbackToastStore';
+import { getRequestByTimestamp } from '@/store/requestsStore';
 import { subtleControlPressed, ui } from '@/constants/appUi';
+import { useProfileCacheVersion } from '@/hooks/useProfileCacheVersion';
 
 /** Metro sets `__DEV__` — true in development, stripped/false in production release builds. */
 declare const __DEV__: boolean;
@@ -39,8 +42,9 @@ export default function ChatDetailScreen() {
   const chatId = typeof id === 'string' ? id : Array.isArray(id) ? id[0] : '';
   const chats = useChatStore((state) => state.chats);
   const chat = chats.find((c) => c.id === chatId);
-  const me = getProfile();
-  const other = chat ? getOtherParticipant(chat, me.userId) : null;
+  const meId = useAuthUserId();
+  const other = chat ? getOtherParticipant(chat, meId) : null;
+  useProfileCacheVersion();
   const isArchived = chat ? chat.archived === true : false;
   const requestForChat = chat ? getRequestByTimestamp(chat.requestId) : undefined;
   const toolName =
@@ -51,18 +55,23 @@ export default function ChatDetailScreen() {
       : 'Equipment request';
   const subtitle =
     other != null
-      ? `${(other.displayName ?? '').trim() || 'Neighbor'} • ⭐ ${getPublicProfileForView(
+      ? `${getProfileNameForUserId(other.userId)} • ⭐ ${getPublicProfileForView(
           other.userId
         ).ratingNumber.toFixed(1)}`
       : '';
-  /** Same id `addChatMessage` uses as `senderId` (default profile is `user_1`). */
-  const currentUserId = me.userId;
-  /** Other participant in this thread (e.g. `user_2` when poster and offerer were the same). */
-  const otherUserId = other?.userId ?? '';
+  /** Same id `addChatMessage` uses as `senderId`. */
+  const currentUserId = meId;
 
   const [draft, setDraft] = useState('');
   const listRef = useRef<FlatList<ChatMessage>>(null);
-  const lastMessageId = chat?.messages?.at(-1)?.id;
+  const visibleMessages = useMemo(
+    () =>
+      (chat?.messages ?? []).filter(
+        (m) => typeof m.text === 'string' && m.text.trim() !== ''
+      ),
+    [chat?.messages]
+  );
+  const lastMessageId = visibleMessages.at(-1)?.id;
 
   const scrollToEnd = useCallback((animated = true) => {
     requestAnimationFrame(() => {
@@ -72,32 +81,54 @@ export default function ChatDetailScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      if (chatId) markChatRead(chatId);
+      if (!chatId) return;
+      let cancelled = false;
+      void (async () => {
+        await syncChatWithSupabase(chatId, { bumpUnreadForNewIncoming: false });
+        if (!cancelled) markChatRead(chatId);
+      })();
+      return () => {
+        cancelled = true;
+      };
     }, [chatId])
   );
 
-  useLayoutEffect(() => {
-    if (!chat?.messages.length) return;
-    scrollToEnd(true);
-  }, [chat?.messages.length, lastMessageId, scrollToEnd]);
+  useEffect(() => {
+    if (!chat || !meId) {
+      return;
+    }
+    const peer = getOtherParticipant(chat, meId);
+    const ids: string[] = [peer.userId, meId];
+    for (const m of chat.messages) {
+      if (m.senderId) ids.push(m.senderId);
+      if (m.receiverId) ids.push(m.receiverId);
+    }
+    void prefetchProfileNamesForUserIds(ids);
+  }, [chat, meId]);
 
-  const onSend = () => {
+  useEffect(() => {
+    if (!chatId) {
+      return;
+    }
+    const id = setInterval(() => {
+      void syncChatWithSupabase(chatId, { bumpUnreadForNewIncoming: false });
+    }, 2000);
+    return () => clearInterval(id);
+  }, [chatId]);
+
+  useLayoutEffect(() => {
+    if (!visibleMessages.length) return;
+    scrollToEnd(true);
+  }, [visibleMessages.length, lastMessageId, scrollToEnd]);
+
+  const onSend = async () => {
     const text = draft.trim();
     if (!text || !chatId || isArchived) return;
-    addChatMessage(chatId, text);
     setDraft('');
+    await addChatMessage(chatId, text);
+    await syncChatWithSupabase(chatId, { bumpUnreadForNewIncoming: false });
     showFeedbackToast('Sent');
   };
-
-  const handleSimulateReply = useCallback(() => {
-    if (!__DEV__ || !chatId || !otherUserId) return;
-    addMessage(chatId, {
-      id: Date.now().toString(),
-      senderId: otherUserId,
-      text: 'Got it 👍',
-      timestamp: Date.now(),
-    });
-  }, [chatId, otherUserId]);
 
   if (!chatId) {
     return (
@@ -162,13 +193,13 @@ export default function ChatDetailScreen() {
         <FlatList
           ref={listRef}
           style={styles.messages}
-          data={chat.messages}
+          data={visibleMessages}
           keyExtractor={(item) => item.id}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
           contentContainerStyle={[
             styles.messagesContent,
-            chat.messages.length === 0 ? styles.messagesEmpty : null,
+            visibleMessages.length === 0 ? styles.messagesEmpty : null,
             { paddingBottom: 12 + insets.bottom },
           ]}
           ListEmptyComponent={
@@ -176,11 +207,14 @@ export default function ChatDetailScreen() {
           }
           onContentSizeChange={() => scrollToEnd(true)}
           onLayout={() => {
-            if (chat.messages.length > 0) scrollToEnd(false);
+            if (visibleMessages.length > 0) scrollToEnd(false);
           }}
           renderItem={({ item: message, index }) => {
+            if (!isUserChatMessage(message) || !message.text || !message.text.trim()) {
+              return null;
+            }
             const isCurrentUser = message.senderId === currentUserId;
-            const prev = index > 0 ? chat.messages[index - 1] : null;
+            const prev = index > 0 ? visibleMessages[index - 1] : null;
             const senderChanged = prev != null && prev.senderId !== message.senderId;
             if (__DEV__) {
               console.log('message sender:', message.senderId);
@@ -222,13 +256,6 @@ export default function ChatDetailScreen() {
             );
           }}
         />
-
-        {/* DEV ONLY: Simulate incoming message (remove when backend is added) */}
-        {__DEV__ && (
-          <Pressable onPress={handleSimulateReply} style={styles.simButton}>
-            <Text style={styles.simText}>Simulate Reply</Text>
-          </Pressable>
-        )}
 
         {isArchived ? (
           <View style={[styles.archivedComposer, { paddingBottom: 12 + insets.bottom }]}>
@@ -388,17 +415,6 @@ const styles = StyleSheet.create({
     color: ui.textPrimary,
     fontSize: 16,
     lineHeight: 22,
-  },
-  simButton: {
-    padding: 10,
-    backgroundColor: ui.surfaceNeutral,
-    alignItems: 'center',
-    marginVertical: 8,
-    borderRadius: 8,
-  },
-  simText: {
-    color: ui.textPrimary,
-    fontWeight: '500',
   },
   archivedComposer: {
     paddingHorizontal: 16,

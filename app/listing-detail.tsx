@@ -5,9 +5,9 @@ import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
-import { formatListingDistanceAway } from './lib/requestDistance';
-import { formatListingPriceWithUnit, getListingById } from './store/listingsStore';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { formatListingDistanceAway } from '@/lib/requestDistance';
+import { formatListingPriceWithUnit, getListingById } from '@/store/listingsStore';
 import { cardChrome, primarySolidPressed, ui } from '@/constants/appUi';
 
 function firstParam(v: string | string[] | undefined): string | undefined {

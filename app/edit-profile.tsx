@@ -12,13 +12,17 @@ import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
-import { UserAvatar } from './components/UserAvatar';
-import { PresetAvatarModal } from './components/PresetAvatarModal';
-import { formatPresetAvatar } from './lib/profileAvatar';
-import { pickProfileImageFromLibrary } from './lib/pickProfileImage';
-import { showFeedbackToast } from './store/feedbackToastStore';
-import { getProfile, updateProfile } from './store/profileStore';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { UserAvatar } from '@/components/UserAvatar';
+import { PresetAvatarModal } from '@/components/PresetAvatarModal';
+import { getAuthUserIdSync } from '@/lib/authUser';
+import { isUuidString } from '@/lib/requestOwnership';
+import { formatPresetAvatar } from '@/lib/profileAvatar';
+import { pickProfileImageFromLibrary } from '@/lib/pickProfileImage';
+import { mergeProfileRowsFromServer } from '@/lib/remoteProfileCache';
+import { getSupabase } from '@/lib/supabase';
+import { showFeedbackToast } from '@/store/feedbackToastStore';
+import { getProfile, updateProfile } from '@/store/profileStore';
 
 import { primarySolidPressed, ui } from '@/constants/appUi';
 
@@ -59,7 +63,20 @@ export default function EditProfileScreen() {
   }, []);
 
   const onSave = async () => {
-    await updateProfile({ name: name.trim(), bio: bio.trim() });
+    const trimmed = name.trim();
+    await updateProfile({ name: trimmed, bio: bio.trim() });
+    const uid = getAuthUserIdSync().trim();
+    if (isUuidString(uid)) {
+      const { error } = await getSupabase()
+        .from('profiles')
+        .update({ name: trimmed || 'User' })
+        .eq('id', uid);
+      if (error == null) {
+        mergeProfileRowsFromServer([{ id: uid, name: trimmed || 'User' }]);
+      } else if (__DEV__) {
+        console.warn('[profiles] update from edit-profile:', error.message);
+      }
+    }
     showFeedbackToast('Profile saved');
     router.back();
   };

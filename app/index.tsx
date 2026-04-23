@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { ui } from '@/constants/appUi';
-import { getOnboardingTermsAccepted } from './store/agreementsStore';
+import { getOnboardingTermsAccepted } from '@/store/agreementsStore';
 
 type Gate = 'loading' | 'terms' | 'home';
 

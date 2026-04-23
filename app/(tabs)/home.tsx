@@ -2,21 +2,23 @@ import { cardChrome, primarySolidPressed, shadowCard, shadowKey, ui } from '@/co
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useRef } from 'react';
-import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Button, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { CardPressable } from '@/components/CardPressable';
 import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
-import { MainTabFab, useMainTabFabBottomReserve } from '../components/MainTabFab';
-import { formatUsd, getNumericTotalPrice } from '../lib/money';
-import { listOpenRequestsSortedByDistance } from '../lib/openRequestsForBrowse';
-import { formatMilesShort, milesFromViewerToRequest } from '../lib/requestDistance';
-import { getOnboardingTermsAccepted } from '../store/agreementsStore';
-import type { ToolListing } from '../store/listingsStore';
-import { formatListingPriceWithUnit, useListingsStore } from '../store/listingsStore';
-import { touchLastActive } from '../store/profileStore';
-import { useRequestsStore } from '../store/requestsStore';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
+import { supabase } from '../../lib/supabase';
+import { formatUsd, getNumericTotalPrice } from '@/lib/money';
+import { listOpenRequestsSortedByDistance } from '@/lib/openRequestsForBrowse';
+import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
+import { formatMilesShort, milesFromViewerToRequest } from '@/lib/requestDistance';
+import { getOnboardingTermsAccepted } from '@/store/agreementsStore';
+import type { ToolListing } from '@/store/listingsStore';
+import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
+import { touchLastActive } from '@/store/profileStore';
+import { refreshRequestsFromSupabase, useRequestsStore } from '@/store/requestsStore';
 
 const PREVIEW_COUNT = 5;
 const PREVIEW_CARD_WIDTH = 260;
@@ -53,6 +55,7 @@ export default function Home() {
   useFocusEffect(
     useCallback(() => {
       touchLastActive();
+      void refreshRequestsFromSupabase();
     }, [])
   );
 
@@ -84,10 +87,10 @@ export default function Home() {
   }, [router]);
 
   const goToRequestDetails = useCallback(
-    (requestTimestamp: number) => {
+    (requestSupabaseId: string) => {
       router.push({
         pathname: '/request-details',
-        params: { requestId: String(requestTimestamp) },
+        params: { requestId: requestSupabaseId },
       });
     },
     [router]
@@ -117,6 +120,14 @@ export default function Home() {
         >
           <View style={styles.column}>
             <Text style={styles.title}>OurGarage</Text>
+
+            <Button
+              title="Force Logout"
+              onPress={async () => {
+                await supabase.auth.signOut();
+                console.log('SIGNED OUT');
+              }}
+            />
 
             <View style={styles.actionsBlock}>
               <Pressable
@@ -179,6 +190,7 @@ export default function Home() {
                   >
                     {previewRequests.map((req, idx) => {
                       const ts = req.timestamp as number | undefined;
+                      const detailsId = getRequestSupabaseRowId(req);
                       const title = String(req.toolName ?? '').trim() || 'Request';
                       const priceLabel = requestPriceLabel(req);
                       const distLabel = requestDistanceLabel(req);
@@ -187,13 +199,13 @@ export default function Home() {
                         <CardPressable
                           key={ts != null ? String(ts) : `req-${idx}`}
                           onPress={() => {
-                            if (ts == null) return;
-                            goToRequestDetails(ts);
+                            if (!detailsId) return;
+                            goToRequestDetails(detailsId);
                           }}
-                          disabled={ts == null}
+                          disabled={!detailsId}
                           style={({ pressed }) => [
                             styles.previewCard,
-                            pressed && ts != null && styles.previewCardPressed,
+                            pressed && detailsId != null && styles.previewCardPressed,
                           ]}
                           accessibilityRole="button"
                           accessibilityLabel={`${title}, ${meta}`}

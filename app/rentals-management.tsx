@@ -4,11 +4,12 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
-import { formatUsd } from './lib/money';
-import type { Offer } from './store/offersStore';
-import { getOffers } from './store/offersStore';
-import { getRequestByTimestamp } from './store/requestsStore';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
+import { formatUsd } from '@/lib/money';
+import type { Offer } from '@/store/offersStore';
+import { getOffers } from '@/store/offersStore';
+import { getRequestByTimestamp } from '@/store/requestsStore';
 
 import { ui } from '@/constants/appUi';
 
@@ -31,9 +32,7 @@ export default function RentalsManagementScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      setOffers(
-        [...getOffers()].sort((a, b) => b.timestamp - a.timestamp)
-      );
+      setOffers([...getOffers()].sort((a, b) => b.updatedAt - a.updatedAt));
     }, [])
   );
 
@@ -69,6 +68,9 @@ export default function RentalsManagementScreen() {
           <View style={styles.listCard}>
             {offers.map((offer, index) => {
               const req = getRequestByTimestamp(offer.requestId);
+              const detailsId = req
+                ? getRequestSupabaseRowId(req as Record<string, unknown>)
+                : null;
               const tool =
                 req && String(req.toolName ?? '').trim()
                   ? String(req.toolName).trim()
@@ -76,24 +78,25 @@ export default function RentalsManagementScreen() {
               const isLast = index === offers.length - 1;
               return (
                 <Pressable
-                  key={`${offer.requestId}-${offer.timestamp}`}
+                  key={offer.id}
                   style={({ pressed }) => [
                     styles.row,
                     !isLast && styles.rowBorder,
                     pressed && styles.rowPressed,
                   ]}
-                  onPress={() =>
+                  onPress={() => {
+                    if (!detailsId) return;
                     router.push({
                       pathname: '/request-details',
-                      params: { requestId: String(offer.requestId) },
-                    })
-                  }
+                      params: { requestId: detailsId },
+                    });
+                  }}
                 >
                   <Text style={styles.rowTitle} numberOfLines={2}>
                     Offer · {tool}
                   </Text>
                   <Text style={styles.rowMeta} numberOfLines={1}>
-                    Your price {formatUsd(offer.price)} · {formatShortDate(offer.timestamp)}
+                    Your price {formatUsd(offer.currentPrice)} · {formatShortDate(offer.updatedAt)}
                   </Text>
                   {offer.message != null && offer.message !== '' ? (
                     <Text style={styles.message} numberOfLines={3}>

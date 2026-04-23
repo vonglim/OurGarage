@@ -14,10 +14,10 @@ import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from './components/KeyboardDismissScreen';
-import { getProfile } from './store/profileStore';
-import { showFeedbackToast } from './store/feedbackToastStore';
-import { addUserReview, type UserReviewType } from './store/userReviewsStore';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { getProfile } from '@/store/profileStore';
+import { showFeedbackToast } from '@/store/feedbackToastStore';
+import { addUserReview, type UserReviewType } from '@/store/userReviewsStore';
 
 import { primarySolidPressed, ui } from '@/constants/appUi';
 

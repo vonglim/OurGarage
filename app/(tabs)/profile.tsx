@@ -13,16 +13,19 @@ import {
 import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { PresetAvatarModal } from '../components/PresetAvatarModal';
-import { UserActivityDot } from '../components/UserActivityDot';
+import { PresetAvatarModal } from '@/components/PresetAvatarModal';
+import { UserActivityDot } from '@/components/UserActivityDot';
 import {
   getPublicProfileForView,
   isOwnProfileUserId,
-} from '../lib/mockPublicProfiles';
-import { formatPresetAvatar, parseProfileAvatar } from '../lib/profileAvatar';
-import { pickProfileImageFromLibrary } from '../lib/pickProfileImage';
-import { formatUsd } from '../lib/money';
-import { getProfile, updateProfile, type UserProfile } from '../store/profileStore';
+} from '@/lib/publicProfiles';
+import { formatPresetAvatar, parseProfileAvatar } from '@/lib/profileAvatar';
+import { pickProfileImageFromLibrary } from '@/lib/pickProfileImage';
+import { formatUsd } from '@/lib/money';
+import { useAuthUser } from '@/lib/authUser';
+import { resetMarketplaceData } from '@/lib/resetMarketplaceData';
+import { showFeedbackToast } from '@/store/feedbackToastStore';
+import { getProfile, updateProfile, type UserProfile } from '@/store/profileStore';
 import { cardChrome, ui } from '@/constants/appUi';
 import { IMAGE_TRANSITION_MS } from '@/constants/interactionTiming';
 
@@ -74,6 +77,7 @@ export default function ProfileScreen() {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const [profile, setProfile] = useState<UserProfile>(() => getProfile());
   const [presetModalOpen, setPresetModalOpen] = useState(false);
+  const currentUser = useAuthUser();
 
   useFocusEffect(
     useCallback(() => {
@@ -120,12 +124,7 @@ export default function ProfileScreen() {
   const hasCustomImage = parsedAvatar.kind === 'custom';
   const heroHeight = Math.round(windowHeight * HERO_HEIGHT_RATIO);
 
-  const impactStats = useMemo(() => {
-    if (__DEV__) {
-      return { totalSaved: 284, totalEarned: 612 };
-    }
-    return { totalSaved: 0, totalEarned: 0 };
-  }, []);
+  const impactStats = useMemo(() => ({ totalSaved: 0, totalEarned: 0 }), []);
 
   return (
     <View style={styles.root}>
@@ -289,6 +288,40 @@ export default function ProfileScreen() {
               <ProfileRow label="Subscription" onPress={placeholder('Subscription')} />
               <ProfileRow label="Payment Methods" onPress={placeholder('Payment Methods')} isLast />
             </View>
+
+            {__DEV__ ? (
+              <>
+                <Text style={styles.sectionTitle}>Dev</Text>
+                <View style={styles.devToolsCard}>
+                  <Text style={styles.devToolsHint}>
+                    User id is your Supabase Auth user id; session is persisted. Display name
+                    is always &quot;You&quot; for requests, offers, and messages. Other user ids show as
+                    &quot;User&quot; until profiles are backed by a server.
+                  </Text>
+                  <View style={[styles.devToolsRow, styles.devToolsRowBorder]}>
+                    <Text style={styles.devToolsRowLabel}>Auth user id</Text>
+                    <Text style={styles.devToolsRowMeta}>
+                      {currentUser.id} · {currentUser.name}
+                    </Text>
+                  </View>
+                  <Pressable
+                    onPress={() => {
+                      resetMarketplaceData();
+                      showFeedbackToast('Marketplace data cleared');
+                    }}
+                    style={({ pressed }) => [
+                      styles.devResetBtn,
+                      styles.devResetBtnLast,
+                      pressed && styles.devResetBtnPressed,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear marketplace data in memory"
+                  >
+                    <Text style={styles.devResetBtnText}>Clear marketplace data</Text>
+                  </Pressable>
+                </View>
+              </>
+            ) : null}
           </>
         )}
       </ScrollView>
@@ -511,6 +544,64 @@ const styles = StyleSheet.create({
   viewBackLabel: {
     fontSize: 17,
     fontWeight: '500',
+    color: ui.primary,
+  },
+  devToolsCard: {
+    ...cardChrome,
+    overflow: 'hidden',
+    marginBottom: 24,
+    paddingBottom: 4,
+  },
+  devToolsHint: {
+    fontSize: 13,
+    color: ui.textSecondary,
+    lineHeight: 18,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  devToolsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: ui.background,
+  },
+  devToolsRowBorder: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: ui.border,
+  },
+  devToolsRowLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: ui.textPrimary,
+  },
+  devToolsRowMeta: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: ui.textSecondary,
+  },
+  devResetBtnLast: {
+    marginBottom: 14,
+  },
+  devResetBtn: {
+    marginHorizontal: 16,
+    marginTop: 4,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: ui.surfaceInput,
+    alignItems: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+  },
+  devResetBtnPressed: {
+    opacity: 0.88,
+    backgroundColor: ui.surfaceStriped,
+  },
+  devResetBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
     color: ui.primary,
   },
 });

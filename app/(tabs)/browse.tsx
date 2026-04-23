@@ -1,25 +1,32 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { CardPressable } from '@/components/CardPressable';
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { KeyboardDismissScreen } from '../components/KeyboardDismissScreen';
-import { MainTabFab, useMainTabFabBottomReserve } from '../components/MainTabFab';
-import { formatDurationDisplay } from '../lib/durationFormat';
-import { formatMilesShort, milesFromViewerToRequest } from '../lib/requestDistance';
-import { getNumericTotalPrice, formatUsd } from '../lib/money';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
+import { formatDurationDisplay } from '@/lib/durationFormat';
+import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
+import { formatMilesShort, milesFromViewerToRequest } from '@/lib/requestDistance';
+import { getNumericTotalPrice, formatUsd } from '@/lib/money';
 import {
   distanceSortKeyRequest,
   isRequestActiveForBrowse,
-} from '../lib/openRequestsForBrowse';
-import { useRequestsStore } from '../store/requestsStore';
-import type { ToolListing } from '../store/listingsStore';
-import { formatListingPriceWithUnit, useListingsStore } from '../store/listingsStore';
+} from '@/lib/openRequestsForBrowse';
+import { getAuthUserIdSync } from '@/lib/authUser';
+import type { ToolListing } from '@/store/listingsStore';
+import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
+import { refreshRequestsFromSupabase, useRequestsStore } from '@/store/requestsStore';
 import { ui } from '@/constants/appUi';
+import { getSupabase } from '@/lib/supabase';
+
+/** Dev-only: where Browse reads requests (for provenance logging). */
+const REQUESTS_STORE_MODULE = 'store/requestsStore.ts';
+const REQUESTS_STORE_SELECTOR = 'useRequestsStore((state) => state.requests)';
 
 function matchesSearchRequests(req: Record<string, unknown>, q: string): boolean {
   if (!q) return true;
@@ -41,6 +48,23 @@ function matchesSearchListings(item: ToolListing, q: string): boolean {
   return hay.includes(q);
 }
 
+/** Relative time for browse cards — matches request-details wording. */
+function postedTimeAgoPhrase(timestamp: number): string {
+  const diffMs = Date.now() - timestamp;
+  const seconds = Math.floor(diffMs / 1000);
+  const minutes = Math.floor(diffMs / (60 * 1000));
+  const hours = Math.floor(diffMs / (60 * 60 * 1000));
+  const days = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+
+  let rel: string;
+  if (seconds < 60) rel = 'just now';
+  else if (minutes < 60) rel = minutes === 1 ? '1 minute ago' : `${minutes} minutes ago`;
+  else if (hours < 24) rel = hours === 1 ? '1 hour ago' : `${hours} hours ago`;
+  else rel = days === 1 ? '1 day ago' : `${days} days ago`;
+
+  return `Posted ${rel}`;
+}
+
 export default function Browse() {
   const router = useRouter();
   const params = useLocalSearchParams<{ query?: string | string[]; mode?: string | string[] }>();
@@ -51,6 +75,15 @@ export default function Browse() {
 
   const listings = useListingsStore((s) => s.listings);
   const requests = useRequestsStore((state) => state.requests);
+
+  useEffect(() => {
+    void (async () => {
+      const supabase = getSupabase();
+      const { data, error } = await supabase.from('requests').select('*');
+      console.log('data', data);
+      console.log('error', error);
+    })();
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -71,11 +104,26 @@ export default function Browse() {
     }, [params.query, params.mode, router])
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      void refreshRequestsFromSupabase();
+    }, [])
+  );
+
   const q = searchQuery.trim().toLowerCase();
 
-  const { requestRows, requestEmpty } = useMemo(() => {
+  const { requestRows, requestEmpty, requestPipeline } = useMemo(() => {
     if (mode !== 'requests') {
-      return { requestRows: [] as Record<string, unknown>[], requestEmpty: '' };
+      return {
+        requestRows: [] as Record<string, unknown>[],
+        requestEmpty: '',
+        requestPipeline: null as {
+          rawInStore: number;
+          afterBrowseActiveFilter: number;
+          afterSearchQuery: number;
+          renderedSorted: number;
+        } | null,
+      };
     }
     const data = requests;
     const active = data.filter(isRequestActiveForBrowse);
@@ -89,8 +137,76 @@ export default function Browse() {
           ? 'No open requests nearby right now.'
           : 'Nothing matches your search.'
         : '';
-    return { requestRows: sorted, requestEmpty: empty };
+    return {
+      requestRows: sorted,
+      requestEmpty: empty,
+      requestPipeline: {
+        rawInStore: data.length,
+        afterBrowseActiveFilter: active.length,
+        afterSearchQuery: filtered.length,
+        renderedSorted: sorted.length,
+      },
+    };
   }, [mode, q, requests]);
+
+  useEffect(() => {
+    if (!__DEV__ || mode !== 'requests' || requestPipeline == null) return;
+
+    const fromStoreGetState = useRequestsStore.getState().requests;
+    const sameArrayRef = fromStoreGetState === requests;
+
+    console.log('[Browse][requests] provenance', {
+      screen: 'app/(tabs)/browse.tsx',
+      storeModule: REQUESTS_STORE_MODULE,
+      subscription: REQUESTS_STORE_SELECTOR,
+      getStateSameArrayAsHook: sameArrayRef,
+      counts: {
+        storeItems: requests.length,
+        ...requestPipeline,
+      },
+      searchQuery: q || '(none)',
+      note:
+        'Store is filled by refreshRequestsFromSupabase() + addRequest(); see store/requestsStore.ts and lib/supabaseRequests.ts.',
+    });
+
+    if (requests.length === 0) {
+      console.log('[Browse][requests] store array is empty (initial state: requests: [] in requestsStore).');
+      return;
+    }
+
+    requests.forEach((r, index) => {
+      const row = r as Record<string, unknown>;
+      console.log(`[Browse][requests][${index}]`, {
+        source: REQUESTS_STORE_MODULE,
+        timestamp: row.timestamp,
+        id: row.id,
+        toolName: row.toolName,
+        posterUserId: row.posterUserId,
+        ownerId: row.ownerId,
+        matched: row.matched,
+        fulfilled: row.fulfilled,
+        rentalStatus: row.rentalStatus,
+        status: row.status,
+        devSeedId: row.devSeedId,
+        browseWouldShow: isRequestActiveForBrowse(r),
+      });
+    });
+
+    if (requestPipeline.renderedSorted !== requestPipeline.rawInStore) {
+      console.log('[Browse][requests] UI uses a subset of the store:', {
+        reason: 'isRequestActiveForBrowse + optional search + distance sort',
+        notRenderedCount: requestPipeline.rawInStore - requestPipeline.renderedSorted,
+      });
+    }
+  }, [
+    mode,
+    q,
+    requests,
+    requestPipeline?.rawInStore,
+    requestPipeline?.afterBrowseActiveFilter,
+    requestPipeline?.afterSearchQuery,
+    requestPipeline?.renderedSorted,
+  ]);
 
   const { toolRows, toolEmpty } = useMemo(() => {
     const filtered = q ? listings.filter((l) => matchesSearchListings(l, q)) : [...listings];
@@ -171,26 +287,45 @@ export default function Browse() {
                 const priceLabel = price != null && Number.isFinite(price) ? formatUsd(price) : '—';
                 const duration = formatDurationDisplay(req as never);
                 const metaLine = `${priceLabel} · ${duration}. ${distLabel}`;
+                const posterId =
+                  typeof (req as { posterUserId?: string }).posterUserId === 'string'
+                    ? (req as { posterUserId: string }).posterUserId
+                    : undefined;
+                const isOwner = posterId != null && posterId === getAuthUserIdSync();
+                const postedAgo =
+                  ts != null && Number.isFinite(ts) ? postedTimeAgoPhrase(ts) : null;
 
+                const detailsId = getRequestSupabaseRowId(req as Record<string, unknown>);
                 return (
                   <CardPressable
                     key={ts ?? idx}
                     onPress={() => {
-                      if (ts == null) return;
+                      if (!detailsId) return;
                       router.push({
                         pathname: '/request-details',
-                        params: { requestId: String(ts) },
+                        params: { requestId: detailsId },
                       });
                     }}
-                    disabled={ts == null}
+                    disabled={!detailsId}
                     style={({ pressed }) => [
                       styles.card,
                       idx === 0 && styles.cardEdge,
-                      pressed && ts != null && styles.cardPressed,
-                      ts == null && styles.cardDisabled,
+                      isOwner && styles.cardOwnRequest,
+                      pressed &&
+                        detailsId != null &&
+                        (isOwner ? styles.cardOwnRequestPressed : styles.cardPressed),
+                      !detailsId && styles.cardDisabled,
                     ]}
                     accessibilityRole="button"
-                    accessibilityLabel={`${title}, ${metaLine}`}
+                    accessibilityLabel={
+                      postedAgo != null
+                        ? isOwner
+                          ? `${title}, ${postedAgo}, ${metaLine}, your request`
+                          : `${title}, ${postedAgo}, ${metaLine}`
+                        : isOwner
+                          ? `${title}, ${metaLine}, your request`
+                          : `${title}, ${metaLine}`
+                    }
                   >
                     <Text
                       style={styles.cardTitle}
@@ -199,6 +334,11 @@ export default function Browse() {
                     >
                       {title}
                     </Text>
+                    {postedAgo != null ? (
+                      <Text style={styles.cardPostedAgo} numberOfLines={1}>
+                        {postedAgo}
+                      </Text>
+                    ) : null}
                     <Text
                       style={styles.cardPriceDuration}
                       numberOfLines={1}
@@ -223,6 +363,15 @@ export default function Browse() {
                         {desc}
                       </Text>
                     ) : null}
+                    {isOwner ? (
+                      <Text style={styles.cardOwnRequestLabel} accessibilityRole="text">
+                        Your request
+                      </Text>
+                    ) : ts != null ? (
+                      <Text style={styles.cardMakeOfferHint} accessibilityRole="text">
+                        Tap to make an offer
+                      </Text>
+                    ) : null}
                   </CardPressable>
                 );
               })
@@ -233,6 +382,11 @@ export default function Browse() {
             toolRows.map((item, idx) => {
               const priceStr = formatListingPriceWithUnit(item.price, item.priceUnit);
               const distStr = formatMilesShort(item.distance);
+              const ownerId = item.ownerUserId;
+              const isOwnListing =
+                ownerId != null &&
+                ownerId !== '' &&
+                ownerId === getAuthUserIdSync();
               return (
                 <CardPressable
                   key={item.id}
@@ -248,7 +402,11 @@ export default function Browse() {
                     pressed && styles.cardPressed,
                   ]}
                   accessibilityRole="button"
-                  accessibilityLabel={`${item.name}, ${priceStr}, ${distStr}`}
+                  accessibilityLabel={
+                    isOwnListing
+                      ? `${item.name}, ${priceStr}, ${distStr}, your listing`
+                      : `${item.name}, ${priceStr}, ${distStr}`
+                  }
                 >
                   <Text
                     style={styles.cardTitle}
@@ -278,6 +436,11 @@ export default function Browse() {
                       ellipsizeMode="tail"
                     >
                       {item.description.trim()}
+                    </Text>
+                  ) : null}
+                  {isOwnListing ? (
+                    <Text style={styles.cardOwnLabel} accessibilityRole="text">
+                      Your listing
                     </Text>
                   ) : null}
                 </CardPressable>
@@ -378,6 +541,17 @@ const styles = StyleSheet.create({
   cardDisabled: {
     opacity: 0.55,
   },
+  cardOwnRequest: {
+    backgroundColor: ui.surfaceTintPrimary,
+    borderLeftWidth: 3,
+    borderLeftColor: ui.primary,
+    /** Border is inset; nudge padding so text aligns with non-owner rows (~13 from list edge). */
+    paddingLeft: 10,
+  },
+  cardOwnRequestPressed: {
+    backgroundColor: ui.surfaceStriped,
+    borderLeftColor: ui.primary,
+  },
   cardTitle: {
     fontSize: 17,
     fontWeight: '800',
@@ -385,6 +559,14 @@ const styles = StyleSheet.create({
     marginBottom: 0,
     lineHeight: 19,
     letterSpacing: -0.25,
+  },
+  cardPostedAgo: {
+    marginTop: 3,
+    marginBottom: 1,
+    fontSize: 13,
+    fontWeight: '500',
+    color: ui.textSecondary,
+    lineHeight: 16,
   },
   /** Request row: price (semi-bold) + duration (muted). */
   cardPriceDuration: {
@@ -429,5 +611,30 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     marginTop: 0,
     marginBottom: 0,
+  },
+  cardOwnLabel: {
+    marginTop: 8,
+    marginBottom: 4,
+    fontSize: 12,
+    fontWeight: '600',
+    color: ui.textSecondary,
+    letterSpacing: 0.2,
+  },
+  cardOwnRequestLabel: {
+    marginTop: 8,
+    marginBottom: 4,
+    fontSize: 12,
+    fontWeight: '700',
+    color: ui.primary,
+    opacity: 0.75,
+    letterSpacing: 0.2,
+  },
+  cardMakeOfferHint: {
+    marginTop: 8,
+    marginBottom: 4,
+    fontSize: 13,
+    fontWeight: '600',
+    color: ui.primary,
+    letterSpacing: -0.1,
   },
 });

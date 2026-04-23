@@ -122,6 +122,24 @@ export const shadowCard = {
   elevation: 3,
 } as const;
 
+/** Activity segment — selected tab (subtle lift). */
+export const shadowSegmentActive = {
+  shadowColor: '#000000',
+  shadowOffset: { width: 0, height: 2 } as const,
+  shadowOpacity: 0.1,
+  shadowRadius: 8,
+  elevation: 5,
+} as const;
+
+/** Activity segment — inactive tab with pending attention (soft, not alarm-colored). */
+export const shadowSegmentAttention = {
+  shadowColor: '#0B1F3A',
+  shadowOffset: { width: 0, height: 1 } as const,
+  shadowOpacity: 0.08,
+  shadowRadius: 10,
+  elevation: 2,
+} as const;
+
 const cardChromeBase = {
   backgroundColor: ui.cardBg,
   borderRadius: ui.radiusCard,
