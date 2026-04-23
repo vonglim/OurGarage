@@ -1,5 +1,5 @@
 import * as Linking from 'expo-linking';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -15,8 +15,11 @@ import { Pressable } from '@/components/Pressable';
 import { ui } from '@/constants/appUi';
 import { supabase } from '@/lib/supabase';
 
+const OTP_COOLDOWN_SEC = 10;
+
 /**
- * Email OTP (magic link). User completes sign-in via the link; session is then restored in-app.
+ * Email OTP (magic link). No password; user completes sign-in from the link and session restores in-app.
+ * Cooldown after each request limits Supabase rate limits (429) from button spam.
  */
 export function LoginScreen() {
   const insets = useSafeAreaInsets();
@@ -24,9 +27,18 @@ export function LoginScreen() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
+  const [cooldownSec, setCooldownSec] = useState(0);
 
   const trimmed = email.trim();
-  const canSubmit = trimmed.length > 0 && !sending;
+  const canSubmit = trimmed.length > 0 && !sending && cooldownSec === 0;
+
+  useEffect(() => {
+    if (cooldownSec <= 0) return;
+    const t = setTimeout(() => {
+      setCooldownSec((s) => Math.max(0, s - 1));
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [cooldownSec]);
 
   const onSend = async () => {
     if (!canSubmit) return;
@@ -51,6 +63,7 @@ export function LoginScreen() {
       setError(e instanceof Error ? e.message : 'Something went wrong');
     } finally {
       setSending(false);
+      setCooldownSec(OTP_COOLDOWN_SEC);
     }
   };
 
@@ -60,8 +73,8 @@ export function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <View style={styles.inner}>
-        <Text style={styles.title}>Log in</Text>
-        <Text style={styles.subtitle}>We’ll email you a one-time sign-in link.</Text>
+        <Text style={styles.title}>Sign in or create an account</Text>
+        <Text style={styles.subtitle}>We’ll email you a login link.</Text>
 
         <TextInput
           value={email}
@@ -93,12 +106,23 @@ export function LoginScreen() {
           {sending ? (
             <ActivityIndicator color={ui.primaryOn} />
           ) : (
-            <Text style={styles.buttonLabel}>Send login link</Text>
+            <Text style={styles.buttonLabel}>{sent ? 'Resend link' : 'Continue'}</Text>
           )}
         </Pressable>
 
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        {sent && !error ? <Text style={styles.success}>Check your email to log in</Text> : null}
+        {error != null && error.length > 0 ? <Text style={styles.error}>{error}</Text> : null}
+
+        {cooldownSec > 0 ? (
+          <Text style={styles.cooldown} accessibilityLiveRegion="polite">
+            {sent && error == null
+              ? `Check your email. You can request another link in ${cooldownSec}s.`
+              : `Please wait ${cooldownSec}s before trying again.`}
+          </Text>
+        ) : sent && error == null ? (
+          <Text style={styles.success} accessibilityLiveRegion="polite">
+            Check your email. You can request another link if you don&apos;t see it.
+          </Text>
+        ) : null}
       </View>
     </KeyboardAvoidingView>
   );
@@ -150,5 +174,6 @@ const styles = StyleSheet.create({
   buttonDisabled: { opacity: 0.5 },
   buttonLabel: { fontSize: 17, fontWeight: '600', color: ui.primaryOn },
   error: { marginTop: 16, color: '#B91C1C', fontSize: 15 },
-  success: { marginTop: 16, color: ui.textPrimary, fontSize: 16 },
+  success: { marginTop: 16, color: ui.textPrimary, fontSize: 16, lineHeight: 22 },
+  cooldown: { marginTop: 16, color: ui.textSecondary, fontSize: 15, lineHeight: 22 },
 });

@@ -4,6 +4,7 @@ import { isUuidString } from '@/lib/requestOwnership';
 import { getSupabase } from '@/lib/supabase';
 import { mergeProfileRowsFromServer } from '@/lib/remoteProfileCache';
 import { PROFILE_NAME_FALLBACK } from '@/lib/profileConstants';
+import { profileNeedsCreateUsername } from '@/lib/profileOnboarding';
 import { getProfile, updateProfile } from '@/store/profileStore';
 import { useAuthSessionStore } from '@/store/authSessionStore';
 
@@ -12,23 +13,21 @@ function normalizeNameFromRow(raw: string | null | undefined): string {
   return t !== '' ? t : PROFILE_NAME_FALLBACK;
 }
 
-function defaultNameForNewProfile(authUser: User | null | undefined): string {
-  const fromEmail = authUser?.email?.split('@')[0]?.trim() ?? '';
-  if (fromEmail !== '') return fromEmail;
-  return PROFILE_NAME_FALLBACK;
-}
-
 /**
  * Fetches `public.profiles` for the user, inserts a row if missing, syncs
  * server truth into the remote name cache, AsyncStorage profile, and auth store.
- *
- * @param authUser - When a new row is inserted, `name` defaults from the user’s email local
- *   part (e.g. `jane@…` → `jane`); pass when available so first-time users get a real handle.
+ * New rows use an empty `name` so the Create Username step can set `profiles.name`.
  */
+export type GetOrCreateProfileResult = {
+  id: string;
+  name: string;
+  needsCreateUsername: boolean;
+};
+
 export async function getOrCreateProfile(
   userId: string,
   authUser?: User | null
-): Promise<{ id: string; name: string } | null> {
+): Promise<GetOrCreateProfileResult | null> {
   const id = String(userId ?? '').trim();
   if (id === '' || !isUuidString(id)) return null;
 
@@ -44,16 +43,15 @@ export async function getOrCreateProfile(
     return null;
   }
 
-  let name: string;
+  let rawFromDb: string | null | undefined;
 
   if (found) {
     const row = found as { id: string; name: string | null | undefined };
-    name = normalizeNameFromRow(row.name);
+    rawFromDb = row.name;
   } else {
-    const insertName = defaultNameForNewProfile(authUser);
     const { data: inserted, error: insErr } = await supabase
       .from('profiles')
-      .insert({ id, name: insertName })
+      .insert({ id, name: '' })
       .select('id, name')
       .single();
 
@@ -68,24 +66,27 @@ export async function getOrCreateProfile(
           if (__DEV__) console.warn('[profiles] getOrCreate re-read:', reErr.message);
           return null;
         }
-        name = normalizeNameFromRow((afterDup as { name?: string }).name);
+        rawFromDb = (afterDup as { name?: string | null }).name;
       } else {
         if (__DEV__) console.warn('[profiles] getOrCreate insert:', insErr.message);
         return null;
       }
     } else {
       const row = inserted as { name?: string | null };
-      name = normalizeNameFromRow(row.name);
+      rawFromDb = row.name;
     }
   }
 
-  mergeProfileRowsFromServer([{ id, name }]);
-
+  const needsCreateUsername = profileNeedsCreateUsername(rawFromDb);
+  const nameForLocal = needsCreateUsername ? '' : normalizeNameFromRow(rawFromDb);
+  if (!needsCreateUsername) {
+    mergeProfileRowsFromServer([{ id, name: nameForLocal }]);
+  }
   const prev = getProfile();
   const keepBio = prev.userId === id || prev.userId === 'profile_unlinked' ? prev.bio : '';
-  await updateProfile({ userId: id, name, bio: keepBio, avatar: prev.avatar });
+  await updateProfile({ userId: id, name: nameForLocal, bio: keepBio, avatar: prev.avatar });
 
-  useAuthSessionStore.setState({ profile: { name } });
+  useAuthSessionStore.setState({ profile: { name: nameForLocal } });
 
-  return { id, name };
+  return { id, name: nameForLocal, needsCreateUsername };
 }

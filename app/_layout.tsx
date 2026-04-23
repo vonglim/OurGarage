@@ -9,6 +9,7 @@ import 'react-native-reanimated';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { FeedbackToastHost } from '@/components/FeedbackToastHost';
+import { CreateUsernameScreen } from '@/components/CreateUsernameScreen';
 import { LoginScreen } from '@/components/LoginScreen';
 import { NumberPadKeyboardAccessory } from '@/components/NumberPadKeyboardAccessory';
 import { STACK_TRANSITION_DURATION_MS } from '@/constants/navigation';
@@ -45,13 +46,24 @@ export default function RootLayout() {
   const colorScheme = useColorScheme();
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [needsCreateUsername, setNeedsCreateUsername] = useState(false);
 
   useEffect(() => {
     const syncProfileAndSession = async (next: Session | null) => {
       applySessionToAuthStore(next);
       if (next?.user) {
-        await ensureProfile(next.user);
+        const pr = await ensureProfile(next.user);
+        if (__DEV__) {
+          console.log('PROFILE CHECK:', {
+            userId: next.user.id,
+            needsCreateUsername: pr?.needsCreateUsername,
+            profileName: pr?.name,
+            result: pr,
+          });
+        }
+        setNeedsCreateUsername(pr?.needsCreateUsername === true);
       } else {
+        setNeedsCreateUsername(false);
         clearRemoteProfileCache();
         resetProfileToDefault();
       }
@@ -87,17 +99,19 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (loading) return;
+    if (needsCreateUsername) return;
     if (!session?.user?.id) return;
     return startNotificationsServerSync(session.user.id);
-  }, [loading, session?.user?.id]);
+  }, [loading, needsCreateUsername, session?.user?.id]);
 
   useEffect(() => {
     if (loading) return;
+    if (needsCreateUsername) return;
     if (!session) return;
     if (Platform.OS !== 'web') {
       void registerAndStorePushTokenAsync();
     }
-  }, [loading, session]);
+  }, [loading, needsCreateUsername, session]);
 
   if (loading) return null;
 
@@ -105,6 +119,17 @@ export default function RootLayout() {
     return (
       <SafeAreaProvider>
         <LoginScreen />
+      </SafeAreaProvider>
+    );
+  }
+
+  if (needsCreateUsername && session.user) {
+    return (
+      <SafeAreaProvider>
+        <CreateUsernameScreen
+          user={session.user}
+          onCompleted={() => setNeedsCreateUsername(false)}
+        />
       </SafeAreaProvider>
     );
   }
