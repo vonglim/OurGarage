@@ -4,6 +4,7 @@ import { Image } from 'expo-image';
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
+  Button,
   ScrollView,
   StyleSheet,
   Text,
@@ -23,6 +24,7 @@ import { formatPresetAvatar, parseProfileAvatar } from '@/lib/profileAvatar';
 import { pickProfileImageFromLibrary } from '@/lib/pickProfileImage';
 import { formatUsd } from '@/lib/money';
 import { useAuthUser, useAuthUserDisplayName } from '@/lib/authUser';
+import { supabase } from '../../lib/supabase';
 import { resetMarketplaceData } from '@/lib/resetMarketplaceData';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { getProfile, updateProfile, type UserProfile } from '@/store/profileStore';
@@ -286,6 +288,19 @@ export default function ProfileScreen() {
               <ProfileRow label="Payment Methods" onPress={placeholder('Payment Methods')} isLast />
             </View>
 
+            <View style={styles.logoutSection}>
+              <Button
+                title="Logout"
+                onPress={async () => {
+                  console.log('LOGOUT CLICKED');
+                  const { error } = await supabase.auth.signOut();
+                  if (error) {
+                    console.error('Logout error', error);
+                  }
+                }}
+              />
+            </View>
+
             {__DEV__ ? (
               <>
                 <Text style={styles.sectionTitle}>Dev</Text>
@@ -502,6 +517,10 @@ const styles = StyleSheet.create({
     ...cardChrome,
     overflow: 'hidden',
     marginBottom: 20,
+  },
+  logoutSection: {
+    marginTop: 40,
+    marginBottom: 8,
   },
   row: {
     flexDirection: 'row',

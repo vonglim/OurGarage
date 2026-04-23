@@ -24,7 +24,7 @@ export function getProfileNameForUserId(userId: string): string {
 
 /**
  * Batches `profiles` rows and merges `name` into the cache. Safe to call with many ids; dedupes
- * and uses a single `.in('id', ...)` per batch inside {@link fetchAndMergeProfileNames}.
+ * and uses chunked `.in('id', ...)` inside {@link fetchAndMergeProfileNames}.
  */
 export async function prefetchProfileNamesForUserIds(
   userIds: readonly (string | undefined | null)[]

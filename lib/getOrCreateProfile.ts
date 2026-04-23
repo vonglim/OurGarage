@@ -1,3 +1,5 @@
+import type { User } from '@supabase/supabase-js';
+
 import { isUuidString } from '@/lib/requestOwnership';
 import { getSupabase } from '@/lib/supabase';
 import { mergeProfileRowsFromServer } from '@/lib/remoteProfileCache';
@@ -10,12 +12,22 @@ function normalizeNameFromRow(raw: string | null | undefined): string {
   return t !== '' ? t : PROFILE_NAME_FALLBACK;
 }
 
+function defaultNameForNewProfile(authUser: User | null | undefined): string {
+  const fromEmail = authUser?.email?.split('@')[0]?.trim() ?? '';
+  if (fromEmail !== '') return fromEmail;
+  return PROFILE_NAME_FALLBACK;
+}
+
 /**
  * Fetches `public.profiles` for the user, inserts a row if missing, syncs
  * server truth into the remote name cache, AsyncStorage profile, and auth store.
+ *
+ * @param authUser - When a new row is inserted, `name` defaults from the user’s email local
+ *   part (e.g. `jane@…` → `jane`); pass when available so first-time users get a real handle.
  */
 export async function getOrCreateProfile(
-  userId: string
+  userId: string,
+  authUser?: User | null
 ): Promise<{ id: string; name: string } | null> {
   const id = String(userId ?? '').trim();
   if (id === '' || !isUuidString(id)) return null;
@@ -38,7 +50,7 @@ export async function getOrCreateProfile(
     const row = found as { id: string; name: string | null | undefined };
     name = normalizeNameFromRow(row.name);
   } else {
-    const insertName = PROFILE_NAME_FALLBACK;
+    const insertName = defaultNameForNewProfile(authUser);
     const { data: inserted, error: insErr } = await supabase
       .from('profiles')
       .insert({ id, name: insertName })

@@ -74,6 +74,7 @@ export async function syncRequestAndOffersFromSupabase(
     logOfferSync('supabase_response', 'request fetch failed', reqErr.message);
     return false;
   }
+
   if (reqData == null || typeof reqData !== 'object') {
     logOfferSync('supabase_response', 'request fetch empty', { requestRowId });
     return false;

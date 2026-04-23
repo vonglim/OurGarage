@@ -327,32 +327,63 @@ export default function OfferDetailScreen() {
   };
 
   const onConfirmRental = () => {
-    if (!posterCanConfirmRental || !request || !offer) return;
+    console.log('handleConfirmRental start', {
+      posterCanConfirmRental,
+      hasRequest: !!request,
+      hasOffer: !!offer,
+      offerStatus: offer?.status,
+    });
+    if (!posterCanConfirmRental || !request || !offer) {
+      console.warn('Confirm rental: early exit (state does not allow confirm)', {
+        posterCanConfirmRental,
+        hasRequest: !!request,
+        hasOffer: !!offer,
+      });
+      return;
+    }
     if (!getRequestSupabaseRowId(request as Record<string, unknown>)) {
       showFeedbackToast('This request is not linked to the server. Open the request from Activity and try again.');
       return;
     }
+    const meTrim = (typeof me === 'string' ? me : '').trim();
+    const ownerId = getRequestOwnerId(request as Record<string, unknown>)?.trim() ?? '';
+    if (meTrim === '' || ownerId === '' || meTrim !== ownerId) {
+      console.warn('User not allowed to confirm rental', { me: meTrim, requestOwnerId: ownerId });
+      showFeedbackToast('Only the request owner can confirm the rental.');
+      return;
+    }
     const priceNum = getNumericOfferPrice(offer);
     const priceLabel = formatUsd(priceNum);
+
+    const runFinalize = () => {
+      void (async () => {
+        try {
+          const r = await finalizeOfferAcceptance(offer.requestId, String(offer.id));
+          if (!r.ok) {
+            console.error('CONFIRM RENTAL ERROR', r.error);
+            showFeedbackToast(
+              r.error && r.error.length > 0
+                ? r.error
+                : 'Could not confirm. Check connection and try again.'
+            );
+            return;
+          }
+        } catch (e) {
+          console.error('CONFIRM RENTAL ERROR', e);
+          showFeedbackToast('Could not confirm. Check connection and try again.');
+        }
+      })();
+    };
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      if (window.confirm(`Finalize this match for ${priceLabel}?`)) {
+        runFinalize();
+      }
+      return;
+    }
     Alert.alert('Confirm rental', `Finalize this match for ${priceLabel}?`, [
       { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Confirm rental',
-        onPress: () => {
-          void (async () => {
-            const r = await finalizeOfferAcceptance(offer.requestId, String(offer.id));
-            if (!r.ok) {
-              showFeedbackToast(
-                r.error && r.error.length > 0
-                  ? r.error
-                  : 'Could not confirm. Check connection and try again.'
-              );
-              return;
-            }
-            // Navigation runs inside finalizeOfferAcceptance on success
-          })();
-        },
-      },
+      { text: 'Confirm rental', onPress: runFinalize },
     ]);
   };
 
@@ -581,7 +612,10 @@ export default function OfferDetailScreen() {
               <Pressable
                 pressOpacityFeedback={false}
                 haptic
-                onPress={onConfirmRental}
+                onPress={() => {
+                  console.log('CONFIRM RENTAL CLICKED');
+                  onConfirmRental();
+                }}
                 style={({ pressed }) => [
                   styles.primaryBtn,
                   pressed && styles.primaryBtnPressed,

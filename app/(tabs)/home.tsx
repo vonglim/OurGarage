@@ -2,7 +2,7 @@ import { cardChrome, primarySolidPressed, shadowCard, shadowKey, ui } from '@/co
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useRef } from 'react';
-import { Button, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { CardPressable } from '@/components/CardPressable';
 import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -120,14 +120,6 @@ export default function Home() {
         >
           <View style={styles.column}>
             <Text style={styles.title}>OurGarage</Text>
-
-            <Button
-              title="Force Logout"
-              onPress={async () => {
-                await supabase.auth.signOut();
-                console.log('SIGNED OUT');
-              }}
-            />
 
             <View style={styles.actionsBlock}>
               <Pressable

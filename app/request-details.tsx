@@ -20,7 +20,6 @@ import { formatUsd, getNumericOfferPrice, getNumericTotalPrice } from '@/lib/mon
 import { openChatForRequest } from '@/lib/openRequestChat';
 import { getRequestOwnerId, isUuidString } from '@/lib/requestOwnership';
 import { billingDayCountForRequest, formatPerDayUsd } from '@/lib/requestPriceContext';
-import { fetchAndMergeProfileNames } from '@/lib/remoteProfileCache';
 import { fetchOffersByRequestIdWithProfiles } from '@/lib/supabaseOffers';
 import { getSupabase } from '@/lib/supabase';
 import { mapSupabaseOfferRowToOffer } from '@/lib/supabaseOffers';
@@ -138,11 +137,6 @@ const requestId = params.requestId ?? '';
     }
 
     const rows = (data ?? []) as unknown[];
-    const userIds = (rows as Record<string, unknown>[])
-      .map((r) => (typeof r.user_id === 'string' ? r.user_id.trim() : ''))
-      .filter((s) => s.length > 0);
-    await fetchAndMergeProfileNames(supabase, userIds);
-
     const mapped = rows.map((r) => mapSupabaseOfferRowToOffer(r as Record<string, unknown>, ts));
     setOffers(mapped);
 

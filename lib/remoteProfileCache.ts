@@ -78,10 +78,15 @@ export async function fetchAndMergeProfileNames(
   ];
   if (unique.length === 0) return;
 
-  const { data, error } = await supabase.from('profiles').select('id, name').in('id', unique);
-  if (error != null) {
-    if (__DEV__) console.warn('[profiles] batch fetch:', error.message);
-    return;
+  // Chunk: very large `.in('id', …)` lists can exceed URL limits and return 4xx from PostgREST.
+  const CHUNK = 120;
+  for (let i = 0; i < unique.length; i += CHUNK) {
+    const chunk = unique.slice(i, i + CHUNK);
+    const { data, error } = await supabase.from('profiles').select('id, name').in('id', chunk);
+    if (error != null) {
+      if (__DEV__) console.warn('[profiles] batch fetch:', error.message);
+      continue;
+    }
+    mergeProfileRowsFromServer((data ?? []) as { id: string; name: string }[]);
   }
-  mergeProfileRowsFromServer((data ?? []) as { id: string; name: string }[]);
 }

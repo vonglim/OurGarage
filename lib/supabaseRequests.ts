@@ -180,6 +180,7 @@ export async function fetchRemoteRequestsMerged(
   }
 
   const rows = (data ?? []) as Record<string, unknown>[];
+
   const ownerIds = rows
     .map((r) => {
       const o = r as { user_id?: string; owner_id?: string };

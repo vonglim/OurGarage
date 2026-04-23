@@ -15,7 +15,7 @@ import { STACK_TRANSITION_DURATION_MS } from '@/constants/navigation';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { lightImpact } from '@/lib/haptics';
-import { getOrCreateProfile } from '@/lib/getOrCreateProfile';
+import { ensureProfile } from '@/lib/ensureProfile';
 import { startNotificationsServerSync } from '@/lib/notificationsServerSync';
 import { registerAndStorePushTokenAsync } from '@/lib/notifications';
 import { clearRemoteProfileCache } from '@/lib/remoteProfileCache';
@@ -50,7 +50,7 @@ export default function RootLayout() {
     const syncProfileAndSession = async (next: Session | null) => {
       applySessionToAuthStore(next);
       if (next?.user) {
-        await getOrCreateProfile(next.user.id);
+        await ensureProfile(next.user);
       } else {
         clearRemoteProfileCache();
         resetProfileToDefault();

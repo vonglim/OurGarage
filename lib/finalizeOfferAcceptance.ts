@@ -19,6 +19,7 @@ export async function finalizeOfferAcceptance(
   requestId: string | number,
   offerId: string
 ): Promise<FinalizeOfferAcceptanceResult> {
+  console.log('handleConfirmRental / finalizeOfferAcceptance start', { requestId, offerId });
   console.log('ACCEPT STEP 1: start', { requestId, offerId });
 
   if (!isSupabaseConfigured()) {
@@ -68,6 +69,7 @@ export async function finalizeOfferAcceptance(
   const owner = getRequestOwnerId(rec);
   if (owner == null || owner !== me) {
     const err = 'Only the request owner can accept an offer here';
+    console.warn('User not allowed to confirm rental', { me, requestOwnerId: owner });
     console.log('ACCEPT ERROR:', err);
     return { ok: false, error: err };
   }
@@ -115,7 +117,7 @@ export async function finalizeOfferAcceptance(
       })
       .eq('id', requestRowId);
     if (e1) {
-      console.log('ACCEPT ERROR: request update failed', e1.message, e1);
+      console.error('CONFIRM RENTAL ERROR (requests update)', e1);
       return { ok: false, error: e1.message || 'Request update failed' };
     }
     console.log('ACCEPT STEP 2: request updated');
@@ -131,7 +133,7 @@ export async function finalizeOfferAcceptance(
       })
       .eq('id', acceptedOfferId);
     if (e2) {
-      console.log('ACCEPT ERROR: offer update failed', e2.message, e2);
+      console.error('CONFIRM RENTAL ERROR (offers update)', e2);
       return { ok: false, error: e2.message || 'Offer update failed' };
     }
     console.log('ACCEPT STEP 3: offer updated');
@@ -142,7 +144,7 @@ export async function finalizeOfferAcceptance(
       .eq('request_id', requestRowId)
       .neq('id', acceptedOfferId);
     if (e2b) {
-      console.log('ACCEPT ERROR: close other offers failed', e2b.message, e2b);
+      console.error('CONFIRM RENTAL ERROR (close other offers)', e2b);
       return { ok: false, error: e2b.message || 'Could not update other offers' };
     }
     console.log('ACCEPT STEP 4: other offers declined/closed for this request');
@@ -156,10 +158,11 @@ export async function finalizeOfferAcceptance(
       status: 'active',
     });
     if (e3) {
-      console.log('ACCEPT ERROR: rental insert failed', e3.message, e3);
+      console.error('CONFIRM RENTAL ERROR (rentals insert)', e3);
       return { ok: false, error: e3.message || 'Rental record failed' };
     }
     console.log('ACCEPT STEP 5: rental record created');
+    console.log('Rental confirmed successfully');
 
     void insertOfferAcceptedServerNotification({
       actorId: me,

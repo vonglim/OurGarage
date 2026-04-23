@@ -1,6 +1,5 @@
+import { ensureProfile } from '@/lib/ensureProfile';
 import { getSupabase } from '@/lib/supabase';
-
-import { getOrCreateProfile } from '@/lib/getOrCreateProfile';
 
 /**
  * After sign-in, ensures `public.profiles` has a row for the current auth user
@@ -12,7 +11,7 @@ export async function ensureUserProfileRow(): Promise<void> {
     data: { user },
   } = await supabase.auth.getUser();
   if (user == null) return;
-  await getOrCreateProfile(user.id);
+  await ensureProfile(user);
 }
 
-export { getOrCreateProfile } from '@/lib/getOrCreateProfile';
+export { ensureProfile, getOrCreateProfile } from '@/lib/ensureProfile';

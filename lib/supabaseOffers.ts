@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import type { NegotiationOfferStatus, Offer } from '@/lib/negotiationOfferTypes';
 import { PROFILE_NAME_FALLBACK } from '@/lib/profileConstants';
-import { mergeProfileRowsFromServer, getRemoteDisplayNameForUserId } from '@/lib/remoteProfileCache';
+import { fetchAndMergeProfileNames, mergeProfileRowsFromServer, getRemoteDisplayNameForUserId } from '@/lib/remoteProfileCache';
 import { isUuidString } from '@/lib/requestOwnership';
 
 function readCreatedAtMs(row: Record<string, unknown>): number {
@@ -45,14 +45,8 @@ function readOptionalString(row: Record<string, unknown>, keys: string[]): strin
 }
 
 /**
- * PostgREST embed: `offers.user_id` → `profiles.id` via FK `offers_user_id_fkey` (see `014_offers_user_id_fkey_*`).
- * Do not use unqualified `profiles(...)` without a relationship hint — see Supabase/PostgREST errors on ambiguous embeds.
- */
-export const OFFERS_WITH_PROFILES_SELECT = '*, profiles!offers_user_id_fkey ( id, name )';
-
-/**
- * Parse embedded `profiles` from a PostgREST row (object or 1:1 as single-element array).
- * Returns `null` when the join is missing; use {@link PROFILE_NAME_FALLBACK} for display when no row.
+ * Parse optional embedded `profiles` (legacy) from a row; offers are loaded with `*`
+ * and display names are filled via {@link fetchAndMergeProfileNames} + the remote name cache.
  */
 export function readProfilesFromOfferRow(row: Record<string, unknown>): { id: string; name: string } | null {
   const p = row.profiles;
@@ -67,48 +61,45 @@ export function readProfilesFromOfferRow(row: Record<string, unknown>): { id: st
   return { id, name: raw !== '' ? raw : PROFILE_NAME_FALLBACK };
 }
 
+function userIdsForOfferRows(rows: Record<string, unknown>[]): string[] {
+  const out: string[] = [];
+  for (const r of rows) {
+    const id = readOffererId(r);
+    if (id) out.push(id.trim());
+  }
+  return out;
+}
+
 /**
- * Fetches `offers` for a request with `profiles.name` embedded; falls back to `*` if the embed is unavailable.
+ * Fetches `offers` for a request, then batch-loads `profiles (id, name)` and merges into the
+ * in-memory name cache (no PostgREST resource embeds).
  */
 export async function fetchOffersByRequestIdWithProfiles(
   supabase: SupabaseClient,
   requestRowId: string
 ): Promise<{ data: Record<string, unknown>[]; error: { message: string } | null }> {
-  const a = await supabase
-    .from('offers')
-    .select(OFFERS_WITH_PROFILES_SELECT)
-    .eq('request_id', requestRowId);
-  if (a.error == null) {
-    return { data: (a.data ?? []) as Record<string, unknown>[], error: null };
-  }
-  if (__DEV__) {
-    console.warn('[offers] select with profiles failed, using *', a.error.message);
-  }
   const b = await supabase.from('offers').select('*').eq('request_id', requestRowId);
-  return {
-    data: (b.data ?? []) as Record<string, unknown>[],
-    error: b.error,
-  };
+  if (b.error) {
+    return { data: [], error: b.error };
+  }
+  const data = (b.data ?? []) as Record<string, unknown>[];
+  await fetchAndMergeProfileNames(supabase, userIdsForOfferRows(data));
+  return { data, error: null };
 }
 
 /**
- * Fetches all `offers` with `profiles` embed (Activity refresh, etc.); falls back to `*`.
+ * Fetches all `offers` and batch-resolves offerer display names from `public.profiles`.
  */
 export async function fetchAllOffersWithProfiles(
   supabase: SupabaseClient
 ): Promise<{ data: Record<string, unknown>[]; error: { message: string } | null }> {
-  const a = await supabase.from('offers').select(OFFERS_WITH_PROFILES_SELECT);
-  if (a.error == null) {
-    return { data: (a.data ?? []) as Record<string, unknown>[], error: null };
-  }
-  if (__DEV__) {
-    console.warn('[offers] select with profiles failed, using *', a.error.message);
-  }
   const b = await supabase.from('offers').select('*');
-  return {
-    data: (b.data ?? []) as Record<string, unknown>[],
-    error: b.error,
-  };
+  if (b.error) {
+    return { data: [], error: b.error };
+  }
+  const data = (b.data ?? []) as Record<string, unknown>[];
+  await fetchAndMergeProfileNames(supabase, userIdsForOfferRows(data));
+  return { data, error: null };
 }
 
 function parseStatus(raw: unknown): NegotiationOfferStatus {

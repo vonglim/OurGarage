@@ -1,5 +1,4 @@
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
-import { fetchAndMergeProfileNames } from '@/lib/remoteProfileCache';
 import { getSupabase } from '@/lib/supabase';
 import { fetchAllOffersWithProfiles, mapSupabaseOfferRowToOffer } from '@/lib/supabaseOffers';
 import { useOffersStore } from '@/store/offersStore';
@@ -18,11 +17,6 @@ async function mergeRemoteOffersIntoOffersStore(): Promise<void> {
   }
   const rows = (data ?? []) as Record<string, unknown>[];
   if (rows.length === 0) return;
-
-  const uids = rows
-    .map((raw) => (typeof raw.user_id === 'string' ? raw.user_id.trim() : ''))
-    .filter((s) => s.length > 0);
-  await fetchAndMergeProfileNames(supabase, uids);
 
   const requests = useRequestsStore.getState().requests;
   const appTimestampByRequestUuid = new Map<string, number>();
