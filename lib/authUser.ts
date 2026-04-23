@@ -1,6 +1,6 @@
 import { getCachedAuthUserId } from '@/lib/auth';
 import { PROFILE_NAME_FALLBACK } from '@/lib/profileConstants';
-import { getProfile } from '@/store/profileStore';
+import { getProfile, useProfile } from '@/store/profileStore';
 import { useAuthSessionStore } from '@/store/authSessionStore';
 
 /**
@@ -35,7 +35,20 @@ export function useAuthUser(): AuthUser {
   return { id: useAuthUserId(), name: AUTH_USER_DISPLAY_NAME };
 }
 
+/**
+ * Resolves the signed-in user’s display name. Prefer the server-backed `profiles.name`
+ * copy in the auth store (set by {@link getOrCreateProfile} / profile updates); then local row.
+ */
 export function getAuthUserDisplayName(): string {
-  const profile = getProfile();
-  return profile.name?.trim() || PROFILE_NAME_FALLBACK;
+  const fromSession = useAuthSessionStore.getState().profile?.name?.trim();
+  if (fromSession) return fromSession;
+  return getProfile().name?.trim() || PROFILE_NAME_FALLBACK;
+}
+
+/** For UI: re-renders when the session profile or `profileStore` name changes. */
+export function useAuthUserDisplayName(): string {
+  const fromSession = useAuthSessionStore((s) => s.profile?.name);
+  const p = useProfile();
+  const t = (fromSession?.trim() || p.name?.trim() || '').trim();
+  return t || PROFILE_NAME_FALLBACK;
 }

@@ -21,7 +21,9 @@ import { formatPresetAvatar } from '@/lib/profileAvatar';
 import { pickProfileImageFromLibrary } from '@/lib/pickProfileImage';
 import { mergeProfileRowsFromServer } from '@/lib/remoteProfileCache';
 import { getSupabase } from '@/lib/supabase';
+import { PROFILE_NAME_FALLBACK } from '@/lib/profileConstants';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
+import { useAuthSessionStore } from '@/store/authSessionStore';
 import { getProfile, updateProfile } from '@/store/profileStore';
 
 import { primarySolidPressed, ui } from '@/constants/appUi';
@@ -64,18 +66,23 @@ export default function EditProfileScreen() {
 
   const onSave = async () => {
     const trimmed = name.trim();
-    await updateProfile({ name: trimmed, bio: bio.trim() });
+    const nameForDb = trimmed || PROFILE_NAME_FALLBACK;
     const uid = getAuthUserIdSync().trim();
     if (isUuidString(uid)) {
       const { error } = await getSupabase()
         .from('profiles')
-        .update({ name: trimmed || 'User' })
+        .update({ name: nameForDb })
         .eq('id', uid);
       if (error == null) {
-        mergeProfileRowsFromServer([{ id: uid, name: trimmed || 'User' }]);
+        mergeProfileRowsFromServer([{ id: uid, name: nameForDb }]);
+        useAuthSessionStore.setState({ profile: { name: nameForDb } });
+        await updateProfile({ name: nameForDb, bio: bio.trim() });
       } else if (__DEV__) {
         console.warn('[profiles] update from edit-profile:', error.message);
+        return;
       }
+    } else {
+      await updateProfile({ name: nameForDb, bio: bio.trim() });
     }
     showFeedbackToast('Profile saved');
     router.back();

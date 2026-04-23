@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import type { NegotiationOfferStatus, Offer } from '@/lib/negotiationOfferTypes';
+import { PROFILE_NAME_FALLBACK } from '@/lib/profileConstants';
 import { mergeProfileRowsFromServer, getRemoteDisplayNameForUserId } from '@/lib/remoteProfileCache';
 import { isUuidString } from '@/lib/requestOwnership';
 
@@ -44,27 +45,26 @@ function readOptionalString(row: Record<string, unknown>, keys: string[]): strin
 }
 
 /**
- * PostgREST embed: `left join` `profiles` on `offers.user_id = profiles.id`
- * (requires FK; see `013_offers_user_id_profiles_fkey.sql`). Falls back to `select('*')` in fetch helpers.
+ * PostgREST embed: `offers.user_id` → `profiles.id` via FK `offers_user_id_fkey` (see `014_offers_user_id_fkey_*`).
+ * Do not use unqualified `profiles(...)` without a relationship hint — see Supabase/PostgREST errors on ambiguous embeds.
  */
-export const OFFERS_WITH_PROFILES_SELECT = '*, profiles(name)';
+export const OFFERS_WITH_PROFILES_SELECT = '*, profiles!offers_user_id_fkey ( id, name )';
 
-function readProfileNameFromOfferRow(row: Record<string, unknown>): string | null {
+/**
+ * Parse embedded `profiles` from a PostgREST row (object or 1:1 as single-element array).
+ * Returns `null` when the join is missing; use {@link PROFILE_NAME_FALLBACK} for display when no row.
+ */
+export function readProfilesFromOfferRow(row: Record<string, unknown>): { id: string; name: string } | null {
   const p = row.profiles;
   if (p == null) return null;
-  if (Array.isArray(p)) {
-    const first = p[0];
-    if (first && typeof first === 'object' && typeof (first as { name?: unknown }).name === 'string') {
-      const n = (first as { name: string }).name.trim();
-      return n !== '' ? n : null;
-    }
-    return null;
-  }
-  if (typeof p === 'object' && typeof (p as { name?: unknown }).name === 'string') {
-    const n = (p as { name: string }).name.trim();
-    return n !== '' ? n : null;
-  }
-  return null;
+  const node = Array.isArray(p) ? p[0] : p;
+  if (node == null || typeof node !== 'object') return null;
+  const o = node as { id?: unknown; name?: unknown };
+  const id = typeof o.id === 'string' && o.id.trim() !== '' ? o.id.trim() : '';
+  if (id === '' || !isUuidString(id)) return null;
+  const raw =
+    o.name == null ? '' : typeof o.name === 'string' ? o.name.trim() : String(o.name).trim();
+  return { id, name: raw !== '' ? raw : PROFILE_NAME_FALLBACK };
 }
 
 /**
@@ -189,17 +189,21 @@ export function mapSupabaseOfferRowToOffer(
   if (message) out.message = message;
   if (toolDescription) out.toolDescription = toolDescription;
 
-  const joinName = readProfileNameFromOfferRow(row);
-  if (joinName) {
-    out.offerUserName = joinName;
+  const prof = readProfilesFromOfferRow(row);
+  if (prof) {
+    out.profiles = { id: prof.id, name: prof.name };
+  }
+
+  const fromJoin = prof?.name;
+  const fromCache = getRemoteDisplayNameForUserId(renterId)?.trim() || '';
+  const nameResolved = (fromJoin && fromJoin.trim() !== '' ? fromJoin : null) || (fromCache !== '' ? fromCache : null);
+  if (nameResolved) {
+    out.offerUserName = nameResolved;
     if (isUuidString(renterId)) {
-      mergeProfileRowsFromServer([{ id: renterId, name: joinName }]);
+      mergeProfileRowsFromServer([{ id: renterId, name: nameResolved }]);
     }
-  } else {
-    const display = getRemoteDisplayNameForUserId(renterId);
-    if (display && display.trim() !== '') {
-      out.offerUserName = display.trim();
-    }
+  } else if (isUuidString(renterId)) {
+    out.offerUserName = PROFILE_NAME_FALLBACK;
   }
   return out;
 }

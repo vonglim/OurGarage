@@ -4,15 +4,14 @@ import { getAuthUserIdSync } from '@/lib/authUser';
 import { getNumericOfferPrice } from '@/lib/money';
 import { MAX_POSTER_COUNTER_OFFERS } from '@/lib/negotiationOfferConstants';
 import type { Offer } from '@/lib/negotiationOfferTypes';
+import { PROFILE_NAME_FALLBACK } from '@/lib/profileConstants';
 import { getProfileNameForUserId } from '@/lib/profileDisplayName';
 import { getPublicProfileForView } from '@/lib/publicProfiles';
 import { getRequestOwnerId, getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { logOfferSync, syncRequestAndOffersFromSupabase } from '@/lib/supabaseOfferSync';
 import { upsertNegotiationOfferToSupabase } from '@/lib/supabaseNegotiation';
-import { insertServerNotificationRow } from '@/lib/insertServerNotification';
+import { insertServerNotificationToRecipient } from '@/lib/insertServerNotification';
 import { isSupabaseConfigured } from '@/lib/supabase';
-import { shouldBlockSelfNotificationToUserId } from '@/lib/notificationRecipientGuard';
-import { addNotification } from './notificationsStore';
 import { touchLastActive } from './profileStore';
 import { getRequestByTimestamp, requestAcceptsOffers, resolveRequestStoreTimestamp } from './requestsStore';
 
@@ -83,7 +82,6 @@ export function posterCounterOffersRemainingForRenter(
   return Math.max(0, MAX_POSTER_COUNTER_OFFERS - o.posterCounterCount);
 }
 
-const COUNTER_OFFER_NOTIF_TITLE = 'Counter Offer';
 const COUNTER_OFFER_NOTIF_BODY = 'You received a counter offer';
 
 /**
@@ -103,23 +101,14 @@ function notifyUserOfCounterOffer(args: {
   if (me === '' || requester === '' || renter === '' || requester === renter) {
     return;
   }
-  // Recipient: the other participant (never the actor of this counter).
+  // actor = who sent this counter; recipient = the other user (request owner or renter).
   const recipientId: string = me === requester ? renter : requester;
-  if (shouldBlockSelfNotificationToUserId(recipientId)) {
-    return;
-  }
   const notifyRequestId = args.requestRowId;
-  addNotification({
-    type: 'counter_offer',
-    message: `${COUNTER_OFFER_NOTIF_TITLE}\n${COUNTER_OFFER_NOTIF_BODY}`,
-    requestId: notifyRequestId,
-    offerId: args.offerId,
-    forUserId: recipientId,
-  });
-  insertServerNotificationRow({
+  insertServerNotificationToRecipient({
+    actorId: me,
     recipientUserId: recipientId,
     type: 'counter_offer',
-    title: COUNTER_OFFER_NOTIF_TITLE,
+    title: 'Counter offer received',
     body: COUNTER_OFFER_NOTIF_BODY,
     requestId: notifyRequestId,
     offerId: args.offerId,
@@ -192,32 +181,27 @@ export async function addOffer(
   if (requestOwnerId && requestOwnerId !== renterId) {
     const notifyRequestId = requestRowId;
     if (hadPosterInteraction) {
-      notifyUserOfCounterOffer({
-        currentUserId: renterId,
-        requesterId: requestOwnerId,
-        offerRenterId: renterId,
-        requestRowId: notifyRequestId,
+      // Renter updated after the owner countered: notify the request owner only.
+      insertServerNotificationToRecipient({
+        actorId: renterId,
+        recipientUserId: requestOwnerId,
+        type: 'offer_updated',
+        title: 'Offer updated',
+        body: 'The other party updated their offer.',
+        requestId: notifyRequestId,
         offerId: res.id,
       });
     } else {
-      const offerRecipientId = requestOwnerId;
-      if (!shouldBlockSelfNotificationToUserId(offerRecipientId)) {
-        addNotification({
-          type: 'new_offer',
-          message: 'You received a new offer\nPlease review it in Activity.',
-          requestId: notifyRequestId,
-          offerId: res.id,
-          forUserId: offerRecipientId,
-        });
-        insertServerNotificationRow({
-          recipientUserId: offerRecipientId,
-          type: 'new_offer',
-          title: 'New offer received',
-          body: 'Someone sent you an offer',
-          requestId: notifyRequestId,
-          offerId: res.id,
-        });
-      }
+      // First offer on the thread: notify the request owner only.
+      insertServerNotificationToRecipient({
+        actorId: renterId,
+        recipientUserId: requestOwnerId,
+        type: 'offer_created',
+        title: 'New offer received',
+        body: 'You received a new offer.',
+        requestId: notifyRequestId,
+        offerId: res.id,
+      });
     }
   }
   return true;
@@ -432,32 +416,6 @@ export function getOfferUserPreview(offer: Offer): {
   lastActive: number;
 } {
   const renter = offer.renterId;
-  if (
-    typeof renter === 'string' &&
-    renter.length > 0 &&
-    typeof offer.offerUserName === 'string' &&
-    offer.offerUserName.trim().length > 0
-  ) {
-    const pub = getPublicProfileForView(renter);
-    const lastActive =
-      typeof offer.offerUserLastActive === 'number' && Number.isFinite(offer.offerUserLastActive)
-        ? offer.offerUserLastActive
-        : pub.lastActive;
-    const avatar =
-      typeof offer.offerUserAvatar === 'string' && offer.offerUserAvatar.trim().length > 0
-        ? offer.offerUserAvatar.trim()
-        : pub.avatar;
-    return {
-      userId: renter,
-      name: offer.offerUserName.trim(),
-      rating:
-        typeof offer.offerUserRating === 'number' && Number.isFinite(offer.offerUserRating)
-          ? offer.offerUserRating
-          : 4.8,
-      avatar,
-      lastActive,
-    };
-  }
   if (typeof renter !== 'string' || renter.trim() === '') {
     return {
       userId: '',
@@ -469,11 +427,29 @@ export function getOfferUserPreview(offer: Offer): {
   }
   const userId = renter.trim();
   const pub = getPublicProfileForView(userId);
+  const fromProfile = offer.profiles?.name?.trim();
+  const fromOffer = offer.offerUserName?.trim();
+  const name =
+    (fromProfile && fromProfile.length > 0 ? fromProfile : null) ||
+    (fromOffer && fromOffer.length > 0 ? fromOffer : null) ||
+    getProfileNameForUserId(userId).trim() ||
+    PROFILE_NAME_FALLBACK;
+  const lastActive =
+    typeof offer.offerUserLastActive === 'number' && Number.isFinite(offer.offerUserLastActive)
+      ? offer.offerUserLastActive
+      : pub.lastActive;
+  const avatar =
+    typeof offer.offerUserAvatar === 'string' && offer.offerUserAvatar.trim().length > 0
+      ? offer.offerUserAvatar.trim()
+      : pub.avatar;
   return {
     userId,
-    name: getProfileNameForUserId(userId),
-    rating: pub.ratingNumber,
-    avatar: pub.avatar,
-    lastActive: pub.lastActive,
+    name: name || PROFILE_NAME_FALLBACK,
+    rating:
+      typeof offer.offerUserRating === 'number' && Number.isFinite(offer.offerUserRating)
+        ? offer.offerUserRating
+        : pub.ratingNumber,
+    avatar,
+    lastActive,
   };
 }

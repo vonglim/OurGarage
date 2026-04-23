@@ -1,8 +1,14 @@
-import type { RealtimePostgresInsertPayload, RealtimeChannel } from '@supabase/supabase-js';
+import type {
+  RealtimeChannel,
+  RealtimePostgresInsertPayload,
+  RealtimePostgresUpdatePayload,
+} from '@supabase/supabase-js';
+import { REALTIME_SUBSCRIBE_STATES } from '@supabase/realtime-js';
 
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import {
   addNotificationToStore,
+  replaceNotificationInStore,
   useNotificationsStore,
   type AppNotification,
   type AppNotificationType,
@@ -11,6 +17,8 @@ import {
 const SERVER_TYPE_TO_APP: Record<string, AppNotificationType> = {
   new_message: 'message',
   new_offer: 'new_offer',
+  offer_created: 'new_offer',
+  offer_updated: 'new_offer',
   offer_accepted: 'offer_accepted',
   counter_offer: 'counter_offer',
   agreement_pending: 'agreement_pending',
@@ -92,9 +100,56 @@ export function mapSupabaseNotificationToApp(
   };
 }
 
+const MAX_INITIAL_ROWS = 100;
+
+const RECONNECT_MS = 1_000;
+
+function runInitialServerFetch(
+  supabase: ReturnType<typeof getSupabase>,
+  currentUserId: string,
+  cancelled: () => boolean
+): void {
+  void (async () => {
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('id, user_id, type, title, body, data, read, request_id, offer_id, created_at')
+      .eq('user_id', currentUserId)
+      .order('created_at', { ascending: false })
+      .limit(MAX_INITIAL_ROWS);
+
+    if (cancelled()) return;
+    if (error != null) {
+      if (__DEV__) {
+        console.warn('[notifications] initial fetch failed:', error.message);
+      }
+      return;
+    }
+    for (const row of data ?? []) {
+      if (cancelled()) return;
+      const n = mapSupabaseNotificationToApp(
+        row as unknown as Record<string, unknown>,
+        currentUserId
+      );
+      if (n) {
+        addNotificationToStore(n);
+      }
+    }
+  })();
+}
+
+function removeChannel(
+  supabase: ReturnType<typeof getSupabase>,
+  ch: RealtimeChannel | null
+): void {
+  if (ch != null) {
+    void supabase.removeChannel(ch);
+  }
+}
+
 /**
- * Await local hydrate, load existing server rows for this user, then open a realtime
- * `INSERT` subscription. Returns an unsubscribe to stop listening (e.g. on sign out).
+ * One realtime session per call: single channel `notifications-${userId}` with automatic resubscribe
+ * on `CHANNEL_ERROR` / `TIMED_OUT`. Unsubscribe via the returned teardown (e.g. logout or user change).
+ * Root layout: run only when `session.user.id` is set; dependency array prevents duplicate clients.
  */
 export function startNotificationsServerSync(userId: string): () => void {
   if (!isSupabaseConfigured() || !userId.trim()) {
@@ -103,48 +158,58 @@ export function startNotificationsServerSync(userId: string): () => void {
 
   const currentUserId = userId.trim();
   const supabase = getSupabase();
+  const filter = `user_id=eq.${currentUserId}`;
   let cancelled = false;
-  let channel: RealtimeChannel | null = null;
+  let activeChannel: RealtimeChannel | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-  void (async () => {
-    await useNotificationsStore.getState().hydrate();
-    if (cancelled) return;
-
-    const { data, error } = await supabase
-      .from('notifications')
-      .select(
-        'id, user_id, type, title, body, data, read, request_id, offer_id, created_at'
-      )
-      .eq('user_id', currentUserId)
-      .order('created_at', { ascending: false })
-      .limit(100);
-
-    if (error != null) {
-      if (__DEV__) {
-        console.warn('[notifications] initial fetch failed:', error.message);
-      }
-    } else if (data != null && !cancelled) {
-      for (const row of data) {
-        const n = mapSupabaseNotificationToApp(
-          row as unknown as Record<string, unknown>,
-          currentUserId
-        );
-        if (n) addNotificationToStore(n);
-      }
+  const clearReconnect = () => {
+    if (reconnectTimer != null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
     }
-    if (cancelled) return;
+  };
 
-    channel = supabase
-      .channel('notifications')
+  const teardownChannel = () => {
+    clearReconnect();
+    removeChannel(supabase, activeChannel);
+    activeChannel = null;
+  };
+
+  const scheduleReconnect = () => {
+    clearReconnect();
+    if (cancelled) return;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (!cancelled) {
+        attach();
+      }
+    }, RECONNECT_MS);
+  };
+
+  /** After a successful (re)subscription, not the very first in this session, pull recent rows to fill gaps. */
+  let haveSeenSubscribed = false;
+
+  const attach = () => {
+    if (cancelled) return;
+    removeChannel(supabase, activeChannel);
+    activeChannel = null;
+
+    const ch = supabase
+      .channel(`notifications-${currentUserId}`)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'notifications',
+          filter,
         },
         (payload: RealtimePostgresInsertPayload<Record<string, unknown>>) => {
-          console.log('NEW NOTIFICATION RECEIVED', payload);
+          if (__DEV__) {
+            console.log('REALTIME HIT', payload);
+            console.log('NEW NOTIFICATION', payload.new);
+          }
           const row = payload.new;
           if (row == null || typeof row !== 'object') return;
           const r = row as Record<string, unknown>;
@@ -156,17 +221,62 @@ export function startNotificationsServerSync(userId: string): () => void {
           }
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'notifications',
+          filter,
+        },
+        (payload: RealtimePostgresUpdatePayload<Record<string, unknown>>) => {
+          const row = payload.new;
+          if (row == null || typeof row !== 'object') return;
+          const r = row as Record<string, unknown>;
+          if (r.user_id == null) return;
+          if (String(r.user_id) !== currentUserId) return;
+          const n = mapSupabaseNotificationToApp(r, currentUserId);
+          if (n) {
+            replaceNotificationInStore(n);
+          }
+        }
+      )
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log('NOTIFICATION SUBSCRIBED');
+        if (__DEV__) {
+          console.log('Realtime status:', status);
+        }
+        if (status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) {
+          if (haveSeenSubscribed) {
+            // Reconnected after error/timeout: merge any rows missed while offline
+            runInitialServerFetch(supabase, currentUserId, () => cancelled);
+          } else {
+            haveSeenSubscribed = true;
+            if (__DEV__) {
+              console.log('[notifications] subscribed on channel', `notifications-${currentUserId}`);
+            }
+          }
+        }
+        if (
+          status === REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR ||
+          status === REALTIME_SUBSCRIBE_STATES.TIMED_OUT
+        ) {
+          teardownChannel();
+          scheduleReconnect();
         }
       });
+
+    activeChannel = ch;
+  };
+
+  void (async () => {
+    await useNotificationsStore.getState().hydrate();
+    if (cancelled) return;
+    runInitialServerFetch(supabase, currentUserId, () => cancelled);
+    attach();
   })();
 
   return () => {
     cancelled = true;
-    if (channel) {
-      void supabase.removeChannel(channel);
-    }
+    teardownChannel();
   };
 }

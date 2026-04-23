@@ -162,7 +162,8 @@ export async function finalizeOfferAcceptance(
     console.log('ACCEPT STEP 5: rental record created');
 
     void insertOfferAcceptedServerNotification({
-      offerSenderUserId: renterId,
+      actorId: me,
+      offerRenterId: renterId,
       requestRowId,
       offerId: acceptedOfferId,
     });

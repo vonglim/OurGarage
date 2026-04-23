@@ -45,6 +45,7 @@ function mergeServerOfferWithLocalThreadFields(server: Offer, prevById: Map<stri
     ...server,
     messageHistory:
       server.messageHistory.length > 0 ? server.messageHistory : (prev.messageHistory ?? []),
+    profiles: server.profiles ?? prev.profiles,
     offerUserName: server.offerUserName ?? prev.offerUserName,
     offerUserRating: prev.offerUserRating ?? server.offerUserRating,
     offerUserAvatar: prev.offerUserAvatar ?? server.offerUserAvatar,

@@ -15,12 +15,13 @@ import { STACK_TRANSITION_DURATION_MS } from '@/constants/navigation';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { lightImpact } from '@/lib/haptics';
-import { ensureUserProfileRow } from '@/lib/ensureUserProfile';
+import { getOrCreateProfile } from '@/lib/getOrCreateProfile';
 import { startNotificationsServerSync } from '@/lib/notificationsServerSync';
 import { registerAndStorePushTokenAsync } from '@/lib/notifications';
 import { clearRemoteProfileCache } from '@/lib/remoteProfileCache';
 import { supabase } from '../lib/supabase';
 import { applySessionToAuthStore } from '@/store/authSessionStore';
+import { resetProfileToDefault } from '@/store/profileStore';
 
 function NavigationHaptics() {
   const pathname = usePathname();
@@ -46,33 +47,37 @@ export default function RootLayout() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth
-      .getSession()
-      .then(({ data: { session: next } }) => {
-        setSession(next);
-        setLoading(false);
-        applySessionToAuthStore(next);
-        if (next?.user) {
-          void ensureUserProfileRow();
-        } else {
-          clearRemoteProfileCache();
-        }
-      })
-      .catch(() => {
-        setSession(null);
-        setLoading(false);
-        applySessionToAuthStore(null);
-        clearRemoteProfileCache();
-      });
-
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, next) => {
-      setSession(next);
+    const syncProfileAndSession = async (next: Session | null) => {
       applySessionToAuthStore(next);
       if (next?.user) {
-        void ensureUserProfileRow();
+        await getOrCreateProfile(next.user.id);
       } else {
         clearRemoteProfileCache();
+        resetProfileToDefault();
       }
+      setSession(next);
+    };
+
+    void (async () => {
+      try {
+        const {
+          data: { session: next },
+        } = await supabase.auth.getSession();
+        await syncProfileAndSession(next);
+      } catch {
+        await syncProfileAndSession(null);
+      } finally {
+        setLoading(false);
+      }
+    })();
+
+    const { data: listener } = supabase.auth.onAuthStateChange((event, next) => {
+      if (event === 'INITIAL_SESSION') {
+        return;
+      }
+      void (async () => {
+        await syncProfileAndSession(next);
+      })();
     });
 
     return () => {

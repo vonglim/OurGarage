@@ -12,10 +12,9 @@ import {
   insertRequestChatMessageToSupabase,
   OFFER_USER_CHAT_MESSAGE_KIND,
 } from '@/lib/supabaseRequestChatMessages';
-import { insertServerNotificationRow } from '@/lib/insertServerNotification';
-import { addNotification } from './notificationsStore';
+import { insertServerNotificationToRecipient } from '@/lib/insertServerNotification';
 import { getOfferById, getOfferUserPreview } from './offersStore';
-import { getAuthUserDisplayName, getAuthUserIdSync, useAuthUserId } from '@/lib/authUser';
+import { getAuthUserIdSync, useAuthUserId } from '@/lib/authUser';
 import { getProfile } from './profileStore';
 import { getRequestByTimestamp } from './requestsStore';
 
@@ -539,20 +538,11 @@ export async function addChatMessage(chatId: string, text: string): Promise<void
   void persist();
   void scheduleLocalNewMessageNotificationForTesting(trimmed);
   if (requestIdForNotif != null) {
-    const senderName = getAuthUserDisplayName();
-    const preview = trimmed.length > 200 ? `${trimmed.slice(0, 197)}…` : trimmed;
-    const body = `${senderName}: ${preview}`;
-    addNotification({
-      type: 'message',
-      message: body,
-      requestId: requestIdForNotif,
-      chatId,
-      forUserId: receiverId,
-    });
     const requestRow = getRequestSupabaseRowId(req as Record<string, unknown>);
-    insertServerNotificationRow({
+    insertServerNotificationToRecipient({
+      actorId: senderId,
       recipientUserId: receiverId,
-      type: 'new_message',
+      type: 'message',
       title: 'New message',
       body: 'You received a new message',
       requestId: requestRow,

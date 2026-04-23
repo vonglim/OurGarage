@@ -6,8 +6,6 @@ import { needsDeliveryFee } from '@/lib/deliveryFormat';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { fetchRemoteRequestsMerged, insertRequestToSupabase } from '@/lib/supabaseRequests';
 import { getRequestOwnerId, getRequestSupabaseRowId, isUuidString } from '@/lib/requestOwnership';
-import { shouldBlockSelfNotificationToUserId } from '@/lib/notificationRecipientGuard';
-import { addNotification } from './notificationsStore';
 import { getAuthUserIdSync } from '@/lib/authUser';
 import { getProfile, touchLastActive } from './profileStore';
 
@@ -128,28 +126,6 @@ export function emitAcceptMatchSideEffects(
       ownerId,
       price: Number.isFinite(acceptedPrice) ? acceptedPrice : 0,
     });
-  }
-
-  if (before && !before.matched) {
-    const forUserId =
-      typeof accepted?.renterId === 'string' && accepted.renterId.trim() !== ''
-        ? accepted.renterId.trim()
-        : null;
-    const notifyRequestId =
-      getRequestSupabaseRowId(before) ?? getRequestSupabaseRowId(after as Record<string, unknown>) ?? requestTimestamp;
-    if (forUserId) {
-      const offerSenderRecipientId = forUserId;
-      if (!shouldBlockSelfNotificationToUserId(offerSenderRecipientId)) {
-        addNotification({
-          type: 'offer_accepted',
-          message:
-            'The other party accepted your offer.\nReview the rental agreement and next steps in Activity.',
-          requestId: notifyRequestId,
-          offerId: acceptedOfferId,
-          forUserId: offerSenderRecipientId,
-        });
-      }
-    }
   }
 }
 

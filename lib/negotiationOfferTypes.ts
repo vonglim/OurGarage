@@ -38,6 +38,8 @@ export type Offer = {
   message?: string;
   toolDescription?: string;
   messageHistory: OfferMessageEntry[];
+  /** Populated from Supabase `select (..., profiles (id, name))` when the embed succeeds. */
+  profiles?: { id: string; name: string } | null;
   offerUserName?: string;
   offerUserRating?: number;
   offerUserAvatar?: string;

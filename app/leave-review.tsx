@@ -15,7 +15,7 @@ import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
-import { getProfile } from '@/store/profileStore';
+import { getAuthUserDisplayName } from '@/lib/authUser';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { addUserReview, type UserReviewType } from '@/store/userReviewsStore';
 
@@ -46,13 +46,12 @@ export default function LeaveReviewScreen() {
       Alert.alert('Rating required', 'Please select 1–5 stars before submitting.');
       return;
     }
-    const profile = getProfile();
     await addUserReview({
       rating,
       comment,
       type: reviewType,
       requestTimestamp,
-      reviewerName: profile.name.trim() || 'You',
+      reviewerName: getAuthUserDisplayName(),
     });
     showFeedbackToast('Thanks!');
     router.back();

@@ -16,8 +16,7 @@ import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import { numberPadAccessoryProps } from '@/components/NumberPadKeyboardAccessory';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { useListingsStore } from '@/store/listingsStore';
-import { getAuthUserIdSync } from '@/lib/authUser';
-import { getProfile } from '@/store/profileStore';
+import { getAuthUserDisplayName, getAuthUserIdSync } from '@/lib/authUser';
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { primarySolidPressed, ui } from '@/constants/appUi';
@@ -126,7 +125,6 @@ export default function CreateListingScreen() {
       return;
     }
 
-    const profile = getProfile();
     const price = parseMoneyToNumber(priceInput)!;
     const id = `listing-${Date.now()}`;
     appendListing({
@@ -135,7 +133,7 @@ export default function CreateListingScreen() {
       price,
       priceUnit: 'day',
       description: `${description.trim()}\n\nPickup: ${location.trim()}`,
-      ownerName: profile.name.trim() || 'You',
+      ownerName: getAuthUserDisplayName(),
       ownerUserId: getAuthUserIdSync(),
       rating: 5,
       distance: 2.5,

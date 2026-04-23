@@ -1,8 +1,9 @@
 import { getAuthUserIdSync } from '@/lib/authUser';
 
 /**
- * Returns true if we should skip sending: the intended recipient is the current device user.
- * In-app and server notifs are always to the *other* party.
+ * For **locally created** notifications (e.g. `addNotification`) when the app might mistakenly
+ * target the current user as "recipient" on the actor's device. Do **not** use this for
+ * `addNotificationToStore` / server rows, where the recipient is the current user and must be applied.
  */
 export function shouldBlockSelfNotificationToUserId(userId: string | null | undefined): boolean {
   const target = (userId ?? '').trim();

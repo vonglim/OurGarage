@@ -22,7 +22,7 @@ import {
 import { formatPresetAvatar, parseProfileAvatar } from '@/lib/profileAvatar';
 import { pickProfileImageFromLibrary } from '@/lib/pickProfileImage';
 import { formatUsd } from '@/lib/money';
-import { useAuthUser } from '@/lib/authUser';
+import { useAuthUser, useAuthUserDisplayName } from '@/lib/authUser';
 import { resetMarketplaceData } from '@/lib/resetMarketplaceData';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { getProfile, updateProfile, type UserProfile } from '@/store/profileStore';
@@ -78,6 +78,7 @@ export default function ProfileScreen() {
   const [profile, setProfile] = useState<UserProfile>(() => getProfile());
   const [presetModalOpen, setPresetModalOpen] = useState(false);
   const currentUser = useAuthUser();
+  const myDisplayName = useAuthUserDisplayName();
 
   useFocusEffect(
     useCallback(() => {
@@ -106,11 +107,7 @@ export default function ProfileScreen() {
     ]);
   }, []);
 
-  const displayName = isViewingOther
-    ? viewPublic!.name.trim()
-    : profile.name.trim().length > 0
-      ? profile.name.trim()
-      : 'Your name';
+  const displayName = isViewingOther ? viewPublic!.name.trim() : myDisplayName;
   const displayBio = isViewingOther
     ? viewPublic!.bio.trim()
     : profile.bio.trim().length > 0

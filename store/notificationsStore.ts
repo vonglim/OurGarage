@@ -49,11 +49,18 @@ function normalizeLoaded(raw: unknown): AppNotification[] {
     'review',
     'message',
     'new_offer',
+    'offer_created',
+    'offer_updated',
     'counter_offer',
     'agreement_pending',
     'offer_accepted',
     'declined',
   ]);
+  const toAppType = (t: string): string => {
+    if (t === 'offer_created' || t === 'offer_updated') return 'new_offer';
+    if (t === 'offer' || t === 'new_offer') return 'new_offer';
+    return t;
+  };
   const out: AppNotification[] = [];
   for (const row of raw) {
     if (!row || typeof row !== 'object') continue;
@@ -61,7 +68,9 @@ function normalizeLoaded(raw: unknown): AppNotification[] {
     const id = typeof r.id === 'string' ? r.id : '';
     const rawType = typeof r.type === 'string' ? r.type : '';
     if (!legacyTypes.has(rawType)) continue;
-    const type = (rawType === 'offer' ? 'new_offer' : rawType) as AppNotificationType;
+    const type = toAppType(
+      rawType === 'offer' ? 'new_offer' : rawType
+    ) as AppNotificationType;
     const message = typeof r.message === 'string' ? r.message : '';
     const timestamp = typeof r.timestamp === 'number' ? r.timestamp : 0;
     const read = r.read === true;
@@ -161,6 +170,11 @@ type NotificationsState = {
    * or duplicating the same `id`.
    */
   addNotificationToStore: (row: AppNotification) => void;
+  /**
+   * Replaces an existing row by `id` (e.g. realtime `UPDATE` when `read` flips to true on the server).
+   * If missing, prepends the row (same as add).
+   */
+  replaceNotificationInStore: (row: AppNotification) => void;
   markAsRead: (notificationId: string) => void;
   /** All rows for the current user; use when viewing Activity / Notifications or dismissing the badge. */
   markAllAsRead: () => void;
@@ -216,9 +230,8 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
     void persistNotifications(get().notifications);
   },
   addNotificationToStore: (row) => {
-    if (row.forUserId != null && row.forUserId !== '' && shouldBlockSelfNotificationToUserId(row.forUserId)) {
-      return;
-    }
+    // Server / realtime rows always have forUserId === the recipient. Do NOT use
+    // shouldBlockSelfNotification (that guard is only for locally created rows in addNotification).
     set((state) => {
       if (state.notifications.some((n) => n.id === row.id)) {
         return state;
@@ -227,6 +240,27 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
         notifications: [row, ...state.notifications].sort(
           (a, b) => b.timestamp - a.timestamp
         ),
+      };
+    });
+    if (__DEV__) {
+      console.log('NOTIFICATION RECEIVED:', row);
+    }
+    void persistNotifications(get().notifications);
+  },
+  replaceNotificationInStore: (row) => {
+    set((state) => {
+      const has = state.notifications.some((n) => n.id === row.id);
+      if (!has) {
+        return {
+          notifications: [row, ...state.notifications].sort(
+            (a, b) => b.timestamp - a.timestamp
+          ),
+        };
+      }
+      return {
+        notifications: state.notifications
+          .map((n) => (n.id === row.id ? row : n))
+          .sort((a, b) => b.timestamp - a.timestamp),
       };
     });
     void persistNotifications(get().notifications);
@@ -254,6 +288,10 @@ export function addNotification(entry: AddNotificationInput): void {
 
 export function addNotificationToStore(row: AppNotification): void {
   useNotificationsStore.getState().addNotificationToStore(row);
+}
+
+export function replaceNotificationInStore(row: AppNotification): void {
+  useNotificationsStore.getState().replaceNotificationInStore(row);
 }
 
 export function clearAllNotifications(): void {

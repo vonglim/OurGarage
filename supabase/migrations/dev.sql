@@ -18,7 +18,9 @@ create table requests (
 create table offers (
   id uuid primary key default gen_random_uuid(),
   request_id uuid,
-  user_id uuid,
+  user_id uuid not null
+    constraint offers_user_id_fkey
+    foreign key (user_id) references public.profiles (id) on update cascade on delete cascade,
   amount numeric,
   created_at timestamptz default now()
 );

@@ -155,6 +155,7 @@ export default function ActivityScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      // Request + offer data only. Notifications list comes from `notificationsStore` (realtime + initial fetch), not a refetch here.
       void refreshActivityScreenFromSupabase();
       markAllNotificationsAsRead();
     }, [])

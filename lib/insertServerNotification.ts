@@ -1,16 +1,17 @@
-import { shouldBlockSelfNotificationToUserId } from '@/lib/notificationRecipientGuard';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { isUuidString } from '@/lib/requestOwnership';
 
-type InsertInput = {
-  /** Supabase `notifications.user_id` — the user who should see this (never the sending actor by mistake). */
-  recipientUserId: string;
-  type: 'new_message' | 'new_offer' | 'offer_accepted' | 'counter_offer';
-  title: string;
-  body: string;
-  requestId: string | null;
-  offerId: string | null;
-};
+/**
+ * `public.notifications.type` values sent by this app. Must match DB check constraint (migrations 012, 015).
+ */
+export type ServerNotificationType =
+  | 'offer_created'
+  | 'counter_offer'
+  | 'offer_updated'
+  | 'offer_accepted'
+  | 'message'
+  | 'new_offer' /* legacy */
+  | 'new_message' /* legacy */;
 
 function dataPayload(
   requestId: string | null,
@@ -23,23 +24,47 @@ function dataPayload(
 }
 
 /**
- * Inserts `public.notifications` (`user_id` = `recipientUserId` only; never the actor).
- * Fire-and-forget; dev logs on error. Does not alter in-app or UI stores.
+ * Inserts one `public.notifications` row for the **recipient** (never the actor). Skips if `actorId === recipientId`
+ * (prevents self-notify bugs).
  */
-export function insertServerNotificationRow(input: InsertInput): void {
+export function insertServerNotificationToRecipient(input: {
+  actorId: string;
+  recipientUserId: string;
+  type: ServerNotificationType;
+  title: string;
+  body: string;
+  requestId: string | null;
+  offerId: string | null;
+}): void {
   if (!isSupabaseConfigured()) return;
-  if (shouldBlockSelfNotificationToUserId(input.recipientUserId)) {
+
+  const actorId = String(input.actorId ?? '').trim();
+  const recipientId = String(input.recipientUserId ?? '').trim();
+  if (actorId === '' || recipientId === '' || !isUuidString(recipientId)) {
     return;
   }
-  const userId = input.recipientUserId.trim();
-  if (userId === '' || !isUuidString(userId)) return;
+  if (actorId === recipientId) {
+    if (__DEV__) {
+      console.log('NOTIFY skip: actorId === recipientId (no self-notify)', {
+        actorId,
+        recipientId,
+        type: input.type,
+      });
+    }
+    return;
+  }
+
+  if (__DEV__) {
+    console.log('NOTIFY →', { actorId, recipientId, type: input.type });
+  }
+
   const requestId = input.requestId && isUuidString(input.requestId) ? input.requestId : null;
   const offerId = input.offerId && isUuidString(input.offerId) ? input.offerId : null;
   const data = dataPayload(requestId, offerId);
   const supabase = getSupabase();
   void (async () => {
     const { error } = await supabase.from('notifications').insert({
-      user_id: userId,
+      user_id: recipientId,
       type: input.type,
       title: input.title,
       body: input.body,
@@ -54,37 +79,34 @@ export function insertServerNotificationRow(input: InsertInput): void {
   })();
 }
 
-/** The offer author (renter) after the request owner finalizes accept in `finalizeOfferAcceptance`. */
+/** Renter (offer author) is notified; actor is the request owner who accepted. */
 export function insertOfferAcceptedServerNotification(input: {
-  offerSenderUserId: string;
+  /** Request owner (must not equal {@link offerRenterId}). */
+  actorId: string;
+  offerRenterId: string;
   requestRowId: string;
   offerId: string;
 }): void {
-  if (!isSupabaseConfigured()) return;
-  if (shouldBlockSelfNotificationToUserId(input.offerSenderUserId)) {
+  const a = String(input.actorId).trim();
+  const renter = String(input.offerRenterId).trim();
+  const reqId = String(input.requestRowId).trim();
+  const offId = String(input.offerId).trim();
+  if (a === '' || !isUuidString(renter) || !isUuidString(reqId) || !isUuidString(offId)) {
     return;
   }
-  const r = input.offerSenderUserId.trim();
-  const reqId = input.requestRowId.trim();
-  const offId = input.offerId.trim();
-  if (r === '' || !isUuidString(r) || !isUuidString(reqId) || !isUuidString(offId)) {
-    return;
-  }
-  const data = dataPayload(reqId, offId);
-  const supabase = getSupabase();
-  void (async () => {
-    const { error } = await supabase.from('notifications').insert({
-      user_id: r,
-      type: 'offer_accepted' as const,
-      title: 'Offer accepted',
-      body: 'Your offer was accepted',
-      data,
-      read: false,
-      request_id: reqId,
-      offer_id: offId,
-    });
-    if (error != null && __DEV__) {
-      console.warn('[notifications] offer_accepted insert failed:', error.message);
+  if (a === renter) {
+    if (__DEV__) {
+      console.log('NOTIFY skip offer_accepted: actor and renter same', { a, renter });
     }
-  })();
+    return;
+  }
+  insertServerNotificationToRecipient({
+    actorId: a,
+    recipientUserId: renter,
+    type: 'offer_accepted',
+    title: 'Your offer was accepted',
+    body: 'Your offer was accepted',
+    requestId: reqId,
+    offerId: offId,
+  });
 }
