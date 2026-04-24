@@ -1,24 +1,26 @@
-import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Pressable } from '@/components/Pressable';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
+import { ui } from '@/constants/appUi';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
 
 const NAVY = '#0B1F3A';
 const BORDER = '#E5E7EB';
 const HELPER_GRAY = '#6B7280';
+/** Root-stack screen: no tab navigator above; approximate space tab bar used when this lived inside tabs. */
+const SCROLL_BOTTOM_TAB_CLEARANCE = 76;
 
 export default function RentOutScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const tabBarHeight = useBottomTabBarHeight();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [halfDay, setHalfDay] = useState('');
@@ -29,7 +31,7 @@ export default function RentOutScreen() {
   const [listingPhotoUris, setListingPhotoUris] = useState<string[]>([]);
   const previewUri = listingPhotoUris[0] ?? null;
 
-  const bottomPad = Math.max(16, tabBarHeight + insets.bottom + 16);
+  const bottomPad = Math.max(16, SCROLL_BOTTOM_TAB_CLEARANCE + insets.bottom + 16);
 
   useFocusEffect(
     useCallback(() => {
@@ -51,7 +53,17 @@ export default function RentOutScreen() {
         contentContainerStyle={{ paddingBottom: bottomPad }}
         keyboardShouldPersistTaps="handled"
       >
-      <Text style={styles.headerTitle}>List Your Equipment</Text>
+        <View style={styles.headerTitleBlock}>
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            style={styles.backHit}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.backText}>‹ Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>List Your Equipment</Text>
+        </View>
 
       <Pressable
         style={styles.photoBox}
@@ -172,7 +184,19 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#FFFFFF',
   },
+  headerTitleBlock: {
+    marginBottom: 14,
+  },
+  backHit: {
+    alignSelf: 'flex-start',
+  },
+  backText: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: ui.primary,
+  },
   headerTitle: {
+    marginTop: 8,
     fontSize: 22,
     fontWeight: '700',
     color: '#111827',

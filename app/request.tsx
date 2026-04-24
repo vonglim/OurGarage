@@ -156,11 +156,13 @@ export default function RequestAToolScreen() {
         >
           <ScreenEntrance style={styles.entranceFlex}>
             <View style={[styles.topBar, { paddingTop: 8 }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
-          <Text style={styles.backLabel}>‹ Back</Text>
-        </Pressable>
-        <Text style={styles.screenTitle}>Request equipment</Text>
-      </View>
+              <View style={styles.headerTitleBlock}>
+                <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
+                  <Text style={styles.backLabel}>‹ Back</Text>
+                </Pressable>
+                <Text style={styles.screenTitle}>Request equipment</Text>
+              </View>
+            </View>
       <ScrollView
         style={styles.container}
         contentContainerStyle={[
@@ -541,21 +543,24 @@ const styles = StyleSheet.create({
   },
   topBar: {
     paddingHorizontal: 0,
-    paddingBottom: 10,
+    paddingBottom: 0,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,
     backgroundColor: ui.background,
   },
+  headerTitleBlock: {
+    marginBottom: 14,
+  },
   backHit: {
     alignSelf: 'flex-start',
-    marginBottom: 4,
   },
   backLabel: {
-    fontSize: 17,
+    fontSize: 15,
     fontWeight: '500',
     color: ui.primary,
   },
   screenTitle: {
+    marginTop: 8,
     fontSize: 22,
     fontWeight: '700',
     color: ui.textPrimary,

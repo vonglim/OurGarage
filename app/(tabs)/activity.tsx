@@ -149,6 +149,7 @@ export default function ActivityScreen() {
   const offers = useOffersStore((state) => state.offers);
   const notifications = useNotificationsStore((s) => s.notifications);
   const unreadCount = useTotalUnreadChatCount();
+  const hasUnreadMessages = unreadCount > 0;
   const requests = useRequestsStore((s) => s.requests);
 
   useFocusEffect(
@@ -480,12 +481,16 @@ export default function ActivityScreen() {
               pressOpacityFeedback={false}
               haptic
               onPress={goToChats}
-              style={({ pressed }) => [styles.messagesPill, pressed && styles.messagesPillPressed]}
+              style={({ pressed }) => [
+                styles.messagesPill,
+                { backgroundColor: hasUnreadMessages ? '#22C55E' : '#0B1F3A' },
+                pressed && styles.messagesPillPressed,
+              ]}
               accessibilityRole="button"
-              accessibilityLabel={unreadCount > 0 ? `Messages, ${unreadCount} unread` : 'Messages'}
+              accessibilityLabel={hasUnreadMessages ? `Messages, ${unreadCount} unread` : 'Messages'}
             >
               <Text style={styles.messagesPillLabel}>Messages</Text>
-              {unreadCount > 0 ? (
+              {hasUnreadMessages ? (
                 <View style={styles.messagesPillBadge}>
                   <Text style={styles.messagesPillBadgeText}>{formatSectionCount(unreadCount)}</Text>
                 </View>
@@ -883,9 +888,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 12,
-    backgroundColor: ui.surfaceNeutral,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: ui.border,
   },
   messagesPillPressed: {
     opacity: 0.9,
@@ -893,14 +895,14 @@ const styles = StyleSheet.create({
   messagesPillLabel: {
     fontSize: 14,
     fontWeight: '700',
-    color: ui.primary,
+    color: '#FFFFFF',
   },
   messagesPillBadge: {
     minWidth: 22,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 10,
-    backgroundColor: ui.primary,
+    backgroundColor: 'rgba(255,255,255,0.25)',
     alignItems: 'center',
   },
   messagesPillBadgeText: {

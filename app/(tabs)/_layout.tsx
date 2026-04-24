@@ -23,10 +23,13 @@ export default function TabLayout() {
           bottom: 20,
           left: 16,
           right: 16,
-          backgroundColor: 'rgba(255,255,255,0.9)',
-          borderRadius: 28,
+          paddingHorizontal: 20,
+          backgroundColor: 'rgba(255,255,255,0.75)',
+          borderRadius: 30,
           height: 60,
           borderTopWidth: 0,
+          borderWidth: 1,
+          borderColor: 'rgba(255,255,255,0.4)',
           elevation: 10,
           shadowColor: '#000',
           shadowOpacity: 0.08,
@@ -142,20 +145,6 @@ export default function TabLayout() {
         name="reviews"
         options={{
           title: 'Reviews',
-          href: null,
-        }}
-      />
-      <Tabs.Screen
-        name="rent-out"
-        options={{
-          title: 'Rent Out',
-          href: null,
-        }}
-      />
-      <Tabs.Screen
-        name="request"
-        options={{
-          title: 'Request',
           href: null,
         }}
       />

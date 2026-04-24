@@ -2,7 +2,8 @@ import { Pressable } from '@/components/Pressable';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React, { useCallback } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { FlatList, RectButton, Swipeable } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { cardChrome, ui } from '@/constants/appUi';
@@ -133,6 +134,10 @@ export default function NotificationsScreen() {
     }, []),
   );
 
+  const handleDelete = useCallback((id: string) => {
+    useNotificationsStore.getState().removeNotification(id);
+  }, []);
+
   const navigateFromNotification = (n: AppNotification) => {
     if (n.type === 'review') {
       router.push('/reviews');
@@ -197,26 +202,37 @@ export default function NotificationsScreen() {
         <Text style={styles.title}>Notifications</Text>
       </View>
 
-      <ScrollView
+      <FlatList
         style={styles.scroll}
+        data={list}
+        keyExtractor={(item) => item.id}
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={[
           styles.scrollContent,
           { paddingBottom: 28 + insets.bottom },
+          list.length === 0 && styles.scrollContentEmpty,
+          list.length > 0 && styles.listCardContent,
         ]}
-        keyboardShouldPersistTaps="handled"
-      >
-        {list.length === 0 ? (
+        ListEmptyComponent={
           <View style={styles.emptyCard}>
             <Text style={styles.emptyText}>No notifications yet.</Text>
           </View>
-        ) : (
-          <View style={styles.listCard}>
-            {list.map((n, index) => {
-              const isLast = index === list.length - 1;
-              const pillStyle = typePillStyle(n.type);
-              return (
+        }
+        ItemSeparatorComponent={() => <View style={styles.rowSeparator} />}
+        renderItem={({ item: n }) => {
+          const pillStyle = typePillStyle(n.type);
+          return (
+            <Swipeable
+              renderRightActions={(_progress, _dragX) => (
+                <View style={styles.deleteActionWrap}>
+                  <RectButton style={styles.deleteButton} onPress={() => handleDelete(n.id)}>
+                    <Text style={styles.deleteText}>Delete</Text>
+                  </RectButton>
+                </View>
+              )}
+            >
+              <View style={styles.notificationItem}>
                 <Pressable
-                  key={n.id}
                   onPress={() => {
                     markNotificationAsRead(n.id);
                     navigateFromNotification(n);
@@ -224,7 +240,6 @@ export default function NotificationsScreen() {
                   style={({ pressed }) => [
                     styles.row,
                     !n.read && styles.rowUnread,
-                    !isLast && styles.rowBorder,
                     pressed && styles.rowPressed,
                   ]}
                 >
@@ -232,24 +247,24 @@ export default function NotificationsScreen() {
                     {!n.read ? <View style={styles.unreadDot} /> : <View style={styles.readSpacer} />}
                     <Text
                       style={[
-                            styles.typePill,
-                            {
-                              backgroundColor: pillStyle.backgroundColor,
-                              color: pillStyle.color,
-                            },
-                          ]}
-                        >
-                          {typeLabel(n.type)}
-                        </Text>
+                        styles.typePill,
+                        {
+                          backgroundColor: pillStyle.backgroundColor,
+                          color: pillStyle.color,
+                        },
+                      ]}
+                    >
+                      {typeLabel(n.type)}
+                    </Text>
                     <Text style={styles.time}>{formatWhen(n.timestamp)}</Text>
                   </View>
                   <NotificationMessage text={n.message} />
                 </Pressable>
-              );
-            })}
-          </View>
-        )}
-      </ScrollView>
+              </View>
+            </Swipeable>
+          );
+        }}
+      />
       </KeyboardDismissScreen>
     </ScreenWrapper>
   );
@@ -283,6 +298,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     paddingTop: 16,
   },
+  scrollContentEmpty: {
+    flexGrow: 1,
+  },
+  listCardContent: {
+    ...cardChrome,
+    overflow: 'visible',
+    marginLeft: 0,
+    marginRight: 0,
+  },
   emptyCard: {
     ...cardChrome,
     padding: ui.padCard + 6,
@@ -292,11 +316,29 @@ const styles = StyleSheet.create({
     color: ui.textSubtle,
     textAlign: 'center',
   },
-  listCard: {
-    ...cardChrome,
-    marginLeft: 0,
-    marginRight: 0,
-    overflow: 'hidden',
+  rowSeparator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: ui.border,
+  },
+  notificationItem: {
+    backgroundColor: '#FFFFFF',
+  },
+  deleteActionWrap: {
+    width: 80,
+    justifyContent: 'center',
+    marginVertical: 6,
+  },
+  deleteButton: {
+    flex: 1,
+    backgroundColor: '#EF4444',
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: '100%',
+    borderRadius: 12,
+  },
+  deleteText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
   },
   row: {
     paddingVertical: 14,
@@ -306,10 +348,6 @@ const styles = StyleSheet.create({
     backgroundColor: ui.surfaceTintPrimary,
     borderLeftWidth: 3,
     borderLeftColor: ui.primary,
-  },
-  rowBorder: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: ui.border,
   },
   rowPressed: {
     opacity: 0.9,

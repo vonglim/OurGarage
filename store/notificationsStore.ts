@@ -178,6 +178,7 @@ type NotificationsState = {
   markAsRead: (notificationId: string) => void;
   /** All rows for the current user; use when viewing Activity / Notifications or dismissing the badge. */
   markAllAsRead: () => void;
+  removeNotification: (notificationId: string) => void;
 };
 
 export const useNotificationsStore = create<NotificationsState>((set, get) => ({
@@ -279,6 +280,12 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
     }));
     void persistNotifications(get().notifications);
   },
+  removeNotification: (notificationId) => {
+    set((state) => ({
+      notifications: state.notifications.filter((n) => n.id !== notificationId),
+    }));
+    void persistNotifications(get().notifications);
+  },
 }));
 
 /** Imperative API for non-React modules (same as store action). */
@@ -300,6 +307,10 @@ export function clearAllNotifications(): void {
 
 export function markAsRead(notificationId: string): void {
   useNotificationsStore.getState().markAsRead(notificationId);
+}
+
+export function removeNotification(notificationId: string): void {
+  useNotificationsStore.getState().removeNotification(notificationId);
 }
 
 /** @deprecated Use `markAsRead` */

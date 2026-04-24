@@ -1,19 +1,19 @@
+import { CardPressable } from '@/components/CardPressable';
+import { Pressable } from '@/components/Pressable';
 import { cardChrome, primarySolidPressed, shadowCard, shadowKey, ui } from '@/constants/appUi';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useRef } from 'react';
-import { Image, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { CardPressable } from '@/components/CardPressable';
-import { Pressable } from '@/components/Pressable';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Image, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { MainTabFab } from '@/components/MainTabFab';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
-import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
 import { formatUsd, getNumericTotalPrice } from '@/lib/money';
 import { listOpenRequestsSortedByDistance } from '@/lib/openRequestsForBrowse';
-import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { formatMilesShort, milesFromViewerToRequest } from '@/lib/requestDistance';
+import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { getOnboardingTermsAccepted } from '@/store/agreementsStore';
 import type { ToolListing } from '@/store/listingsStore';
 import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
@@ -27,6 +27,14 @@ const SECTION_CARD_PADDING = ui.padCard;
 const PRIMARY_ACTION_MIN_H = 76;
 const SECONDARY_ACTION_MIN_H = 46;
 
+const EQUIPMENT_SUGGESTIONS = [
+  'Power Drill',
+  'Ladder',
+  'Pressure Washer',
+  'Circular Saw',
+  'Generator',
+] as const;
+
 function requestDistanceLabel(req: unknown): string {
   const mi = milesFromViewerToRequest(req as Parameters<typeof milesFromViewerToRequest>[0]);
   return formatMilesShort(mi, 'Nearby');
@@ -39,8 +47,11 @@ function requestPriceLabel(req: Record<string, unknown>): string {
 
 export default function Home() {
   const router = useRouter();
-  const fabBottomReserve = useMainTabFabBottomReserve();
   const onboardingOkRef = useRef<boolean | null>(null);
+  const findSearchInputRef = useRef<TextInput>(null);
+  const [isSearching, setIsSearching] = useState(false);
+  const [query, setQuery] = useState('');
+  const [suggestions, setSuggestions] = useState<string[]>([]);
 
   const requests = useRequestsStore((s) => s.requests);
   const listings = useListingsStore((s) => s.listings);
@@ -89,6 +100,48 @@ export default function Home() {
     router.push({ pathname: '/browse', params: { mode: 'tools' } });
   }, [router]);
 
+  const updateSuggestions = useCallback((text: string) => {
+    const t = text.toLowerCase();
+    if (text.length === 0) {
+      setSuggestions([]);
+      return;
+    }
+    setSuggestions(
+      EQUIPMENT_SUGGESTIONS.filter((item) => item.toLowerCase().includes(t)) as string[]
+    );
+  }, []);
+
+  const exitFindSearch = useCallback(() => {
+    setIsSearching(false);
+    setQuery('');
+    setSuggestions([]);
+  }, []);
+
+  const runBrowseToolsSearch = useCallback(
+    (q: string) => {
+      const trimmed = q.trim();
+      if (!trimmed) return;
+      exitFindSearch();
+      router.push({ pathname: '/browse', params: { mode: 'tools', query: trimmed } });
+    },
+    [exitFindSearch, router]
+  );
+
+  const onSelectSuggestion = useCallback(
+    (label: string) => {
+      setQuery(label);
+      updateSuggestions(label);
+      runBrowseToolsSearch(label);
+    },
+    [runBrowseToolsSearch, updateSuggestions]
+  );
+
+  useEffect(() => {
+    if (!isSearching) return;
+    const id = setTimeout(() => findSearchInputRef.current?.focus(), 80);
+    return () => clearTimeout(id);
+  }, [isSearching]);
+
   const goRequestEquipment = useCallback(() => {
     router.push('/request');
   }, [router]);
@@ -120,16 +173,15 @@ export default function Home() {
   return (
     <ScreenWrapper style={styles.screenWrap}>
       <KeyboardDismissScreen>
-        <View style={styles.screenInner}>
-          <ScrollView
-            style={styles.outer}
-            contentContainerStyle={[
-              styles.scrollInner,
-              { paddingTop: ui.spaceMd, paddingBottom: fabBottomReserve },
-            ]}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
+        <ScrollView
+          style={styles.outer}
+          contentContainerStyle={[
+            styles.scrollInner,
+            { paddingTop: ui.spaceMd, paddingBottom: 120 },
+          ]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
           <View style={styles.column}>
             <View style={styles.headerBlock}>
               <View
@@ -152,20 +204,80 @@ export default function Home() {
 
             <View style={styles.sectionCard}>
               <View>
-                <Pressable
-                  pressOpacityFeedback={false}
-                  haptic
-                  onPress={goBrowseTools}
-                  style={({ pressed }) => [
-                    styles.actionPrimary,
-                    pressed && styles.actionPrimaryPressed,
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityLabel="Find Equipment. Browse tools available to rent."
-                >
-                  <Ionicons name="search-outline" size={28} color={ui.primaryOn} style={styles.actionIconPrimary} />
-                  <Text style={styles.actionPrimaryLabel}>Find Equipment</Text>
-                </Pressable>
+                {!isSearching ? (
+                  <Pressable
+                    pressOpacityFeedback={false}
+                    haptic
+                    onPress={() => setIsSearching(true)}
+                    style={({ pressed }) => [
+                      styles.actionPrimary,
+                      pressed && styles.actionPrimaryPressed,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Find Equipment. Browse tools available to rent."
+                  >
+                    <Ionicons name="search-outline" size={28} color={ui.primaryOn} style={styles.actionIconPrimary} />
+                    <Text style={styles.actionPrimaryLabel}>Find Equipment</Text>
+                  </Pressable>
+                ) : (
+                  <View>
+                    <View style={styles.findSearchBar}>
+                      <Ionicons
+                        name="search-outline"
+                        size={28}
+                        color={ui.primaryOn}
+                        style={styles.actionIconPrimary}
+                      />
+                      <TextInput
+                        ref={findSearchInputRef}
+                        style={styles.findSearchInput}
+                        placeholder="What do you need?"
+                        placeholderTextColor="rgba(255,255,255,0.75)"
+                        value={query}
+                        onChangeText={(text) => {
+                          setQuery(text);
+                          updateSuggestions(text);
+                        }}
+                        returnKeyType="search"
+                        onSubmitEditing={() => runBrowseToolsSearch(query)}
+                        accessibilityLabel="Search equipment"
+                      />
+                      <Pressable
+                        haptic
+                        onPress={exitFindSearch}
+                        style={({ pressed }) => [styles.findSearchCancel, pressed && styles.findSearchCancelPressed]}
+                        accessibilityRole="button"
+                        accessibilityLabel="Cancel search"
+                      >
+                        <Text style={styles.findSearchCancelLabel}>Cancel</Text>
+                      </Pressable>
+                    </View>
+                    {query.length > 0 ? (
+                      <View style={styles.suggestionsDropdown}>
+                        {suggestions.length === 0 ? (
+                          <Text style={styles.suggestionsEmpty}>No suggestions match</Text>
+                        ) : (
+                          suggestions.map((item) => (
+                            <Pressable
+                              key={item}
+                              haptic
+                              onPress={() => onSelectSuggestion(item)}
+                              style={({ pressed }) => [
+                                styles.suggestionRow,
+                                pressed && styles.suggestionRowPressed,
+                              ]}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Search for ${item}`}
+                            >
+                              <Ionicons name="search-outline" size={18} color={ui.textSecondary} />
+                              <Text style={styles.suggestionRowText}>{item}</Text>
+                            </Pressable>
+                          ))
+                        )}
+                      </View>
+                    ) : null}
+                  </View>
+                )}
 
                 <View style={styles.secondaryActionsGroup}>
                   <Pressable
@@ -353,7 +465,6 @@ export default function Home() {
           </View>
         </ScrollView>
         <MainTabFab />
-      </View>
     </KeyboardDismissScreen>
     </ScreenWrapper>
   );
@@ -362,9 +473,6 @@ export default function Home() {
 const styles = StyleSheet.create({
   screenWrap: {
     backgroundColor: ui.surfaceGrouped,
-  },
-  screenInner: {
-    flex: 1,
   },
   outer: {
     flex: 1,
@@ -379,7 +487,7 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   headerBlock: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 0,
     paddingTop: 12,
     paddingBottom: 8,
     marginBottom: 16,
@@ -387,15 +495,15 @@ const styles = StyleSheet.create({
   brandRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
     alignSelf: 'flex-start',
   },
   brandIcon: {
-    width: 36,
-    height: 36,
+    width: 40,
+    height: 40,
     resizeMode: 'contain',
   },
   brandName: {
+    marginLeft: 8,
     fontSize: 22,
     fontWeight: '700',
     color: ui.textPrimary,
@@ -426,7 +534,7 @@ const styles = StyleSheet.create({
     minHeight: PRIMARY_ACTION_MIN_H,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     backgroundColor: ui.primary,
     borderRadius: ui.radiusProminent,
     paddingVertical: 20,
@@ -437,12 +545,81 @@ const styles = StyleSheet.create({
   actionPrimaryPressed: {
     ...primarySolidPressed,
   },
+  findSearchBar: {
+    width: '100%',
+    minHeight: PRIMARY_ACTION_MIN_H,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: ui.primary,
+    borderRadius: ui.radiusProminent,
+    paddingVertical: 12,
+    paddingHorizontal: ui.spaceMd + 4,
+    ...shadowKey,
+    elevation: 6,
+  },
+  findSearchInput: {
+    flex: 1,
+    minHeight: 28,
+    paddingVertical: 4,
+    paddingTop: 2,
+    paddingHorizontal: 0,
+    marginRight: 8,
+    fontSize: 19,
+    fontWeight: '600',
+    color: ui.primaryOn,
+    letterSpacing: -0.35,
+  },
+  findSearchCancel: {
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    justifyContent: 'center',
+  },
+  findSearchCancelPressed: {
+    opacity: ui.pressOpacity,
+  },
+  findSearchCancelLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: ui.primaryOn,
+  },
+  suggestionsDropdown: {
+    marginTop: 10,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+  },
+  suggestionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: ui.border,
+  },
+  suggestionRowPressed: {
+    backgroundColor: ui.surfaceStriped,
+  },
+  suggestionRowText: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '600',
+    color: ui.textPrimary,
+  },
+  suggestionsEmpty: {
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    fontSize: 15,
+    color: ui.textSecondary,
+  },
   actionIconPrimary: {
     marginRight: 12,
   },
   actionPrimaryLabel: {
     fontSize: 19,
-    fontWeight: '800',
+    fontWeight: '700',
     color: ui.primaryOn,
     letterSpacing: -0.35,
   },

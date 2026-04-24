@@ -142,13 +142,32 @@ export default function RootLayout() {
             <NavigationHaptics />
             <NumberPadKeyboardAccessory />
             <Stack
-              screenOptions={{
-                headerShown: false,
-                animationDuration: STACK_TRANSITION_DURATION_MS,
+              screenOptions={({ route }) => {
+                const isTabsRoot = route.name === '(tabs)';
+                return {
+                  headerShown: false,
+                  animationDuration: STACK_TRANSITION_DURATION_MS,
+                  gestureEnabled: !isTabsRoot,
+                  fullScreenGestureEnabled: !isTabsRoot,
+                };
               }}
             >
               <Stack.Screen name="onboarding-terms" />
               <Stack.Screen name="(tabs)" />
+              <Stack.Screen
+                name="request"
+                options={{
+                  gestureEnabled: true,
+                  fullScreenGestureEnabled: true,
+                }}
+              />
+              <Stack.Screen
+                name="rent-out"
+                options={{
+                  gestureEnabled: true,
+                  fullScreenGestureEnabled: true,
+                }}
+              />
               <Stack.Screen name="list-my-tool" />
               <Stack.Screen name="create-listing" />
               <Stack.Screen name="camera" />
