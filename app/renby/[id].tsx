@@ -52,7 +52,7 @@ export default function RenbyListingDetailScreen() {
   const onRequestToRent = () => {
     if (!listing) return;
     router.push({
-      pathname: '/request-a-tool',
+      pathname: '/request',
       params: {
         prefillToolName: listing.title,
         prefillPrice: String(listing.pricePerDay),

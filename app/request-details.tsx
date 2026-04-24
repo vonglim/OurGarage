@@ -7,6 +7,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { OfferOffererRow } from '@/components/OfferOffererRow';
 import { RequestMetaLines } from '@/components/RequestMetaLines';
 import {
@@ -197,21 +198,25 @@ const requestId = params.requestId ?? '';
 
   if (!requestId || !isUuidString(requestId)) {
     return (
-      <KeyboardDismissScreen style={styles.centered}>
-        <ScreenEntrance style={styles.entranceFillCentered}>
-          <Text style={styles.muted}>Invalid request.</Text>
-        </ScreenEntrance>
-      </KeyboardDismissScreen>
+      <ScreenWrapper style={styles.screenWrap}>
+        <KeyboardDismissScreen style={styles.centered}>
+          <ScreenEntrance style={styles.entranceFillCentered}>
+            <Text style={styles.muted}>Invalid request.</Text>
+          </ScreenEntrance>
+        </KeyboardDismissScreen>
+      </ScreenWrapper>
     );
   }
 
   if (!request) {
     return (
-      <KeyboardDismissScreen style={styles.centered}>
-        <ScreenEntrance style={styles.entranceFillCentered}>
-          <Text style={styles.muted}>Request not found.</Text>
-        </ScreenEntrance>
-      </KeyboardDismissScreen>
+      <ScreenWrapper style={styles.screenWrap}>
+        <KeyboardDismissScreen style={styles.centered}>
+          <ScreenEntrance style={styles.entranceFillCentered}>
+            <Text style={styles.muted}>Request not found.</Text>
+          </ScreenEntrance>
+        </KeyboardDismissScreen>
+      </ScreenWrapper>
     );
   }
   const requestOwnerId = getRequestOwnerId(request as Record<string, unknown>);
@@ -230,7 +235,7 @@ const requestId = params.requestId ?? '';
   const onEditRequest = () => {
     if (request.timestamp == null || matched || !isOwner) return;
     router.push({
-      pathname: '/request-a-tool',
+      pathname: '/request',
       params: { editTimestamp: String(request.timestamp) },
     });
   };
@@ -286,9 +291,10 @@ const requestId = params.requestId ?? '';
   };
 
   return (
-    <KeyboardDismissScreen style={styles.screen}>
-      <ScreenEntrance style={styles.entranceFlex}>
-        <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+    <ScreenWrapper style={styles.screenWrap}>
+      <KeyboardDismissScreen style={styles.screen}>
+        <ScreenEntrance style={styles.entranceFlex}>
+          <View style={[styles.header, { paddingTop: 8 }]}>
           <View style={styles.headerRow}>
             <View style={styles.headerLeft}>
               <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
@@ -498,11 +504,15 @@ const requestId = params.requestId ?? '';
         )}
       </ScrollView>
       </ScreenEntrance>
-    </KeyboardDismissScreen>
+      </KeyboardDismissScreen>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: {
+    backgroundColor: ui.surfaceGrouped,
+  },
   entranceFlex: {
     flex: 1,
   },
@@ -516,7 +526,7 @@ const styles = StyleSheet.create({
     backgroundColor: ui.surfaceGrouped,
   },
   header: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 0,
     paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,
@@ -586,13 +596,15 @@ const styles = StyleSheet.create({
     backgroundColor: ui.background,
   },
   content: {
-    padding: 24,
+    paddingVertical: 24,
+    paddingHorizontal: 0,
   },
   centered: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
+    paddingVertical: 24,
+    paddingHorizontal: 0,
     backgroundColor: ui.background,
   },
   toolName: {

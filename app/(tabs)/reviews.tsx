@@ -11,6 +11,7 @@ import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { ui } from '@/constants/appUi';
 import type { UserReview } from '@/store/userReviewsStore';
 import { useUserReviews } from '@/store/userReviewsStore';
@@ -154,8 +155,9 @@ export default function ReviewsScreen() {
   const closePicker = () => setPickerKind(null);
 
   return (
-    <KeyboardDismissScreen style={styles.screen}>
-      <View style={[styles.navHeader, { paddingTop: insets.top + 8 }]}>
+    <ScreenWrapper style={styles.screenWrap}>
+      <KeyboardDismissScreen style={styles.screen}>
+        <View style={[styles.navHeader, { paddingTop: 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
         </Pressable>
@@ -298,17 +300,21 @@ export default function ReviewsScreen() {
           </View>
         </Pressable>
       </Modal>
-    </KeyboardDismissScreen>
+      </KeyboardDismissScreen>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: {
+    backgroundColor: ui.surfaceGrouped,
+  },
   screen: {
     flex: 1,
     backgroundColor: ui.surfaceGrouped,
   },
   navHeader: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 0,
     paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,
@@ -333,7 +339,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 0,
     paddingTop: 16,
   },
   summaryCard: {

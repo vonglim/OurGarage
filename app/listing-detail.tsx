@@ -6,6 +6,7 @@ import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { formatListingDistanceAway } from '@/lib/requestDistance';
 import { formatListingPriceWithUnit, getListingById } from '@/store/listingsStore';
 import { cardChrome, primarySolidPressed, ui } from '@/constants/appUi';
@@ -36,21 +37,24 @@ export default function ListingDetailScreen() {
 
   if (!id || !listing) {
     return (
-      <KeyboardDismissScreen style={[styles.screen, styles.centered]}>
-        <ScreenEntrance style={styles.entranceFillCentered}>
-          <Text style={styles.muted}>Listing not found.</Text>
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.textBtn}>
-            <Text style={styles.textBtnLabel}>Go back</Text>
-          </Pressable>
-        </ScreenEntrance>
-      </KeyboardDismissScreen>
+      <ScreenWrapper style={styles.screenWrap}>
+        <KeyboardDismissScreen style={[styles.screen, styles.centered]}>
+          <ScreenEntrance style={styles.entranceFillCentered}>
+            <Text style={styles.muted}>Listing not found.</Text>
+            <Pressable onPress={() => router.back()} hitSlop={12} style={styles.textBtn}>
+              <Text style={styles.textBtnLabel}>Go back</Text>
+            </Pressable>
+          </ScreenEntrance>
+        </KeyboardDismissScreen>
+      </ScreenWrapper>
     );
   }
 
   return (
-    <KeyboardDismissScreen style={styles.screen}>
-      <ScreenEntrance style={styles.entranceFlex}>
-        <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+    <ScreenWrapper style={styles.screenWrap}>
+      <KeyboardDismissScreen style={styles.screen}>
+        <ScreenEntrance style={styles.entranceFlex}>
+          <View style={[styles.header, { paddingTop: 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
         </Pressable>
@@ -92,7 +96,7 @@ export default function ListingDetailScreen() {
           haptic
           onPress={() =>
             router.push({
-              pathname: '/request-a-tool',
+              pathname: '/request',
               params: {
                 prefillToolName: listing.name,
                 prefillPrice: String(listing.price),
@@ -104,12 +108,16 @@ export default function ListingDetailScreen() {
           <Text style={styles.primaryBtnText}>Request this item</Text>
         </Pressable>
       </ScrollView>
-      </ScreenEntrance>
-    </KeyboardDismissScreen>
+        </ScreenEntrance>
+      </KeyboardDismissScreen>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: {
+    backgroundColor: ui.surfaceGrouped,
+  },
   entranceFlex: {
     flex: 1,
   },
@@ -143,7 +151,7 @@ const styles = StyleSheet.create({
     color: ui.primary,
   },
   header: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 0,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,
@@ -167,7 +175,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    padding: 20,
+    paddingVertical: 16,
+    paddingHorizontal: 0,
   },
   toolName: {
     fontSize: 24,

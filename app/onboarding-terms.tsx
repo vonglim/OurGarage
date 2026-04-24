@@ -11,6 +11,7 @@ import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { setOnboardingTermsAccepted } from '@/store/agreementsStore';
 import { primarySolidPressed, ui } from '@/constants/appUi';
 
@@ -36,13 +37,14 @@ export default function OnboardingTermsScreen() {
   };
 
   return (
-    <KeyboardDismissScreen style={styles.screen}>
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingTop: 28 + insets.top, paddingBottom: 28 + insets.bottom },
-        ]}
+    <ScreenWrapper style={styles.screenWrap}>
+      <KeyboardDismissScreen style={styles.screen}>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingTop: 28, paddingBottom: 28 + insets.bottom },
+          ]}
         keyboardShouldPersistTaps="handled"
       >
         <Text style={styles.title}>Welcome to OurGarage</Text>
@@ -80,11 +82,15 @@ export default function OnboardingTermsScreen() {
           )}
         </Pressable>
       </View>
-    </KeyboardDismissScreen>
+      </KeyboardDismissScreen>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: {
+    backgroundColor: ui.surfaceGrouped,
+  },
   screen: {
     flex: 1,
     backgroundColor: ui.surfaceGrouped,
@@ -93,7 +99,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: 22,
+    paddingHorizontal: 0,
   },
   title: {
     fontSize: 26,
@@ -136,7 +142,7 @@ const styles = StyleSheet.create({
     color: ui.textPrimary,
   },
   footer: {
-    paddingHorizontal: 22,
+    paddingHorizontal: 0,
     paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: ui.border,

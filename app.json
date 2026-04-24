@@ -35,6 +35,14 @@
         }
       ],
       [
+        "expo-camera",
+        {
+          "cameraPermission": "OurGarage uses the camera to take photos of equipment you list for rent.",
+          "microphonePermission": "OurGarage may use the microphone when recording video with the camera.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",

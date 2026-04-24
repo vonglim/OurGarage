@@ -13,6 +13,7 @@ import { ScrollView } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { numberPadAccessoryProps } from '@/components/NumberPadKeyboardAccessory';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { useListingsStore } from '@/store/listingsStore';
@@ -146,14 +147,15 @@ export default function CreateListingScreen() {
   };
 
   return (
-    <KeyboardDismissScreen style={styles.screen}>
-      <KeyboardAvoidingView
-        style={styles.kav}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={0}
-      >
-        <ScreenEntrance style={styles.entranceFlex}>
-          <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+    <ScreenWrapper style={styles.screenWrap}>
+      <KeyboardDismissScreen style={styles.screen}>
+        <KeyboardAvoidingView
+          style={styles.kav}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={0}
+        >
+          <ScreenEntrance style={styles.entranceFlex}>
+            <View style={[styles.topBar, { paddingTop: 8 }]}>
             <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
               <Text style={styles.backLabel}>‹ Back</Text>
             </Pressable>
@@ -357,12 +359,16 @@ export default function CreateListingScreen() {
             </Pressable>
           </ScrollView>
         </ScreenEntrance>
-      </KeyboardAvoidingView>
-    </KeyboardDismissScreen>
+        </KeyboardAvoidingView>
+      </KeyboardDismissScreen>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: {
+    backgroundColor: ui.surfaceGrouped,
+  },
   screen: {
     flex: 1,
     backgroundColor: ui.surfaceGrouped,
@@ -374,7 +380,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   topBar: {
-    paddingHorizontal: ui.padScreenH,
+    paddingHorizontal: 0,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,
@@ -403,7 +409,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: ui.padScreenH,
+    paddingHorizontal: 0,
     paddingTop: ui.spaceMd,
   },
   section: {

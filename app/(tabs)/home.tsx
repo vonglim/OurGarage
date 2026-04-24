@@ -6,9 +6,9 @@ import React, { useCallback, useMemo, useRef } from 'react';
 import { Image, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { CardPressable } from '@/components/CardPressable';
 import { Pressable } from '@/components/Pressable';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
 import { formatUsd, getNumericTotalPrice } from '@/lib/money';
 import { listOpenRequestsSortedByDistance } from '@/lib/openRequestsForBrowse';
@@ -39,7 +39,6 @@ function requestPriceLabel(req: Record<string, unknown>): string {
 
 export default function Home() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const fabBottomReserve = useMainTabFabBottomReserve();
   const onboardingOkRef = useRef<boolean | null>(null);
 
@@ -91,11 +90,11 @@ export default function Home() {
   }, [router]);
 
   const goRequestEquipment = useCallback(() => {
-    router.push('/request-a-tool');
+    router.push('/request');
   }, [router]);
 
   const goRentOut = useCallback(() => {
-    router.push('/list-my-tool');
+    router.push('/rent-out');
   }, [router]);
 
   const goToRequestDetails = useCallback(
@@ -119,17 +118,18 @@ export default function Home() {
   );
 
   return (
-    <KeyboardDismissScreen>
-      <View style={styles.screenInner}>
-        <ScrollView
-          style={styles.outer}
-          contentContainerStyle={[
-            styles.scrollInner,
-            { paddingTop: ui.spaceMd + insets.top, paddingBottom: fabBottomReserve },
-          ]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
+    <ScreenWrapper style={styles.screenWrap}>
+      <KeyboardDismissScreen>
+        <View style={styles.screenInner}>
+          <ScrollView
+            style={styles.outer}
+            contentContainerStyle={[
+              styles.scrollInner,
+              { paddingTop: ui.spaceMd, paddingBottom: fabBottomReserve },
+            ]}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
           <View style={styles.column}>
             <View style={styles.headerBlock}>
               <View
@@ -147,7 +147,7 @@ export default function Home() {
                   Renby
                 </Text>
               </View>
-              <Text style={styles.heroSubtitle}>Rent tools from people near you</Text>
+              <Text style={styles.heroSubtitle}>Rent Equipment and tools from people near you</Text>
             </View>
 
             <View style={styles.sectionCard}>
@@ -355,10 +355,14 @@ export default function Home() {
         <MainTabFab />
       </View>
     </KeyboardDismissScreen>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: {
+    backgroundColor: ui.surfaceGrouped,
+  },
   screenInner: {
     flex: 1,
   },
@@ -369,7 +373,7 @@ const styles = StyleSheet.create({
   scrollInner: {
     flexGrow: 1,
     alignItems: 'stretch',
-    paddingHorizontal: ui.padScreenH,
+    paddingHorizontal: 0,
   },
   column: {
     width: '100%',

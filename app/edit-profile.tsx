@@ -13,6 +13,7 @@ import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { UserAvatar } from '@/components/UserAvatar';
 import { PresetAvatarModal } from '@/components/PresetAvatarModal';
 import { getAuthUserIdSync } from '@/lib/authUser';
@@ -89,7 +90,7 @@ export default function EditProfileScreen() {
   };
 
   return (
-    <>
+    <ScreenWrapper style={styles.screenWrap}>
       <KeyboardDismissScreen>
         <ScreenEntrance style={styles.entranceFlex}>
         <ScrollView
@@ -166,11 +167,14 @@ export default function EditProfileScreen() {
           void updateProfile({ avatar: formatPresetAvatar(id) });
         }}
       />
-    </>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: {
+    backgroundColor: ui.surfaceGrouped,
+  },
   entranceFlex: {
     flex: 1,
   },
@@ -179,8 +183,8 @@ const styles = StyleSheet.create({
     backgroundColor: ui.surfaceGrouped,
   },
   content: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
+    paddingHorizontal: 0,
+    paddingTop: 0,
   },
   avatarBlock: {
     alignItems: 'center',

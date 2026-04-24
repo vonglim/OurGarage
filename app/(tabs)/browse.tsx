@@ -5,9 +5,8 @@ import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { CardPressable } from '@/components/CardPressable';
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
 import { formatDurationDisplay } from '@/lib/durationFormat';
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
@@ -68,7 +67,6 @@ function postedTimeAgoPhrase(timestamp: number): string {
 export default function Browse() {
   const router = useRouter();
   const params = useLocalSearchParams<{ query?: string | string[]; mode?: string | string[] }>();
-  const insets = useSafeAreaInsets();
   const fabBottomReserve = useMainTabFabBottomReserve();
   const [mode, setMode] = useState('requests');
   const [searchQuery, setSearchQuery] = useState('');
@@ -221,14 +219,15 @@ export default function Browse() {
   }, [listings, q]);
 
   return (
-    <KeyboardDismissScreen style={styles.root}>
-      <ScreenEntrance style={styles.screenInner}>
-        <ScrollView
-          style={styles.container}
-          contentContainerStyle={[
-            styles.content,
-            { paddingTop: 16 + insets.top, paddingBottom: fabBottomReserve },
-          ]}
+    <ScreenWrapper style={styles.screenWrap}>
+      <KeyboardDismissScreen style={styles.root}>
+        <ScreenEntrance style={styles.screenInner}>
+          <ScrollView
+            style={styles.container}
+            contentContainerStyle={[
+              styles.content,
+              { paddingTop: 16, paddingBottom: fabBottomReserve },
+            ]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
@@ -447,15 +446,19 @@ export default function Browse() {
               );
             })
           )}
-        </ScrollView>
+          </ScrollView>
 
-        <MainTabFab />
-      </ScreenEntrance>
-    </KeyboardDismissScreen>
+          <MainTabFab />
+        </ScreenEntrance>
+      </KeyboardDismissScreen>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: {
+    backgroundColor: ui.background,
+  },
   root: {
     flex: 1,
     backgroundColor: ui.background,
@@ -468,7 +471,7 @@ const styles = StyleSheet.create({
     backgroundColor: ui.background,
   },
   content: {
-    paddingHorizontal: ui.padScreenH,
+    paddingHorizontal: 0,
   },
   screenTitle: {
     fontSize: 28,

@@ -4,14 +4,16 @@ import { StyleSheet, Text, View } from 'react-native';
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { primarySolidPressed, ui } from '@/constants/appUi';
 
 export default function RequestConfirmation() {
   const router = useRouter();
 
   return (
-    <KeyboardDismissScreen style={styles.container}>
-      <ScreenEntrance style={styles.entranceContent}>
+    <ScreenWrapper style={styles.screenWrap}>
+      <KeyboardDismissScreen style={styles.container}>
+        <ScreenEntrance style={styles.entranceContent}>
         <Text style={styles.title}>Request Submitted 🎉</Text>
 
         <Text style={styles.text}>
@@ -26,17 +28,22 @@ export default function RequestConfirmation() {
         >
           <Text style={styles.buttonText}>Back To Home</Text>
         </Pressable>
-      </ScreenEntrance>
-    </KeyboardDismissScreen>
+        </ScreenEntrance>
+      </KeyboardDismissScreen>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: {
+    backgroundColor: ui.background,
+  },
   container: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
+    paddingVertical: 24,
+    paddingHorizontal: 0,
     backgroundColor: ui.background,
   },
   entranceContent: {

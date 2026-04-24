@@ -80,7 +80,7 @@ export function MainTabFab() {
               style={({ pressed }) => [styles.modalRow, pressed && styles.modalRowPressed]}
               onPress={() => {
                 setOpen(false);
-                router.push('/request-a-tool');
+                router.push('/request');
               }}
             >
               <Ionicons name="construct-outline" size={22} color={ui.primary} />
@@ -90,7 +90,7 @@ export function MainTabFab() {
               style={({ pressed }) => [styles.modalRow, pressed && styles.modalRowPressed]}
               onPress={() => {
                 setOpen(false);
-                router.push('/list-my-tool');
+                router.push('/rent-out');
               }}
             >
               <Ionicons name="cube-outline" size={22} color={ui.primary} />

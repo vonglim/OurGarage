@@ -15,6 +15,7 @@ import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { getAuthUserDisplayName } from '@/lib/authUser';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { addUserReview, type UserReviewType } from '@/store/userReviewsStore';
@@ -58,13 +59,14 @@ export default function LeaveReviewScreen() {
   };
 
   return (
-    <KeyboardDismissScreen>
-      <KeyboardAvoidingView
-        style={styles.screen}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-      <ScreenEntrance style={styles.entranceFlex}>
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+    <ScreenWrapper style={styles.screenWrap}>
+      <KeyboardDismissScreen>
+        <KeyboardAvoidingView
+          style={styles.screen}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <ScreenEntrance style={styles.entranceFlex}>
+            <View style={[styles.header, { paddingTop: 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
         </Pressable>
@@ -124,13 +126,17 @@ export default function LeaveReviewScreen() {
           <Text style={styles.submitText}>Submit</Text>
         </Pressable>
       </ScrollView>
-      </ScreenEntrance>
-      </KeyboardAvoidingView>
-    </KeyboardDismissScreen>
+          </ScreenEntrance>
+        </KeyboardAvoidingView>
+      </KeyboardDismissScreen>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: {
+    backgroundColor: ui.surfaceGrouped,
+  },
   entranceFlex: {
     flex: 1,
   },
@@ -139,7 +145,7 @@ const styles = StyleSheet.create({
     backgroundColor: ui.surfaceGrouped,
   },
   header: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 0,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,
@@ -160,7 +166,7 @@ const styles = StyleSheet.create({
     color: ui.textPrimary,
   },
   scrollContent: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 0,
     paddingTop: 20,
   },
   label: {

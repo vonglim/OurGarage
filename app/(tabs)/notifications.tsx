@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { cardChrome, ui } from '@/constants/appUi';
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { openChatForRequest } from '@/lib/openRequestChat';
 import type { AppNotification } from '@/store/notificationsStore';
@@ -190,8 +191,9 @@ export default function NotificationsScreen() {
   };
 
   return (
-    <KeyboardDismissScreen style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+    <ScreenWrapper style={styles.screenWrap}>
+      <KeyboardDismissScreen style={styles.screen}>
+        <View style={[styles.header, { paddingTop: 12 }]}>
         <Text style={styles.title}>Notifications</Text>
       </View>
 
@@ -248,18 +250,22 @@ export default function NotificationsScreen() {
           </View>
         )}
       </ScrollView>
-    </KeyboardDismissScreen>
+      </KeyboardDismissScreen>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: {
+    backgroundColor: ui.surfaceGrouped,
+  },
   screen: {
     flex: 1,
     backgroundColor: ui.surfaceGrouped,
   },
   header: {
-    paddingHorizontal: 16,
-alignItems: 'flex-start',
+    paddingHorizontal: 0,
+    alignItems: 'flex-start',
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,
@@ -274,7 +280,7 @@ alignItems: 'flex-start',
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 0,
     paddingTop: 16,
   },
   emptyCard: {

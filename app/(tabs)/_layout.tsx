@@ -145,6 +145,20 @@ export default function TabLayout() {
           href: null,
         }}
       />
+      <Tabs.Screen
+        name="rent-out"
+        options={{
+          title: 'Rent Out',
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="request"
+        options={{
+          title: 'Request',
+          href: null,
+        }}
+      />
     </Tabs>
   );
 }

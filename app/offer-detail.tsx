@@ -19,6 +19,7 @@ import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { numberPadAccessoryProps } from '@/components/NumberPadKeyboardAccessory';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { getAuthUserIdSync } from '@/lib/authUser';
 import { formatHowDisplay, needsDeliveryFee } from '@/lib/deliveryFormat';
 import { formatDurationDisplay } from '@/lib/durationFormat';
@@ -393,14 +394,16 @@ export default function OfferDetailScreen() {
 
   if (!request || !offer) {
     return (
-      <View style={{ flex: 1 }}>
-        <ScreenEntrance style={styles.entranceFillCentered}>
-          <Text style={styles.muted}>Offer not found.</Text>
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.textBtn}>
-            <Text style={styles.textBtnLabel}>Go back</Text>
-          </Pressable>
-        </ScreenEntrance>
-      </View>
+      <ScreenWrapper style={styles.screenWrap}>
+        <View style={{ flex: 1 }}>
+          <ScreenEntrance style={styles.entranceFillCentered}>
+            <Text style={styles.muted}>Offer not found.</Text>
+            <Pressable onPress={() => router.back()} hitSlop={12} style={styles.textBtn}>
+              <Text style={styles.textBtnLabel}>Go back</Text>
+            </Pressable>
+          </ScreenEntrance>
+        </View>
+      </ScreenWrapper>
     );
   }
 
@@ -422,10 +425,11 @@ export default function OfferDetailScreen() {
       : 32 + insets.bottom;
 
   return (
-    <View style={{ flex: 1, backgroundColor: ui.surfaceGrouped }}>
-      <ScreenEntrance style={styles.entranceFlex}>
-      <View style={{ flex: 1 }}>
-        <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+    <ScreenWrapper style={styles.screenWrap}>
+      <View style={{ flex: 1, backgroundColor: ui.surfaceGrouped }}>
+        <ScreenEntrance style={styles.entranceFlex}>
+          <View style={{ flex: 1 }}>
+            <View style={[styles.header, { paddingTop: 8 }]}>
           <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
             <Text style={styles.backLabel}>‹ Back</Text>
           </Pressable>
@@ -436,7 +440,8 @@ export default function OfferDetailScreen() {
         <ScrollView
           style={{ flex: 1 }}
           contentContainerStyle={{
-            padding: 16,
+            paddingVertical: 16,
+            paddingHorizontal: 0,
             paddingBottom: scrollBottomPad,
           }}
           showsVerticalScrollIndicator={true}
@@ -742,11 +747,15 @@ export default function OfferDetailScreen() {
             </KeyboardAvoidingView>
           </Pressable>
         </Modal>
-    </View>
+      </View>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: {
+    backgroundColor: ui.surfaceGrouped,
+  },
   entranceFlex: {
     flex: 1,
   },
@@ -755,7 +764,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: ui.surfaceGrouped,
-    paddingHorizontal: 28,
+    paddingHorizontal: 0,
   },
   screen: {
     flex: 1,
@@ -767,7 +776,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
   },
   header: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 0,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,
@@ -936,7 +945,8 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    padding: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 0,
     backgroundColor: ui.background,
     borderTopWidth: 1,
     borderColor: ui.border,

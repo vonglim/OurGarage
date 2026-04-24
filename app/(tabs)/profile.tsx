@@ -14,6 +14,8 @@ import {
 import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ScreenWrapper } from '@/components/ScreenWrapper';
+
 import { PresetAvatarModal } from '@/components/PresetAvatarModal';
 import { UserActivityDot } from '@/components/UserActivityDot';
 import {
@@ -126,8 +128,9 @@ export default function ProfileScreen() {
   const impactStats = useMemo(() => ({ totalSaved: 0, totalEarned: 0 }), []);
 
   return (
-    <View style={styles.root}>
-      <ScrollView
+    <ScreenWrapper style={styles.screenWrap}>
+      <View style={styles.root}>
+        <ScrollView
         style={styles.screen}
         contentContainerStyle={[
           styles.content,
@@ -144,7 +147,7 @@ export default function ProfileScreen() {
           <Pressable
             onPress={() => router.back()}
             hitSlop={12}
-            style={({ pressed }) => [styles.viewBackRow, { marginTop: insets.top + 8 }, pressed && styles.viewBackPressed]}
+            style={({ pressed }) => [styles.viewBackRow, { marginTop: 8 }, pressed && styles.viewBackPressed]}
           >
             <Text style={styles.viewBackLabel}>‹ Back</Text>
           </Pressable>
@@ -156,7 +159,7 @@ export default function ProfileScreen() {
             {
               width: windowWidth,
               height: heroHeight,
-              marginHorizontal: -20,
+              marginHorizontal: -16,
             },
           ]}
         >
@@ -347,11 +350,15 @@ export default function ProfileScreen() {
           }}
         />
       ) : null}
-    </View>
+      </View>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: {
+    backgroundColor: ui.surfaceGrouped,
+  },
   root: {
     flex: 1,
     backgroundColor: ui.surfaceGrouped,
@@ -361,7 +368,7 @@ const styles = StyleSheet.create({
     backgroundColor: ui.surfaceGrouped,
   },
   content: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 0,
   },
   /** Lets short profiles fill the screen without breaking scroll when content is tall. */
   scrollContent: {

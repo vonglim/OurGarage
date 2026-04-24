@@ -149,9 +149,9 @@ export default function RootLayout() {
             >
               <Stack.Screen name="onboarding-terms" />
               <Stack.Screen name="(tabs)" />
-              <Stack.Screen name="request-a-tool" />
               <Stack.Screen name="list-my-tool" />
               <Stack.Screen name="create-listing" />
+              <Stack.Screen name="camera" />
               <Stack.Screen name="rental-agreement" />
               <Stack.Screen name="request-details" />
               <Stack.Screen name="make-offer" />

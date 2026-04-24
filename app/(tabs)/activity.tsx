@@ -7,9 +7,8 @@ import { CardPressable } from '@/components/CardPressable';
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { Swipeable } from 'react-native-gesture-handler';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
 import {
   RequestListCardInner,
@@ -144,7 +143,6 @@ function outgoingOfferStatusLabel(s: OutgoingOfferStatus): string {
 
 export default function ActivityScreen() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const [tab, setTab] = useState<ActivityTab>('requests');
   const me = useAuthUserId();
   const listings = useListingsStore((s) => s.listings);
@@ -396,7 +394,7 @@ export default function ActivityScreen() {
                   if (request.timestamp == null) return;
                   swipeRefs.current.get(request.timestamp)?.close();
                   router.push({
-                    pathname: '/request-a-tool',
+                    pathname: '/request',
                     params: { editTimestamp: String(request.timestamp) },
                   });
                 }}
@@ -470,9 +468,10 @@ export default function ActivityScreen() {
   }
 
   return (
-    <KeyboardDismissScreen style={styles.screen}>
-      <ScreenEntrance style={styles.screenInner}>
-        <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+    <ScreenWrapper style={styles.screenWrap}>
+      <KeyboardDismissScreen style={styles.screen}>
+        <ScreenEntrance style={styles.screenInner}>
+          <View style={[styles.header, { paddingTop: 12 }]}>
           <View style={styles.headerTitleRow}>
             <Text style={styles.screenTitle} numberOfLines={1}>
               My Activity
@@ -837,13 +836,17 @@ export default function ActivityScreen() {
           ) : null}
         </ScrollView>
 
-        <MainTabFab />
-      </ScreenEntrance>
-    </KeyboardDismissScreen>
+          <MainTabFab />
+        </ScreenEntrance>
+      </KeyboardDismissScreen>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: {
+    backgroundColor: ui.surfaceGrouped,
+  },
   screen: {
     flex: 1,
     backgroundColor: ui.surfaceGrouped,
@@ -852,7 +855,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    paddingHorizontal: ui.padScreenH,
+    paddingHorizontal: 0,
     paddingBottom: ui.spaceMd,
     backgroundColor: ui.surfaceGrouped,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -1075,7 +1078,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: ui.padScreenH,
+    paddingHorizontal: 0,
     paddingTop: ui.padScreenH,
   },
   sectionRule: {

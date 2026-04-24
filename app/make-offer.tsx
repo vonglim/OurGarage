@@ -10,9 +10,8 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
 import { numberPadAccessoryProps } from '@/components/NumberPadKeyboardAccessory';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { ui } from '@/constants/appUi';
@@ -47,7 +46,6 @@ function firstParam(v: string | string[] | undefined): string | undefined {
 }
 
 export default function MakeOfferScreen() {
-  const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ requestId?: string | string[] }>();
 
   const requestIdStr = firstParam(params.requestId);
@@ -145,50 +143,59 @@ export default function MakeOfferScreen() {
 
   if (!requestIdStr || !isUuidString(requestIdStr)) {
     return (
-      <View style={[styles.screen, styles.centered]}>
-        <Text style={styles.muted}>Invalid request.</Text>
-      </View>
+      <ScreenWrapper style={styles.screenWrap}>
+        <View style={[styles.screen, styles.centered]}>
+          <Text style={styles.muted}>Invalid request.</Text>
+        </View>
+      </ScreenWrapper>
     );
   }
 
   if (!request) {
     return (
-      <View style={[styles.screen, styles.centered]}>
-        <Text style={styles.muted}>Request not found.</Text>
-      </View>
+      <ScreenWrapper style={styles.screenWrap}>
+        <View style={[styles.screen, styles.centered]}>
+          <Text style={styles.muted}>Request not found.</Text>
+        </View>
+      </ScreenWrapper>
     );
   }
 
   if (existingForThread?.status === 'pending_confirmation') {
     return (
-      <View style={[styles.screen, styles.centered]}>
-        <Text style={styles.muted}>
-          You accepted a counter. Wait for the owner to confirm the rental. You can open this
-          request from Activity to see the offer.
-        </Text>
-      </View>
+      <ScreenWrapper style={styles.screenWrap}>
+        <View style={[styles.screen, styles.centered]}>
+          <Text style={styles.muted}>
+            You accepted a counter. Wait for the owner to confirm the rental. You can open this
+            request from Activity to see the offer.
+          </Text>
+        </View>
+      </ScreenWrapper>
     );
   }
 
   if (isPoster) {
     return (
-      <View style={[styles.screen, styles.centered]}>
-        <Text style={styles.muted}>
-          You can’t make an offer on your own request.
-        </Text>
-      </View>
+      <ScreenWrapper style={styles.screenWrap}>
+        <View style={[styles.screen, styles.centered]}>
+          <Text style={styles.muted}>
+            You can’t make an offer on your own request.
+          </Text>
+        </View>
+      </ScreenWrapper>
     );
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
+    <ScreenWrapper style={styles.screenWrap}>
+      <KeyboardAvoidingView
+        style={styles.screen}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
       <ScreenEntrance style={{ flex: 1 }}>
         <ScrollView
           style={styles.scroll}
-          contentContainerStyle={{ padding: 20 }}
+          contentContainerStyle={{ paddingVertical: 20, paddingHorizontal: 0 }}
         >
           <Text style={styles.headerTitle}>Make an offer</Text>
           <Text style={styles.headerSub}>
@@ -220,11 +227,13 @@ export default function MakeOfferScreen() {
           </Pressable>
         </ScrollView>
       </ScreenEntrance>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: { backgroundColor: ui.background },
   screen: { flex: 1, backgroundColor: ui.background },
   scroll: { flex: 1 },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },

@@ -5,6 +5,7 @@ import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { getRequestCardUiStatus } from '@/lib/requestCardStatus';
 import { formatUsd, getNumericTotalPrice } from '@/lib/money';
@@ -28,8 +29,9 @@ export default function RequestsManagementScreen() {
   );
 
   return (
-    <KeyboardDismissScreen style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+    <ScreenWrapper style={styles.screenWrap}>
+      <KeyboardDismissScreen style={styles.screen}>
+        <View style={[styles.header, { paddingTop: 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
           <Text style={styles.backLabel}>‹ Back</Text>
         </Pressable>
@@ -126,17 +128,21 @@ export default function RequestsManagementScreen() {
           </View>
         )}
       </ScrollView>
-    </KeyboardDismissScreen>
+      </KeyboardDismissScreen>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: {
+    backgroundColor: ui.surfaceGrouped,
+  },
   screen: {
     flex: 1,
     backgroundColor: ui.surfaceGrouped,
   },
   header: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 0,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,
@@ -167,7 +173,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 0,
     paddingTop: 16,
   },
   emptyCard: {

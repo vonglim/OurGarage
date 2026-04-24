@@ -10,6 +10,7 @@ import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import {
   getLastMessagePreview,
   getOtherParticipant,
@@ -53,8 +54,9 @@ export default function ChatsScreen() {
   const hasAny = active.length > 0 || archived.length > 0;
 
   return (
-    <KeyboardDismissScreen style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+    <ScreenWrapper style={styles.screenWrap}>
+      <KeyboardDismissScreen style={styles.screen}>
+        <View style={[styles.header, { paddingTop: 12 }]}>
         <Text style={styles.title}>Messages</Text>
       </View>
 
@@ -170,17 +172,21 @@ export default function ChatsScreen() {
           </>
         )}
       </ScrollView>
-    </KeyboardDismissScreen>
+      </KeyboardDismissScreen>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrap: {
+    backgroundColor: ui.surfaceGrouped,
+  },
   screen: {
     flex: 1,
     backgroundColor: ui.surfaceGrouped,
   },
   header: {
-    paddingHorizontal: ui.padScreenH,
+    paddingHorizontal: 0,
     paddingBottom: ui.spaceSm + 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,
@@ -195,7 +201,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: ui.padScreenH,
+    paddingHorizontal: 0,
     paddingTop: ui.spaceMd,
   },
   sectionTitle: {
