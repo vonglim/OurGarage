@@ -55,3 +55,19 @@ create table notifications (
   offer_id uuid,
   created_at timestamptz default now()
 );
+
+-- =========================
+-- PROFILES TABLE POLICIES
+-- =========================
+
+-- allow username availability checks
+create policy "Allow read access to usernames"
+on profiles
+for select
+using (true);
+
+-- allow users to update their own profile (username onboarding)
+create policy "Users can update their own profile"
+on profiles
+for update
+using (auth.uid() = id);

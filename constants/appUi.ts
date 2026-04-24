@@ -26,7 +26,7 @@ export const ui = {
   borderLight: '#F3F4F6',
 
   /** Grouped list / screen chrome behind white cards */
-  surfaceGrouped: '#F2F2F7',
+  surfaceGrouped: '#F3F4F6',
   /** Text fields, subtle inset panels */
   surfaceInput: '#F9FAFB',
   /** Segment tracks, neutral control wells */
@@ -50,7 +50,7 @@ export const ui = {
   textMuted: '#6B7280',
 
   /** Cards, modals, large panels */
-  radiusCard: 18,
+  radiusCard: 16,
   /** Primary / secondary pressable actions */
   radiusButton: 16,
   /** Hero CTAs (e.g. home) — top of 16–20 range */
@@ -117,7 +117,7 @@ export const shadowKey = {
 export const shadowCard = {
   shadowColor: '#000000',
   shadowOffset: { width: 0, height: 2 } as const,
-  shadowOpacity: 0.06,
+  shadowOpacity: 0.05,
   shadowRadius: 10,
   elevation: 3,
 } as const;
@@ -141,7 +141,7 @@ export const shadowSegmentAttention = {
 } as const;
 
 const cardChromeBase = {
-  backgroundColor: ui.cardBg,
+  backgroundColor: '#FFFFFF',
   borderRadius: ui.radiusCard,
   padding: ui.padCard,
   borderWidth: StyleSheet.hairlineWidth,

@@ -1,42 +1,13 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import type { BottomTabBarButtonProps } from '@react-navigation/bottom-tabs';
-import { PlatformPressable } from '@react-navigation/elements';
 import { Tabs } from 'expo-router';
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 
 import { useActivityTabBadgeCount } from '@/hooks/useActivityTabBadgeCount';
-import { ui } from '@/constants/appUi';
-import { pressedVisual } from '@/lib/pressFeedback';
 import { useUnreadNotificationCount } from '@/store/notificationsStore';
 
 function formatTabBadge(count: number): string | undefined {
   if (count <= 0) return undefined;
   return count > 99 ? '99+' : String(count);
-}
-
-function TabBarButton(props: BottomTabBarButtonProps) {
-  const { style: styleProp, ...rest } = props;
-  return (
-    <PlatformPressable
-      {...rest}
-      style={((state: { pressed: boolean }) => {
-        const base =
-          typeof styleProp === 'function'
-            ? (styleProp as (s: { pressed: boolean }) => unknown)(state)
-            : styleProp;
-        return [
-          base,
-          {
-            borderRadius: 14,
-            paddingVertical: 4,
-            paddingHorizontal: 8,
-            overflow: 'hidden' as const,
-          },
-          pressedVisual(state.pressed),
-        ];
-      }) as unknown as BottomTabBarButtonProps['style']}
-    />
-  );
 }
 
 export default function TabLayout() {
@@ -47,10 +18,32 @@ export default function TabLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarButton: TabBarButton,
+        tabBarStyle: {
+          position: 'absolute',
+          bottom: 20,
+          left: 16,
+          right: 16,
+          backgroundColor: 'rgba(255,255,255,0.9)',
+          borderRadius: 28,
+          height: 60,
+          borderTopWidth: 0,
+          elevation: 10,
+          shadowColor: '#000',
+          shadowOpacity: 0.08,
+          shadowRadius: 12,
+        },
+        tabBarActiveTintColor: '#0B1F3A',
+        tabBarInactiveTintColor: '#9CA3AF',
         tabBarItemStyle: {
-          justifyContent: 'center',
           alignItems: 'center',
+          justifyContent: 'center',
+        },
+        tabBarLabelStyle: {
+          fontSize: 12,
+          marginTop: 2,
+        },
+        tabBarIconStyle: {
+          marginTop: 2,
         },
         tabBarBadgeStyle: {
           backgroundColor: '#FF3B30',
@@ -63,26 +56,6 @@ export default function TabLayout() {
           borderRadius: 9,
           paddingHorizontal: 4,
           overflow: 'hidden',
-        },
-        tabBarLabelStyle: {
-          fontSize: 11,
-          marginTop: 0,
-          marginBottom: 2,
-        },
-        tabBarIconStyle: {
-          marginTop: 0,
-        },
-        tabBarActiveTintColor: ui.primary,
-        tabBarInactiveTintColor: ui.textSecondary,
-        tabBarActiveBackgroundColor: ui.surfaceTabActive,
-        tabBarInactiveBackgroundColor: 'transparent',
-        tabBarStyle: {
-          backgroundColor: ui.background,
-          borderTopWidth: StyleSheet.hairlineWidth,
-          borderTopColor: ui.border,
-          height: 74,
-          paddingBottom: 5,
-          paddingTop: 5,
         },
       }}
     >

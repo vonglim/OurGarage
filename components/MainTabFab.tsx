@@ -11,18 +11,28 @@ import {
 import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { cardChrome, primarySolidPressed, shadowKey, ui } from '@/constants/appUi';
+import { cardChrome, shadowKey, ui } from '@/constants/appUi';
+
+const FAB_ACCENT = '#16A34A';
+const FAB_ACCENT_PRESSED = '#15803D';
 
 export const MAIN_TAB_FAB_SIZE = 56;
-export const MAIN_TAB_FAB_GAP = 16;
+/** Distance from screen bottom to FAB bottom edge (sits just above floating tab bar). */
+export const MAIN_TAB_FAB_BOTTOM = 95;
+/** Extra scroll/list padding below last content so cards never sit under the FAB */
+export const MAIN_TAB_FAB_SCROLL_CLEARANCE = 28;
 
 /**
  * Scroll / list bottom padding so content stays above the FAB (which sits above the tab bar).
  */
 export function useMainTabFabBottomReserve(): number {
-  const tabBarHeight = useBottomTabBarHeight();
   const insets = useSafeAreaInsets();
-  return tabBarHeight + MAIN_TAB_FAB_SIZE + MAIN_TAB_FAB_GAP + Math.max(insets.bottom, 8);
+  return (
+    MAIN_TAB_FAB_BOTTOM +
+    MAIN_TAB_FAB_SIZE +
+    MAIN_TAB_FAB_SCROLL_CLEARANCE +
+    Math.max(insets.bottom, 8)
+  );
 }
 
 /**
@@ -45,13 +55,13 @@ export function MainTabFab() {
         style={({ pressed }) => [
           styles.fab,
           {
-            bottom: tabBarHeight + MAIN_TAB_FAB_GAP,
+            bottom: MAIN_TAB_FAB_BOTTOM,
             right: 20,
           },
           pressed && styles.fabPressed,
         ]}
       >
-        <Ionicons name="add" size={32} color={ui.primaryOn} />
+        <Ionicons name="add" size={32} color="#FFFFFF" />
       </Pressable>
 
       <Modal
@@ -102,14 +112,14 @@ const styles = StyleSheet.create({
     width: MAIN_TAB_FAB_SIZE,
     height: MAIN_TAB_FAB_SIZE,
     borderRadius: MAIN_TAB_FAB_SIZE / 2,
-    backgroundColor: ui.primary,
+    backgroundColor: FAB_ACCENT,
     alignItems: 'center',
     justifyContent: 'center',
     ...shadowKey,
     elevation: 6,
   },
   fabPressed: {
-    ...primarySolidPressed,
+    backgroundColor: FAB_ACCENT_PRESSED,
   },
   modalBackdrop: {
     flex: 1,

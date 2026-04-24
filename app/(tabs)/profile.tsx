@@ -516,7 +516,7 @@ const styles = StyleSheet.create({
   sectionCard: {
     ...cardChrome,
     overflow: 'hidden',
-    marginBottom: 20,
+    marginBottom: 16,
   },
   logoutSection: {
     marginTop: 40,
@@ -565,7 +565,7 @@ const styles = StyleSheet.create({
   devToolsCard: {
     ...cardChrome,
     overflow: 'hidden',
-    marginBottom: 24,
+    marginBottom: 16,
     paddingBottom: 4,
   },
   devToolsHint: {
