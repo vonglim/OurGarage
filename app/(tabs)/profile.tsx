@@ -12,6 +12,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { Pressable } from '@/components/Pressable';
+import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ScreenWrapper } from '@/components/ScreenWrapper';
@@ -144,13 +145,10 @@ export default function ProfileScreen() {
         showsVerticalScrollIndicator={false}
       >
         {isViewingOther ? (
-          <Pressable
+          <ScreenBackButton
             onPress={() => router.back()}
-            hitSlop={12}
-            style={({ pressed }) => [styles.viewBackRow, { marginTop: 8 }, pressed && styles.viewBackPressed]}
-          >
-            <Text style={styles.viewBackLabel}>‹ Back</Text>
-          </Pressable>
+            style={{ marginTop: 8 }}
+          />
         ) : null}
 
         <View
@@ -554,20 +552,6 @@ const styles = StyleSheet.create({
     color: ui.textSecondary,
     fontWeight: '300',
     marginLeft: 8,
-  },
-  viewBackRow: {
-    alignSelf: 'flex-start',
-    marginBottom: 6,
-    paddingVertical: 4,
-    paddingRight: 12,
-  },
-  viewBackPressed: {
-    opacity: 0.75,
-  },
-  viewBackLabel: {
-    fontSize: 17,
-    fontWeight: '500',
-    color: ui.primary,
   },
   devToolsCard: {
     ...cardChrome,

@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { Pressable } from '@/components/Pressable';
+import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { cardChrome, outlinePrimaryPressed, primarySolidPressed, ui } from '@/constants/appUi';
 import {
@@ -69,9 +70,10 @@ export default function RenbyListingDetailScreen() {
       <KeyboardDismissScreen style={[styles.screen, styles.centered]}>
         <ScreenEntrance style={styles.entranceFillCentered}>
           <Text style={styles.muted}>Listing not found.</Text>
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.textBtn}>
-            <Text style={styles.textBtnLabel}>Go back</Text>
-          </Pressable>
+          <ScreenBackButton
+            onPress={() => router.back()}
+            style={styles.notFoundBack}
+          />
         </ScreenEntrance>
       </KeyboardDismissScreen>
     );
@@ -81,9 +83,7 @@ export default function RenbyListingDetailScreen() {
     <KeyboardDismissScreen style={styles.screen}>
       <ScreenEntrance style={styles.entranceFlex}>
         <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
-            <Text style={styles.backLabel}>‹ Back</Text>
-          </Pressable>
+          <ScreenBackButton onPress={() => router.back()} />
         </View>
 
         <ScrollView
@@ -199,27 +199,14 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     textAlign: 'center',
   },
-  textBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-  },
-  textBtnLabel: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: ui.primary,
+  notFoundBack: {
+    alignSelf: 'center',
+    marginTop: 4,
   },
   header: {
     paddingHorizontal: ui.padScreenH,
     paddingBottom: 8,
     backgroundColor: ui.surfaceGrouped,
-  },
-  backHit: {
-    alignSelf: 'flex-start',
-  },
-  backLabel: {
-    fontSize: 17,
-    fontWeight: '500',
-    color: ui.primary,
   },
   scroll: {
     flex: 1,

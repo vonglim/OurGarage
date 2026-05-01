@@ -14,6 +14,7 @@ import {
 } from '@/lib/openRequestsForBrowse';
 import { formatMilesShort, milesFromViewerToRequest } from '@/lib/requestDistance';
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
+import { normalizeListingImages } from '@/lib/normalizeListingImages';
 import { getSupabase } from '@/lib/supabase';
 import type { ToolListing } from '@/store/listingsStore';
 import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
@@ -112,7 +113,9 @@ export default function Browse() {
   
         const { data, error } = await supabase
           .from('listings')
-          .select('id, title, description, daily_price, images')
+          .select(
+            'id, title, description, daily_price, half_day_price, weekly_price, images, created_at'
+          )
           .order('created_at', { ascending: false });
   
         if (error) {
@@ -120,17 +123,28 @@ export default function Browse() {
           return;
         }
   
-        const mapped = (data || []).map((item) => ({
-          id: item.id,
-          name: item.title,
-          price: item.daily_price,
-          priceUnit: 'day',
-          distance: 0,
-          description: item.description,
-          images: Array.isArray(item.images)
-            ? item.images.filter((img) => img.startsWith('http')) // 👈 FIX
-            : [], //
-        }));
+        const mapped = (data || []).map((item) => {
+          const createdRaw = item.created_at;
+          const createdMs =
+            createdRaw != null ? Date.parse(String(createdRaw)) : NaN;
+          const daily = Number(item.daily_price);
+          const half = Number(item.half_day_price);
+          const week = Number(item.weekly_price);
+          return {
+            id: item.id,
+            name: item.title,
+            price: Number.isFinite(daily) ? daily : 0,
+            priceUnit: 'day',
+            distance: 0,
+            description: item.description,
+            ownerName: '',
+            rating: 0,
+            createdAt: Number.isFinite(createdMs) ? createdMs : 0,
+            ...(Number.isFinite(half) ? { halfDayPrice: half } : {}),
+            ...(Number.isFinite(week) ? { weeklyPrice: week } : {}),
+            images: normalizeListingImages(item.images),
+          };
+        });
   
         // 👇 THIS is the key part
         useListingsStore.getState().setListings(mapped);

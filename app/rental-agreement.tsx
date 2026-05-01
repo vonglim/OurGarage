@@ -8,6 +8,7 @@ import {
   View,
 } from 'react-native';
 import { Pressable } from '@/components/Pressable';
+import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -120,9 +121,10 @@ export default function RentalAgreementScreen() {
         <ScreenEntrance style={styles.entranceFillCentered}>
           <Text style={styles.errorTitle}>Something went wrong</Text>
           <Text style={styles.errorBody}>We could not open the rental agreement. Please go back and try again.</Text>
-          <Pressable onPress={() => router.back()} style={styles.secondaryBtn} hitSlop={12}>
-            <Text style={styles.secondaryBtnText}>Go back</Text>
-          </Pressable>
+          <ScreenBackButton
+            onPress={() => router.back()}
+            style={styles.notFoundBack}
+          />
         </ScreenEntrance>
       </KeyboardDismissScreen>
     );
@@ -132,9 +134,7 @@ export default function RentalAgreementScreen() {
     <KeyboardDismissScreen style={styles.screen}>
       <ScreenEntrance style={styles.entranceFlex}>
         <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
-          <Text style={styles.backLabel}>‹ Back</Text>
-        </Pressable>
+        <ScreenBackButton onPress={() => router.back()} style={styles.backHit} />
         <Text style={styles.headerTitle}>Rental agreement</Text>
         <Text style={styles.headerSub}>Please confirm before we show your match summary.</Text>
       </View>
@@ -213,13 +213,11 @@ const styles = StyleSheet.create({
     backgroundColor: ui.surfaceGrouped,
   },
   backHit: {
-    alignSelf: 'flex-start',
     marginBottom: 6,
   },
-  backLabel: {
-    fontSize: 17,
-    fontWeight: '500',
-    color: ui.primary,
+  notFoundBack: {
+    alignSelf: 'center',
+    marginTop: 4,
   },
   headerTitle: {
     fontSize: 22,
@@ -319,14 +317,5 @@ const styles = StyleSheet.create({
     color: ui.textSubtle,
     textAlign: 'center',
     marginBottom: 22,
-  },
-  secondaryBtn: {
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-  },
-  secondaryBtnText: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: ui.primary,
   },
 });

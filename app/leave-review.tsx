@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 import { Pressable } from '@/components/Pressable';
+import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -67,9 +68,7 @@ export default function LeaveReviewScreen() {
         >
           <ScreenEntrance style={styles.entranceFlex}>
             <View style={[styles.header, { paddingTop: 8 }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
-          <Text style={styles.backLabel}>‹ Back</Text>
-        </Pressable>
+        <ScreenBackButton onPress={() => router.back()} style={styles.backHit} />
         <Text style={styles.headerTitle}>Leave a review</Text>
       </View>
 
@@ -152,13 +151,7 @@ const styles = StyleSheet.create({
     backgroundColor: ui.surfaceGrouped,
   },
   backHit: {
-    alignSelf: 'flex-start',
     marginBottom: 6,
-  },
-  backLabel: {
-    fontSize: 17,
-    fontWeight: '500',
-    color: ui.primary,
   },
   headerTitle: {
     fontSize: 22,

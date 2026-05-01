@@ -13,6 +13,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Pressable } from '@/components/Pressable';
+import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { lightImpact } from '@/lib/haptics';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
 
@@ -61,9 +62,7 @@ export default function CameraScreen() {
     return (
       <View style={styles.webFallback}>
         <Text style={styles.webFallbackText}>Camera is available on the iOS and Android app.</Text>
-        <Pressable onPress={() => router.back()} style={styles.webBack} haptic>
-          <Text style={styles.webBackText}>Go back</Text>
-        </Pressable>
+        <ScreenBackButton onPress={() => router.back()} />
       </View>
     );
   }
@@ -322,14 +321,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textAlign: 'center',
     marginBottom: 20,
-  },
-  webBack: {
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-  },
-  webBackText: {
-    color: '#FFFFFF',
-    fontSize: 17,
-    fontWeight: '600',
   },
 });

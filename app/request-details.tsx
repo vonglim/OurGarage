@@ -1,4 +1,5 @@
 import { Pressable } from '@/components/Pressable';
+import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useFocusEffect } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -297,9 +298,7 @@ const requestId = params.requestId ?? '';
           <View style={[styles.header, { paddingTop: 8 }]}>
           <View style={styles.headerRow}>
             <View style={styles.headerLeft}>
-              <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
-                <Text style={styles.backLabel}>‹ Back</Text>
-              </Pressable>
+              <ScreenBackButton onPress={() => router.back()} style={styles.backHit} />
             </View>
             <Text style={styles.headerTitleCenter} numberOfLines={1}>
               Request details
@@ -553,13 +552,7 @@ const styles = StyleSheet.create({
     minHeight: 36,
   },
   backHit: {
-    alignSelf: 'flex-start',
     paddingVertical: 4,
-  },
-  backLabel: {
-    fontSize: 17,
-    fontWeight: '500',
-    color: ui.primary,
   },
   headerTitleCenter: {
     flex: 1,

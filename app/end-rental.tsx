@@ -4,6 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Pressable } from '@/components/Pressable';
+import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -76,9 +77,10 @@ export default function EndRentalScreen() {
       <KeyboardDismissScreen style={[styles.screen, styles.centered]}>
         <ScreenEntrance style={styles.entranceFillCentered}>
           <Text style={styles.muted}>Invalid request.</Text>
-          <Pressable onPress={() => router.back()} style={styles.textBtn} hitSlop={12}>
-            <Text style={styles.textBtnLabel}>Go back</Text>
-          </Pressable>
+          <ScreenBackButton
+            onPress={() => router.back()}
+            style={styles.notFoundBack}
+          />
         </ScreenEntrance>
       </KeyboardDismissScreen>
     );
@@ -89,9 +91,10 @@ export default function EndRentalScreen() {
       <KeyboardDismissScreen style={[styles.screen, styles.centered]}>
         <ScreenEntrance style={styles.entranceFillCentered}>
           <Text style={styles.muted}>Request not found.</Text>
-          <Pressable onPress={() => router.back()} style={styles.textBtn} hitSlop={12}>
-            <Text style={styles.textBtnLabel}>Go back</Text>
-          </Pressable>
+          <ScreenBackButton
+            onPress={() => router.back()}
+            style={styles.notFoundBack}
+          />
         </ScreenEntrance>
       </KeyboardDismissScreen>
     );
@@ -131,9 +134,7 @@ export default function EndRentalScreen() {
     <KeyboardDismissScreen style={styles.screen}>
       <ScreenEntrance style={styles.entranceFlex}>
         <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
-          <Text style={styles.backLabel}>‹ Back</Text>
-        </Pressable>
+        <ScreenBackButton onPress={() => router.back()} style={styles.backHit} />
         <Text style={styles.headerTitle}>End rental</Text>
         <Text style={styles.headerSub}>Confirm the return before you leave a review.</Text>
       </View>
@@ -215,13 +216,11 @@ const styles = StyleSheet.create({
     backgroundColor: ui.surfaceGrouped,
   },
   backHit: {
-    alignSelf: 'flex-start',
     marginBottom: 6,
   },
-  backLabel: {
-    fontSize: 17,
-    fontWeight: '500',
-    color: ui.primary,
+  notFoundBack: {
+    alignSelf: 'center',
+    marginTop: 4,
   },
   headerTitle: {
     fontSize: 22,
@@ -333,14 +332,5 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 22,
     marginBottom: 16,
-  },
-  textBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-  },
-  textBtnLabel: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: ui.primary,
   },
 });

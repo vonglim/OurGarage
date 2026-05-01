@@ -9,10 +9,16 @@ export type ToolListing = {
   /** e.g. "day", "week"; display defaults to "day" when omitted. */
   priceUnit?: string;
   description?: string;
-  /** When set, listing is shown under My Activity → My Equipment for that user. */
+  /** Set when listing is published from the app (not returned by public listings fetch). */
   ownerUserId?: string;
   ownerName: string;
   rating: number;
+  /** Supabase `half_day_price`. */
+  halfDayPrice?: number;
+  /** Supabase `weekly_price`. */
+  weeklyPrice?: number;
+  /** Cover / gallery URLs from Supabase `images` when present. */
+  images?: string[];
   /** Miles (display). */
   distance: number;
   createdAt: number;
@@ -21,6 +27,7 @@ export type ToolListing = {
 type ListingsState = {
   listings: ToolListing[];
   appendListing: (row: ToolListing) => void;
+  setListings: (rows: ToolListing[]) => void;
 };
 
 export const useListingsStore = create<ListingsState>((set) => ({

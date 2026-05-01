@@ -19,6 +19,7 @@ import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { useListingsStore } from '@/store/listingsStore';
 import { getAuthUserDisplayName, getAuthUserIdSync } from '@/lib/authUser';
 import { Pressable } from '@/components/Pressable';
+import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { primarySolidPressed, ui } from '@/constants/appUi';
 import { getCreateListingPricingGuidance } from '@/lib/createListingPricingGuide';
@@ -156,9 +157,7 @@ export default function CreateListingScreen() {
         >
           <ScreenEntrance style={styles.entranceFlex}>
             <View style={[styles.topBar, { paddingTop: 8 }]}>
-            <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
-              <Text style={styles.backLabel}>‹ Back</Text>
-            </Pressable>
+            <ScreenBackButton onPress={() => router.back()} style={styles.backHit} />
             <Text style={styles.screenTitle}>Create listing</Text>
             <Text style={styles.screenSubtitle}>Rent out equipment on Renby</Text>
           </View>
@@ -387,13 +386,7 @@ const styles = StyleSheet.create({
     backgroundColor: ui.surfaceGrouped,
   },
   backHit: {
-    alignSelf: 'flex-start',
     marginBottom: 4,
-  },
-  backLabel: {
-    fontSize: 17,
-    fontWeight: '500',
-    color: ui.primary,
   },
   screenTitle: {
     fontSize: 22,

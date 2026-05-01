@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 import { Pressable } from '@/components/Pressable';
+import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -135,9 +136,9 @@ export default function ChatDetailScreen() {
       <KeyboardDismissScreen style={styles.screen}>
         <ScreenEntrance style={styles.entranceFlex}>
           <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-            <Pressable onPress={() => router.back()} hitSlop={10}>
-              <Text style={styles.back}>‹ Back</Text>
-            </Pressable>
+            <View style={styles.headerBackSlot}>
+              <ScreenBackButton onPress={() => router.back()} />
+            </View>
           </View>
           <View style={styles.center}>
             <Text style={styles.missing}>Missing chat.</Text>
@@ -152,9 +153,9 @@ export default function ChatDetailScreen() {
       <KeyboardDismissScreen style={styles.screen}>
         <ScreenEntrance style={styles.entranceFlex}>
           <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-            <Pressable onPress={() => router.back()} hitSlop={10}>
-              <Text style={styles.back}>‹ Back</Text>
-            </Pressable>
+            <View style={styles.headerBackSlot}>
+              <ScreenBackButton onPress={() => router.back()} />
+            </View>
           </View>
           <View style={styles.center}>
             <Text style={styles.missing}>This chat is not available.</Text>
@@ -173,9 +174,9 @@ export default function ChatDetailScreen() {
       >
         <ScreenEntrance style={styles.entranceFlex}>
         <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-          <Pressable onPress={() => router.back()} hitSlop={10}>
-            <Text style={styles.back}>‹ Back</Text>
-          </Pressable>
+          <View style={styles.headerBackSlot}>
+            <ScreenBackButton onPress={() => router.back()} />
+          </View>
           <View style={styles.headerTitleBlock}>
             <Text style={styles.title} numberOfLines={1}>
               {toolName}
@@ -313,10 +314,10 @@ const styles = StyleSheet.create({
     borderBottomColor: ui.border,
     backgroundColor: ui.surfaceGrouped,
   },
-  back: {
-    fontSize: 17,
-    color: ui.primary,
-    fontWeight: '600',
+  headerBackSlot: {
+    width: 64,
+    alignItems: 'flex-start',
+    justifyContent: 'center',
   },
   headerTitleBlock: {
     flex: 1,

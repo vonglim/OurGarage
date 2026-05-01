@@ -1,7 +1,7 @@
 import { useRouter } from 'expo-router';
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { Pressable } from '@/components/Pressable';
+import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { ui } from '@/constants/appUi';
@@ -13,9 +13,7 @@ export default function ListMyToolScreen() {
     <ScreenWrapper style={styles.screenWrap}>
       <KeyboardDismissScreen style={styles.screen}>
         <View style={styles.header}>
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
-            <Text style={styles.backLabel}>‹ Back</Text>
-          </Pressable>
+          <ScreenBackButton onPress={() => router.back()} style={styles.backHit} />
           <Text style={styles.title}>List equipment</Text>
         </View>
         <View style={styles.body}>
@@ -44,13 +42,7 @@ const styles = StyleSheet.create({
     borderBottomColor: ui.border,
   },
   backHit: {
-    alignSelf: 'flex-start',
     marginBottom: 6,
-  },
-  backLabel: {
-    fontSize: 17,
-    fontWeight: '500',
-    color: ui.primary,
   },
   title: {
     fontSize: 22,

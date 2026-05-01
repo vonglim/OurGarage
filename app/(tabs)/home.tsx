@@ -13,6 +13,7 @@ import { MainTabFab } from '@/components/MainTabFab';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { formatUsd, getNumericTotalPrice } from '@/lib/money';
 import { listOpenRequestsSortedByDistance } from '@/lib/openRequestsForBrowse';
+import { normalizeListingImages } from '@/lib/normalizeListingImages';
 import { formatMilesShort, milesFromViewerToRequest } from '@/lib/requestDistance';
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { getOnboardingTermsAccepted } from '@/store/agreementsStore';
@@ -55,7 +56,7 @@ export default function Home() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
 
   const requests = useRequestsStore((s) => s.requests);
-  const [listings, setListings] = useState([]);
+  const [listings, setListings] = useState<ToolListing[]>([]);
 
   const previewRequests = useMemo(
     () => listOpenRequestsSortedByDistance(requests).slice(0, PREVIEW_COUNT) as Record<string, unknown>[],
@@ -170,7 +171,9 @@ export default function Home() {
   
       const { data, error } = await supabase
         .from('listings')
-        .select('id, title, description, daily_price, images')
+        .select(
+          'id, title, description, daily_price, half_day_price, weekly_price, images, created_at'
+        )
         .order('created_at', { ascending: false });
   
       if (error) {
@@ -179,15 +182,28 @@ export default function Home() {
       }
   
       console.log('Listings from DB:', data);
-      const mapped = (data || []).map((item) => ({
-        id: item.id,
-        name: item.title,
-        price: item.daily_price,
-        priceUnit: 'day',
-        distance: 0,
-        description: item.description,
-        images: item.images || [], //
-      }));
+      const mapped = (data || []).map((item) => {
+        const createdRaw = item.created_at;
+        const createdMs =
+          createdRaw != null ? Date.parse(String(createdRaw)) : NaN;
+        const daily = Number(item.daily_price);
+        const half = Number(item.half_day_price);
+        const week = Number(item.weekly_price);
+        return {
+          id: item.id,
+          name: item.title,
+          price: Number.isFinite(daily) ? daily : 0,
+          priceUnit: 'day',
+          distance: 0,
+          description: item.description,
+          ownerName: '',
+          rating: 0,
+          createdAt: Number.isFinite(createdMs) ? createdMs : 0,
+          ...(Number.isFinite(half) ? { halfDayPrice: half } : {}),
+          ...(Number.isFinite(week) ? { weeklyPrice: week } : {}),
+          images: normalizeListingImages(item.images),
+        };
+      });
       
       setListings(mapped);
     } catch (err) {

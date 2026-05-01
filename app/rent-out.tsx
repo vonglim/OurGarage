@@ -1,14 +1,16 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Pressable } from '@/components/Pressable';
+import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { ui } from '@/constants/appUi';
+import { uploadListingImage } from '@/lib/uploadListingImage';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
 
 const NAVY = '#0B1F3A';
@@ -19,7 +21,6 @@ const SCROLL_BOTTOM_TAB_CLEARANCE = 76;
 
 export default function RentOutScreen() {
   const router = useRouter();
-  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -40,37 +41,21 @@ export default function RentOutScreen() {
   
     try {
       const { supabase } = await import('@/lib/supabase');
-  
-      let imageUrls: string[] = [];
-  
-      // 👇 upload first image (keep it simple for now)
-      if (listingPhotoUris.length > 0) {
-        const uri = listingPhotoUris[0];
-  
-        const response = await fetch(uri);
-        const blob = await response.blob();
-  
-        const fileName = `listing-${Date.now()}.jpg`;
-  
-        const { error: uploadError } = await supabase.storage
-          .from('listing-images')
-          .upload(fileName, blob, {
-            contentType: 'image/jpeg',
-          });
-  
-        if (uploadError) {
-          console.error(uploadError);
+
+      const uploadedImageUrls: string[] = [];
+      for (const uri of listingPhotoUris) {
+        try {
+          const url = await uploadListingImage(uri);
+          uploadedImageUrls.push(url);
+        } catch (uploadErr) {
+          console.error('[rent-out] image upload failed', uploadErr);
           alert('Image upload failed');
           return;
         }
-  
-        const { data } = supabase.storage
-          .from('listing-images')
-          .getPublicUrl(fileName);
-  
-        imageUrls = [data.publicUrl];
       }
-  
+
+      console.log('[rent-out] final images for insert', uploadedImageUrls);
+
       const response = await supabase.from('listings').insert({
         title,
         description,
@@ -78,7 +63,7 @@ export default function RentOutScreen() {
         daily_price: Number(daily),
         weekly_price: Number(weekly) || null,
         replacement_value: Number(replacementValue) || null,
-        images: imageUrls, // ✅ FIXED
+        images: uploadedImageUrls,
       });
   
       console.log('FULL RESPONSE:', response);
@@ -124,14 +109,7 @@ export default function RentOutScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.headerTitleBlock}>
-          <TouchableOpacity
-            onPress={() => navigation.goBack()}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            style={styles.backHit}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.backText}>‹ Back</Text>
-          </TouchableOpacity>
+          <ScreenBackButton onPress={() => router.back()} />
           <Text style={styles.headerTitle}>List Your Equipment</Text>
         </View>
 
@@ -271,14 +249,6 @@ const styles = StyleSheet.create({
   },
   headerTitleBlock: {
     marginBottom: 14,
-  },
-  backHit: {
-    alignSelf: 'flex-start',
-  },
-  backText: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: ui.primary,
   },
   headerTitle: {
     marginTop: 8,

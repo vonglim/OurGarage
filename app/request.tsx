@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { Pressable } from '@/components/Pressable';
+import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { ScrollView } from 'react-native-gesture-handler';
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
@@ -157,9 +158,7 @@ export default function RequestAToolScreen() {
           <ScreenEntrance style={styles.entranceFlex}>
             <View style={[styles.topBar, { paddingTop: 8 }]}>
               <View style={styles.headerTitleBlock}>
-                <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
-                  <Text style={styles.backLabel}>‹ Back</Text>
-                </Pressable>
+                <ScreenBackButton onPress={() => router.back()} />
                 <Text style={styles.screenTitle}>Request equipment</Text>
               </View>
             </View>
@@ -550,14 +549,6 @@ const styles = StyleSheet.create({
   },
   headerTitleBlock: {
     marginBottom: 14,
-  },
-  backHit: {
-    alignSelf: 'flex-start',
-  },
-  backLabel: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: ui.primary,
   },
   screenTitle: {
     marginTop: 8,

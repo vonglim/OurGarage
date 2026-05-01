@@ -2,6 +2,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Pressable } from '@/components/Pressable';
+import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
@@ -41,9 +42,7 @@ export default function RentalsManagementScreen() {
     <ScreenWrapper style={styles.screenWrap}>
       <KeyboardDismissScreen style={styles.screen}>
         <View style={[styles.header, { paddingTop: 8 }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
-          <Text style={styles.backLabel}>‹ Back</Text>
-        </Pressable>
+        <ScreenBackButton onPress={() => router.back()} style={styles.backHit} />
         <Text style={styles.headerTitle}>Manage Rentals</Text>
         <Text style={styles.headerSub}>
           Offers you’ve sent on equipment requests (this device).
@@ -132,13 +131,7 @@ const styles = StyleSheet.create({
     backgroundColor: ui.surfaceGrouped,
   },
   backHit: {
-    alignSelf: 'flex-start',
     marginBottom: 6,
-  },
-  backLabel: {
-    fontSize: 17,
-    fontWeight: '500',
-    color: ui.primary,
   },
   headerTitle: {
     fontSize: 28,

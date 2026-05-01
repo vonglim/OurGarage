@@ -15,6 +15,7 @@ import {
   View,
 } from 'react-native';
 import { Pressable } from '@/components/Pressable';
+import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -398,9 +399,10 @@ export default function OfferDetailScreen() {
         <View style={{ flex: 1 }}>
           <ScreenEntrance style={styles.entranceFillCentered}>
             <Text style={styles.muted}>Offer not found.</Text>
-            <Pressable onPress={() => router.back()} hitSlop={12} style={styles.textBtn}>
-              <Text style={styles.textBtnLabel}>Go back</Text>
-            </Pressable>
+            <ScreenBackButton
+              onPress={() => router.back()}
+              style={styles.notFoundBack}
+            />
           </ScreenEntrance>
         </View>
       </ScreenWrapper>
@@ -430,9 +432,7 @@ export default function OfferDetailScreen() {
         <ScreenEntrance style={styles.entranceFlex}>
           <View style={{ flex: 1 }}>
             <View style={[styles.header, { paddingTop: 8 }]}>
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backHit}>
-            <Text style={styles.backLabel}>‹ Back</Text>
-          </Pressable>
+          <ScreenBackButton onPress={() => router.back()} style={styles.backHit} />
           <Text style={styles.headerTitle}>Offer details</Text>
           <Text style={styles.headerSub}>Review before you accept.</Text>
         </View>
@@ -783,13 +783,11 @@ const styles = StyleSheet.create({
     backgroundColor: ui.surfaceGrouped,
   },
   backHit: {
-    alignSelf: 'flex-start',
     marginBottom: 6,
   },
-  backLabel: {
-    fontSize: 17,
-    fontWeight: '500',
-    color: ui.primary,
+  notFoundBack: {
+    alignSelf: 'center',
+    marginTop: 4,
   },
   headerTitle: {
     fontSize: 22,
