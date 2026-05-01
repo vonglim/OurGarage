@@ -25,10 +25,13 @@ type ListingsState = {
 
 export const useListingsStore = create<ListingsState>((set) => ({
   listings: [],
+
   appendListing: (row) =>
     set((s) => ({
       listings: [...s.listings, row],
     })),
+
+  setListings: (rows) => set({ listings: rows }),
 }));
 
 export function getListingById(id: string): ToolListing | undefined {

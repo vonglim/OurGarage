@@ -7,6 +7,7 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import HomeMarketing from '@/components/HomeMarketing';
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import { MainTabFab } from '@/components/MainTabFab';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
@@ -16,7 +17,7 @@ import { formatMilesShort, milesFromViewerToRequest } from '@/lib/requestDistanc
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { getOnboardingTermsAccepted } from '@/store/agreementsStore';
 import type { ToolListing } from '@/store/listingsStore';
-import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
+import { formatListingPriceWithUnit } from '@/store/listingsStore';
 import { touchLastActive } from '@/store/profileStore';
 import { refreshRequestsFromSupabase, useRequestsStore } from '@/store/requestsStore';
 
@@ -54,7 +55,7 @@ export default function Home() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
 
   const requests = useRequestsStore((s) => s.requests);
-  const listings = useListingsStore((s) => s.listings);
+  const [listings, setListings] = useState([]);
 
   const previewRequests = useMemo(
     () => listOpenRequestsSortedByDistance(requests).slice(0, PREVIEW_COUNT) as Record<string, unknown>[],
@@ -70,6 +71,7 @@ export default function Home() {
     useCallback(() => {
       touchLastActive();
       void refreshRequestsFromSupabase();
+      fetchListings(); 
     }, [])
   );
 
@@ -160,6 +162,38 @@ export default function Home() {
     [router]
   );
 
+  const fetchListings = async () => {
+    console.log('Fetching listings...');
+  
+    try {
+      const { supabase } = await import('@/lib/supabase');
+  
+      const { data, error } = await supabase
+        .from('listings')
+        .select('id, title, description, daily_price, images')
+        .order('created_at', { ascending: false });
+  
+      if (error) {
+        console.error('Fetch error:', error);
+        return;
+      }
+  
+      console.log('Listings from DB:', data);
+      const mapped = (data || []).map((item) => ({
+        id: item.id,
+        name: item.title,
+        price: item.daily_price,
+        priceUnit: 'day',
+        distance: 0,
+        description: item.description,
+        images: item.images || [], //
+      }));
+      
+      setListings(mapped);
+    } catch (err) {
+      console.error('Unexpected fetch error:', err);
+    }
+  };
   const goToListingDetails = useCallback(
     (listingId: string) => {
       router.push({
@@ -179,7 +213,7 @@ export default function Home() {
             styles.scrollInner,
             { paddingTop: ui.spaceMd, paddingBottom: 120 },
           ]}
-          keyboardShouldPersistTaps="handled"
+          keyboardShouldPersistTaps="always"
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.column}>
@@ -426,43 +460,67 @@ export default function Home() {
                   contentContainerStyle={styles.previewScrollContent}
                 >
                   {previewListings.map((item: ToolListing) => (
-                    <CardPressable
-                      key={item.id}
-                      onPress={() => goToListingDetails(item.id)}
-                      style={({ pressed }) => [
-                        styles.previewCard,
-                        pressed && styles.previewCardPressed,
-                      ]}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${item.name}, ${formatListingPriceWithUnit(item.price, item.priceUnit)}, ${formatMilesShort(item.distance)}`}
-                    >
-                      <Text style={styles.previewTitle} numberOfLines={2}>
-                        {item.name}
-                      </Text>
-                      <Text style={styles.previewMeta} numberOfLines={1}>
-                        <Text style={styles.previewPrice}>
-                          {formatListingPriceWithUnit(item.price, item.priceUnit)}
-                        </Text>
-                        <Text style={styles.previewMetaRest}>
-                          {' '}
-                          · {formatMilesShort(item.distance)}
-                        </Text>
-                      </Text>
-                      {item.description?.trim() ? (
-                        <Text
-                          style={styles.previewDesc}
-                          numberOfLines={1}
-                          ellipsizeMode="tail"
-                        >
-                          {item.description.trim()}
-                        </Text>
-                      ) : null}
-                    </CardPressable>
-                  ))}
+  <CardPressable
+    key={item.id}
+    onPress={() => goToListingDetails(item.id)}
+    style={({ pressed }) => [
+      styles.previewCard,
+      pressed && styles.previewCardPressed,
+    ]}
+    accessibilityRole="button"
+    accessibilityLabel={`${item.name}, ${formatListingPriceWithUnit(item.price, item.priceUnit)}, ${formatMilesShort(item.distance)}`}
+  >
+
+    {/* ✅ IMAGE GOES HERE */}
+    {item.images?.[0] ? (
+      <Image
+        source={{ uri: item.images[0] }}
+        style={{ width: '100%', height: 120, borderRadius: 12, marginBottom: 8 }}
+      />
+    ) : (
+      <View
+        style={{
+          width: '100%',
+          height: 120,
+          borderRadius: 12,
+          backgroundColor: '#E5E7EB',
+          alignItems: 'center',
+          justifyContent: 'center',
+          marginBottom: 8,
+        }}
+      >
+        <Ionicons name="image-outline" size={28} color="#9CA3AF" />
+      </View>
+    )}
+
+    <Text style={styles.previewTitle} numberOfLines={2}>
+      {item.name}
+    </Text>
+
+    <Text style={styles.previewMeta} numberOfLines={1}>
+      <Text style={styles.previewPrice}>
+        {formatListingPriceWithUnit(item.price, item.priceUnit)}
+      </Text>
+      <Text style={styles.previewMetaRest}>
+        {' '}
+        · {formatMilesShort(item.distance)}
+      </Text>
+    </Text>
+
+    {item.description?.trim() ? (
+      <Text style={styles.previewDesc} numberOfLines={1}>
+        {item.description.trim()}
+      </Text>
+    ) : null}
+
+  </CardPressable>
+))}
                 </ScrollView>
               )}
             </View>
+           <HomeMarketing />
           </View>
+        
         </ScrollView>
         <MainTabFab />
     </KeyboardDismissScreen>

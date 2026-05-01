@@ -1,27 +1,27 @@
-import { useFocusEffect } from '@react-navigation/native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { CardPressable } from '@/components/CardPressable';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
-import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
-import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
+import { ui } from '@/constants/appUi';
+import { getAuthUserIdSync } from '@/lib/authUser';
 import { formatDurationDisplay } from '@/lib/durationFormat';
-import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
-import { formatMilesShort, milesFromViewerToRequest } from '@/lib/requestDistance';
-import { getNumericTotalPrice, formatUsd } from '@/lib/money';
+import { formatUsd, getNumericTotalPrice } from '@/lib/money';
 import {
   distanceSortKeyRequest,
   isRequestActiveForBrowse,
 } from '@/lib/openRequestsForBrowse';
-import { getAuthUserIdSync } from '@/lib/authUser';
+import { formatMilesShort, milesFromViewerToRequest } from '@/lib/requestDistance';
+import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
+import { getSupabase } from '@/lib/supabase';
 import type { ToolListing } from '@/store/listingsStore';
 import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
 import { refreshRequestsFromSupabase, useRequestsStore } from '@/store/requestsStore';
-import { ui } from '@/constants/appUi';
-import { getSupabase } from '@/lib/supabase';
+import { useFocusEffect } from '@react-navigation/native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Image, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 /** Dev-only: where Browse reads requests (for provenance logging). */
 const REQUESTS_STORE_MODULE = 'store/requestsStore.ts';
@@ -105,6 +105,38 @@ export default function Browse() {
   useFocusEffect(
     useCallback(() => {
       void refreshRequestsFromSupabase();
+  
+      // 👇 ADD THIS
+      const fetchListings = async () => {
+        const { supabase } = await import('@/lib/supabase');
+  
+        const { data, error } = await supabase
+          .from('listings')
+          .select('id, title, description, daily_price, images')
+          .order('created_at', { ascending: false });
+  
+        if (error) {
+          console.error('Fetch listings error:', error);
+          return;
+        }
+  
+        const mapped = (data || []).map((item) => ({
+          id: item.id,
+          name: item.title,
+          price: item.daily_price,
+          priceUnit: 'day',
+          distance: 0,
+          description: item.description,
+          images: Array.isArray(item.images)
+            ? item.images.filter((img) => img.startsWith('http')) // 👈 FIX
+            : [], //
+        }));
+  
+        // 👇 THIS is the key part
+        useListingsStore.getState().setListings(mapped);
+      };
+  
+      fetchListings();
     }, [])
   );
 
@@ -255,7 +287,7 @@ export default function Browse() {
               ]}
             >
               <Text style={[styles.segmentLabel, mode === 'tools' && styles.segmentLabelActive]}>
-                Equipment
+                Rentals
               </Text>
             </Pressable>
           </View>
@@ -407,36 +439,58 @@ export default function Browse() {
                       : `${item.name}, ${priceStr}, ${distStr}`
                   }
                 >
-                  <Text
-                    style={styles.cardTitle}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                  >
-                    {item.name}
-                  </Text>
-                  <Text
-                    style={styles.cardPricePrimary}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                  >
-                    {priceStr}
-                  </Text>
-                  <Text
-                    style={styles.cardDistance}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                  >
-                    {distStr}
-                  </Text>
-                  {item.description?.trim() ? (
-                    <Text
-                      style={styles.cardDesc}
-                      numberOfLines={1}
-                      ellipsizeMode="tail"
-                    >
-                      {item.description.trim()}
-                    </Text>
-                  ) : null}
+                  <View style={{ flexDirection: 'row', gap: 12 }}>
+
+  {/* IMAGE (fixed size thumbnail) */}
+  <View
+    style={{
+      width: 90,
+      height: 90,
+      borderRadius: 10,
+      backgroundColor: '#F3F4F6',
+      overflow: 'hidden',
+    }}
+  >
+    {item.images?.[0] ? (
+      <Image
+        source={{ uri: item.images[0] }}
+        style={{ width: '100%', height: '100%' }}
+        resizeMode="cover"
+      />
+    ) : null}
+  </View>
+
+  {/* TEXT */}
+  <View style={{ flex: 1, justifyContent: 'center' }}>
+
+    <Text style={styles.cardTitle} numberOfLines={1}>
+      {item.name}
+    </Text>
+
+    <Text style={styles.cardPricePrimary}>
+      {priceStr}
+    </Text>
+
+    <Text style={styles.cardDistance}>
+      {distStr}
+    </Text>
+
+    {item.description?.trim() ? (
+      <Text style={styles.cardDesc} numberOfLines={1}>
+        {item.description.trim()}
+      </Text>
+    ) : null}
+
+    {isOwnListing ? (
+      <Text style={styles.cardOwnLabel}>
+        Your listing
+      </Text>
+    ) : null}
+
+  </View>
+
+</View>
+
                   {isOwnListing ? (
                     <Text style={styles.cardOwnLabel} accessibilityRole="text">
                       Your listing

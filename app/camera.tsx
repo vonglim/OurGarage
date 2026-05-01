@@ -30,6 +30,7 @@ export default function CameraScreen() {
   const [cameraReady, setCameraReady] = useState(false);
   const [captures, setCaptures] = useState<string[]>([]);
   const capturingRef = useRef(false);
+  const SHUTTER_GAP = 28;
 
   const setCapturedPhotoUris = useCameraSessionStore((s) => s.setCapturedPhotoUris);
 
@@ -51,7 +52,6 @@ export default function CameraScreen() {
         requestAnimationFrame(() => thumbScrollRef.current?.scrollToEnd({ animated: true }));
       }
     } catch {
-      // ignore capture errors (e.g. tap before ready)
     } finally {
       capturingRef.current = false;
     }
@@ -95,8 +95,8 @@ export default function CameraScreen() {
     );
   }
 
-  const captureBottom = 100 + insets.bottom;
-  const stripBottom = 20 + insets.bottom;
+  const stripHeight = THUMB + 32 + insets.bottom;
+  const stripBottom = 8 + insets.bottom;
 
   return (
     <View style={styles.root}>
@@ -110,14 +110,21 @@ export default function CameraScreen() {
       />
 
       <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-        {/* Dark chrome behind bottom controls */}
+
+        {/* ✅ GUIDE OVERLAY */}
+        <View pointerEvents="none" style={styles.overlay}>
+          <View style={styles.guideBox} />
+          <Text style={styles.guideText}>Center your item</Text>
+        </View>
+
+        {/* Dark bottom fade */}
         <View
-          pointerEvents="none"
-          style={[
-            styles.bottomDim,
-            { height: captureBottom + CAPTURE_SIZE + 36 },
-          ]}
-        />
+  pointerEvents="none"
+  style={[
+    styles.bottomDim,
+    { height: THUMB + 32 + insets.bottom },
+  ]}
+/>
 
         <Pressable
           onPress={onDone}
@@ -134,7 +141,7 @@ export default function CameraScreen() {
           style={({ pressed }) => [
             styles.shutterOuter,
             {
-              bottom: captureBottom,
+              bottom: stripHeight + SHUTTER_GAP,
               opacity: !cameraReady ? 0.45 : pressed ? 0.85 : 1,
             },
           ]}
@@ -179,12 +186,33 @@ const styles = StyleSheet.create({
   camera: {
     flex: 1,
   },
+
+  /* ✅ NEW OVERLAY STYLES */
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  guideBox: {
+    width: '80%',
+    aspectRatio: 1,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.9)',
+    borderRadius: 16,
+  },
+  guideText: {
+    marginTop: 16,
+    fontSize: 14,
+    fontWeight: '500',
+    color: 'rgba(255,255,255,0.85)',
+  },
+
   bottomDim: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: 'rgba(0,0,0,0.35)',
   },
   doneBtn: {
     position: 'absolute',
@@ -217,10 +245,9 @@ const styles = StyleSheet.create({
   },
   thumbStripContent: {
     flexGrow: 1,
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingTop: 8,
   },
   thumb: {
     width: THUMB,

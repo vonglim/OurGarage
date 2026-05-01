@@ -13,13 +13,16 @@ type Props = {
 };
 
 /**
- * Tap non-interactive areas to dismiss the keyboard. Uses `accessible={false}` so
- * scroll views and buttons keep normal behavior when combined with `keyboardShouldPersistTaps="handled"`.
+ * Tap outside to dismiss keyboard without interfering with ScrollView gestures.
  */
 export function KeyboardDismissScreen({ children, style }: Props) {
   return (
-    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-      <View style={[{ flex: 1 }, style]}>{children}</View>
-    </TouchableWithoutFeedback>
+    <View style={[{ flex: 1 }, style]}>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+        <View style={{ flex: 1 }}>
+          {children}
+        </View>
+      </TouchableWithoutFeedback>
+    </View>
   );
 }

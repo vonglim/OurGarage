@@ -94,7 +94,7 @@ export default function TabLayout() {
               style={{
                 transform: [
                   { translateY: -2 },
-                  { translateX: 5 },
+                  { translateX: 0 },
                 ],
               }}
             >

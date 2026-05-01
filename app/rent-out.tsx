@@ -1,9 +1,9 @@
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Pressable } from '@/components/Pressable';
@@ -30,6 +30,71 @@ export default function RentOutScreen() {
   /** URIs from the camera session; first is shown in the hero preview. */
   const [listingPhotoUris, setListingPhotoUris] = useState<string[]>([]);
   const previewUri = listingPhotoUris[0] ?? null;
+  const handleSubmit = async () => {
+    console.log('Submitting...');
+  
+    if (!title || !daily) {
+      alert('Please add at least a title and daily price');
+      return;
+    }
+  
+    try {
+      const { supabase } = await import('@/lib/supabase');
+  
+      let imageUrls: string[] = [];
+  
+      // 👇 upload first image (keep it simple for now)
+      if (listingPhotoUris.length > 0) {
+        const uri = listingPhotoUris[0];
+  
+        const response = await fetch(uri);
+        const blob = await response.blob();
+  
+        const fileName = `listing-${Date.now()}.jpg`;
+  
+        const { error: uploadError } = await supabase.storage
+          .from('listing-images')
+          .upload(fileName, blob, {
+            contentType: 'image/jpeg',
+          });
+  
+        if (uploadError) {
+          console.error(uploadError);
+          alert('Image upload failed');
+          return;
+        }
+  
+        const { data } = supabase.storage
+          .from('listing-images')
+          .getPublicUrl(fileName);
+  
+        imageUrls = [data.publicUrl];
+      }
+  
+      const response = await supabase.from('listings').insert({
+        title,
+        description,
+        half_day_price: Number(halfDay) || null,
+        daily_price: Number(daily),
+        weekly_price: Number(weekly) || null,
+        replacement_value: Number(replacementValue) || null,
+        images: imageUrls, // ✅ FIXED
+      });
+  
+      console.log('FULL RESPONSE:', response);
+  
+      if (response.error) {
+        console.error('INSERT ERROR:', response.error);
+        alert('Error: ' + response.error.message);
+        return;
+      }
+  
+      alert('Listing created 🎉');
+    } catch (err) {
+      console.error(err);
+      alert('Unexpected error');
+    }
+  };
 
   const bottomPad = Math.max(16, SCROLL_BOTTOM_TAB_CLEARANCE + insets.bottom + 16);
 
@@ -43,6 +108,11 @@ export default function RentOutScreen() {
   );
 
   const goToCamera = useCallback(() => {
+    if (Platform.OS === 'web') {
+      document.getElementById('fileInput')?.click();
+      return;
+    }
+  
     router.push('/camera');
   }, [router]);
 
@@ -69,19 +139,34 @@ export default function RentOutScreen() {
         style={styles.photoBox}
         onPress={goToCamera}
         accessibilityRole="button"
-        accessibilityLabel="Take photos of your item"
+        accessibilityLabel="Add Photos"
       >
         {previewUri != null ? (
           <Image source={{ uri: previewUri }} style={styles.photoPreview} contentFit="cover" />
         ) : (
           <View style={styles.photoEmpty}>
-            <Ionicons name="camera-outline" size={32} color="#6B7280" />
-            <Text style={styles.photoLabel}>Take Photos</Text>
+            <Ionicons name="camera-outline" size={32} color={ui.primary} />
+            <Text style={styles.photoLabel}>Add Photos</Text>
           </View>
         )}
       </Pressable>
+      {Platform.OS === 'web' && (
+  <input
+    id="fileInput"
+    type="file"
+    accept="image/*"
+    style={{ display: 'none' }}
+    onChange={(e: any) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
 
-      <Text style={styles.photoHelperText}>Use real photos of your item. No stock images.</Text>
+      const uri = URL.createObjectURL(file);
+      setListingPhotoUris([uri]);
+    }}
+  />
+)}
+
+      <Text style={styles.photoHelperText}>Clear photos help your item rent faster</Text>
 
       <TextInput
         style={styles.input}
@@ -165,7 +250,7 @@ export default function RentOutScreen() {
 
       <Pressable
         style={styles.submit}
-        onPress={() => {}}
+        onPress={handleSubmit}
         pressOpacityFeedback={false}
         accessibilityRole="button"
       >
@@ -210,14 +295,15 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
   photoBox: {
-    minHeight: 120,
+    width: '100%',
+    aspectRatio: 1,
     borderRadius: 16,
-    borderWidth: 1,
-    borderColor: BORDER,
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    overflow: 'hidden',
+    backgroundColor: '#F9FAFB',
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'hidden',
-    backgroundColor: '#F3F4F6',
   },
   photoEmpty: {
     alignItems: 'center',
@@ -226,7 +312,7 @@ const styles = StyleSheet.create({
   },
   photoPreview: {
     width: '100%',
-    height: 120,
+    height: '100%',
   },
   photoLabel: {
     fontSize: 15,
