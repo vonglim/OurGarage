@@ -22,6 +22,7 @@ const SERVER_TYPE_TO_APP: Record<string, AppNotificationType> = {
   offer_accepted: 'offer_accepted',
   counter_offer: 'counter_offer',
   agreement_pending: 'agreement_pending',
+  rental_confirmed: 'accepted',
 };
 
 function mapServerType(raw: string): AppNotificationType {

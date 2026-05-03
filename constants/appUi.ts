@@ -17,6 +17,9 @@ export const ui = {
   /** Slate — secondary labels, meta, placeholders */
   textSecondary: '#6B7280',
 
+  /** Validation / destructive emphasis (required field errors, alerts) */
+  danger: '#DC2626',
+
   /** Light slate — dividers, hairlines, input borders */
   border: '#E5E7EB',
   /** Screen / card surface */

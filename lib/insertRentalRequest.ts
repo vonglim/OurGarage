@@ -1,3 +1,5 @@
+import { Alert } from 'react-native';
+
 import { getSupabase } from '@/lib/supabase';
 
 /** UI / store may still use `weekly`; DB column expects `week`. */
@@ -13,23 +15,58 @@ export async function insertRentalRequest(row: {
   durationType: RentalRequestDurationInput;
   price: number;
 }): Promise<void> {
+  const listingId = row.listingId;
+  const renterUserId = row.renterUserId;
+  const durationType = row.durationType;
+  const price = row.price;
+
   const supabase = getSupabase();
+
+  let ownerUserId: string | null = null;
+  const { data: listingRow } = await supabase
+    .from('listings')
+    .select('user_id')
+    .eq('id', listingId)
+    .maybeSingle();
+  const lr = listingRow as Record<string, unknown> | null | undefined;
+  if (lr && typeof lr.user_id === 'string' && lr.user_id.trim() !== '') {
+    ownerUserId = lr.user_id.trim();
+  }
+
+  if (!ownerUserId) {
+    console.error('❌ owner_user_id missing');
+    throw new Error('owner_user_id missing');
+  }
+
+  console.log('[INSERT INPUT]', {
+    listingId,
+    renterUserId,
+    ownerUserId,
+    durationType,
+    price,
+  });
+
+  /** DB constraint uses half | full | week (not weekly). */
+  const duration_type = durationTypeForDb(durationType);
+
   const { data, error } = await supabase
     .from('rental_requests')
     .insert({
-      listing_id: row.listingId,
-      renter_user_id: row.renterUserId,
-      duration_type: durationTypeForDb(row.durationType),
-      price: row.price,
+      listing_id: listingId,
+      renter_user_id: renterUserId,
+      owner_user_id: ownerUserId,
+      duration_type,
+      price,
       status: 'pending',
     })
-    .select('id')
-    .maybeSingle();
+    .select();
+
+  console.log('[INSERT RESULT]', { data, error });
 
   if (error) {
-    console.error('[rental_requests] insert error', error);
-    return;
+    console.error('❌ INSERT FAILED', error);
+    throw error;
   }
 
-  console.log('[rental_requests] insert success', data);
+  Alert.alert('Inserted successfully');
 }

@@ -8,7 +8,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Image, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import HomeMarketing from '@/components/HomeMarketing';
-import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import { MainTabFab } from '@/components/MainTabFab';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { formatUsd, getNumericTotalPrice } from '@/lib/money';
@@ -222,14 +221,15 @@ export default function Home() {
 
   return (
     <ScreenWrapper style={styles.screenWrap}>
-      <KeyboardDismissScreen>
+      <View style={{ flex: 1 }}>
         <ScrollView
           style={styles.outer}
           contentContainerStyle={[
             styles.scrollInner,
             { paddingTop: ui.spaceMd, paddingBottom: 120 },
           ]}
-          keyboardShouldPersistTaps="always"
+          keyboardShouldPersistTaps="handled"
+          scrollEventThrottle={16}
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.column}>
@@ -539,7 +539,7 @@ export default function Home() {
         
         </ScrollView>
         <MainTabFab />
-    </KeyboardDismissScreen>
+      </View>
     </ScreenWrapper>
   );
 }

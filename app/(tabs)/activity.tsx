@@ -1,6 +1,6 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { AppNotification } from '@/store/notificationsStore';
 import { CardPressable } from '@/components/CardPressable';
@@ -15,20 +15,24 @@ import {
   requestListCardSurface,
 } from '@/components/RequestListCardInner';
 import { formatMilesShort } from '@/lib/requestDistance';
-import { getOtherPartyRentalPreview } from '@/lib/rentalParty';
 import {
   activityRequestInvolvesUser,
   getRequestOwnerId,
   offerCountsForActivityRow,
   rentalRequestInvolvesUser,
 } from '@/lib/activityScope';
+import {
+  fetchPendingRentalRequestsForOwner,
+  type PendingListingRentalRow,
+} from '@/lib/fetchPendingRentalRequestsForOwner';
+import { updateRentalRequestStatus } from '@/lib/updateRentalRequestStatus';
 import { markAllNotificationsAsRead } from '@/lib/markNotificationsRead';
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { formatUsd, getNumericOfferPrice } from '@/lib/money';
 import type { Offer } from '@/store/offersStore';
 import { removeOffersForRequest, useOffersStore } from '@/store/offersStore';
-import { openChatForRequest } from '@/lib/openRequestChat';
 import { refreshActivityScreenFromSupabase } from '@/lib/supabaseActivityRefresh';
+import { getSupabase } from '@/lib/supabase';
 import {
   getEffectiveRentalStatus,
   removeRequest,
@@ -53,21 +57,6 @@ function formatOffersReceived(n: number): string {
   return `${n} offers received`;
 }
 
-function formatRentalStart(ts: number): string {
-  try {
-    return new Date(ts).toLocaleString(undefined, {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
-  } catch {
-    return '—';
-  }
-}
-
 function visibleUnreadForUser(n: AppNotification, userId: string): boolean {
   return !n.read && (n.forUserId == null || n.forUserId === '' || n.forUserId === userId);
 }
@@ -75,6 +64,10 @@ function visibleUnreadForUser(n: AppNotification, userId: string): boolean {
 function formatSectionCount(n: number): string {
   if (n <= 0) return '';
   return n > 99 ? '99+' : String(n);
+}
+
+function rentalsSubTabBadgeCount(n: number): string {
+  return n > 99 ? '99+' : String(Math.max(0, n));
 }
 
 function byTimestampDesc(
@@ -95,6 +88,53 @@ function getTimeAgo(timestamp: number): string {
   if (minutes < 60) return minutes === 1 ? '1 minute ago' : `${minutes} minutes ago`;
   if (hours < 24) return hours === 1 ? '1 hour ago' : `${hours} hours ago`;
   return days === 1 ? '1 day ago' : `${days} days ago`;
+}
+
+function listingRentalDurationLabel(durationType: string): string {
+  switch (durationType) {
+    case 'half':
+      return 'Half day';
+    case 'full':
+      return 'Full day';
+    case 'week':
+      return 'Weekly';
+    default:
+      return durationType;
+  }
+}
+
+function pendingListingTitle(row: PendingListingRentalRow): string {
+  const t = row.listings?.title;
+  const name = typeof t === 'string' ? t.trim() : '';
+  return name || row.listing_id;
+}
+
+function offerFlowRequestTitle(req: Record<string, unknown>): string {
+  const t = String(req.toolName ?? '').trim();
+  return t || 'Equipment request';
+}
+
+function offerFlowRequestPriceLabel(req: Record<string, unknown>, offersList: Offer[]): string {
+  const raw = req.acceptedPrice ?? req.accepted_price;
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (Number.isFinite(n) && n >= 0) return formatUsd(n);
+  const accId = req.acceptedOfferId;
+  if (typeof accId === 'string' && accId.trim()) {
+    const o = offersList.find((x) => x.id === accId.trim());
+    if (o) {
+      const p = getNumericOfferPrice(o);
+      if (Number.isFinite(p)) return formatUsd(p);
+    }
+  }
+  return '—';
+}
+
+function offerFlowRentalPhaseLabel(req: Record<string, unknown>): string {
+  const st = getEffectiveRentalStatus(req as Parameters<typeof getEffectiveRentalStatus>[0]);
+  if (st === 'matched') return 'Matched';
+  if (st === 'active') return 'Active rental';
+  if (st === 'completed') return 'Completed';
+  return 'Rental';
 }
 
 type OutgoingOfferStatus = 'pending' | 'countered' | 'awaiting_poster' | 'accepted' | 'declined';
@@ -124,6 +164,9 @@ function getOutgoingOfferStatus(o: Offer, req: unknown): OutgoingOfferStatus {
 
 type ActivityTab = 'requests' | 'offers' | 'rentals';
 
+/** Rentals tab: renter-side vs poster-side for request / offer accepted matches. */
+type RentalsSubView = 'renting' | 'listing';
+
 function outgoingOfferStatusLabel(s: OutgoingOfferStatus): string {
   switch (s) {
     case 'pending':
@@ -144,6 +187,7 @@ function outgoingOfferStatusLabel(s: OutgoingOfferStatus): string {
 export default function ActivityScreen() {
   const router = useRouter();
   const [tab, setTab] = useState<ActivityTab>('requests');
+  const [rentalsSubView, setRentalsSubView] = useState<RentalsSubView>('renting');
   const me = useAuthUserId();
   const listings = useListingsStore((s) => s.listings);
   const offers = useOffersStore((state) => state.offers);
@@ -151,13 +195,79 @@ export default function ActivityScreen() {
   const unreadCount = useTotalUnreadChatCount();
   const hasUnreadMessages = unreadCount > 0;
   const requests = useRequestsStore((s) => s.requests);
+  const [pendingListingRentals, setPendingListingRentals] = useState<PendingListingRentalRow[]>([]);
+  const [busyRentalRequestId, setBusyRentalRequestId] = useState<string | null>(null);
+
+  const refreshListingRentalRequests = useCallback(async () => {
+    const uid = me.trim();
+    if (!uid) {
+      setPendingListingRentals([]);
+      return;
+    }
+    const pending = await fetchPendingRentalRequestsForOwner(uid);
+    setPendingListingRentals(pending);
+  }, [me]);
+
+  const refreshListingRentalRequestsRef = useRef(refreshListingRentalRequests);
+  refreshListingRentalRequestsRef.current = refreshListingRentalRequests;
 
   useFocusEffect(
     useCallback(() => {
       // Request + offer data only. Notifications list comes from `notificationsStore` (realtime + initial fetch), not a refetch here.
       void refreshActivityScreenFromSupabase();
       markAllNotificationsAsRead();
-    }, [])
+      void refreshListingRentalRequests();
+    }, [refreshListingRentalRequests])
+  );
+
+  useEffect(() => {
+    const uid = me.trim();
+    if (!uid) return;
+    const supabase = getSupabase();
+    const channelId =
+      typeof globalThis.crypto?.randomUUID === 'function'
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+    const channel = supabase.channel(`activity_rental_requests:${uid}:${channelId}`);
+    channel.on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'rental_requests' },
+      () => void refreshListingRentalRequestsRef.current()
+    );
+    channel.subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [me]);
+
+  const onApproveListingRental = useCallback(
+    async (id: string) => {
+      setBusyRentalRequestId(id);
+      const res = await updateRentalRequestStatus(id, 'approved');
+      if (!res.ok) {
+        alert(res.error ?? 'Could not approve');
+        setBusyRentalRequestId(null);
+        return;
+      }
+      await refreshListingRentalRequests();
+      setBusyRentalRequestId(null);
+    },
+    [refreshListingRentalRequests]
+  );
+
+  const onDeclineListingRental = useCallback(
+    async (id: string) => {
+      setBusyRentalRequestId(id);
+      const res = await updateRentalRequestStatus(id, 'declined');
+      if (!res.ok) {
+        alert(res.error ?? 'Could not decline');
+        setBusyRentalRequestId(null);
+        return;
+      }
+      await refreshListingRentalRequests();
+      setBusyRentalRequestId(null);
+    },
+    [refreshListingRentalRequests]
   );
 
   const myEquipment = useMemo(
@@ -186,47 +296,28 @@ export default function ActivityScreen() {
   const swipeRefs = useRef(new Map<number, Swipeable>());
   const fabBottomReserve = useMainTabFabBottomReserve();
 
-  const activeRentals = useMemo(
+  /** Request → offer → accepted: matched / active / completed (Supabase `rentals` row corresponds to these). */
+  const offerFlowRentalsSorted = useMemo(() => {
+    const rows = sortedActivityPool.filter((r) =>
+      rentalRequestInvolvesUser(r as Record<string, unknown>, me)
+    );
+    return [...rows].sort(byTimestampDesc);
+  }, [sortedActivityPool, me]);
+
+  const approvedAsRenter = useMemo(
     () =>
-      sortedActivityPool.filter(
-        (r) =>
-          r.timestamp != null &&
-          getEffectiveRentalStatus(r) === 'active' &&
-          rentalRequestInvolvesUser(r as Record<string, unknown>, me)
+      offerFlowRentalsSorted.filter(
+        (r) => getRequestOwnerId(r as Record<string, unknown>) === me
       ),
-    [sortedActivityPool, me]
+    [offerFlowRentalsSorted, me]
   );
 
-  const matchedRentals = useMemo(
+  const approvedAsOwner = useMemo(
     () =>
-      sortedActivityPool.filter(
-        (r) =>
-          getEffectiveRentalStatus(r) === 'matched' &&
-          rentalRequestInvolvesUser(r as Record<string, unknown>, me)
+      offerFlowRentalsSorted.filter(
+        (r) => getRequestOwnerId(r as Record<string, unknown>) !== me
       ),
-    [sortedActivityPool, me]
-  );
-
-  const pastRentals = useMemo(
-    () =>
-      [...sortedActivityPool]
-        .filter(
-          (r) =>
-            getEffectiveRentalStatus(r) === 'completed' &&
-            rentalRequestInvolvesUser(r as Record<string, unknown>, me)
-        )
-        .sort(byTimestampDesc),
-    [sortedActivityPool, me]
-  );
-
-  const activeRentalsSorted = useMemo(
-    () => [...activeRentals].sort(byTimestampDesc),
-    [activeRentals]
-  );
-
-  const matchedRentalsSorted = useMemo(
-    () => [...matchedRentals].sort(byTimestampDesc),
-    [matchedRentals]
+    [offerFlowRentalsSorted, me]
   );
 
   const activeRequestsSorted = useMemo(
@@ -271,8 +362,7 @@ export default function ActivityScreen() {
     return n;
   }, [myLenderOffers, requests, offers]);
 
-  const rentalsTotalCount =
-    matchedRentalsSorted.length + activeRentalsSorted.length + pastRentals.length;
+  const rentalsTotalCount = offerFlowRentalsSorted.length;
 
   const requestsActivityCount = useMemo(() => {
     let total = 0;
@@ -301,17 +391,8 @@ export default function ActivityScreen() {
     return total;
   }, [notifications, ownedRequestsSorted, offers, me]);
 
-  /** Active + matched rentals (pipeline items to attend to in this tab). */
-  const rentalsActivityCount = useMemo(() => {
-    let total = 0;
-    for (const r of sortedActivityPool) {
-      const st = getEffectiveRentalStatus(r);
-      if (st !== 'active' && st !== 'matched') continue;
-      if (!rentalRequestInvolvesUser(r as Record<string, unknown>, me)) continue;
-      total += 1;
-    }
-    return total;
-  }, [sortedActivityPool, me]);
+  /** Accepted offer rentals (Activity → Rentals tab). */
+  const rentalsActivityCount = offerFlowRentalsSorted.length;
 
   const goToChats = useCallback(() => {
     router.push('/(tabs)/chats');
@@ -542,9 +623,7 @@ export default function ActivityScreen() {
               style={({ pressed }) => [
                 styles.tabCell,
                 tab === 'rentals' ? styles.tabCellActive : styles.tabCellInactive,
-                tab !== 'rentals' &&
-                  (rentalsActivityCount > 0 || pastRentals.length > 0) &&
-                  styles.tabCellMutedAttention,
+                tab !== 'rentals' && rentalsActivityCount > 0 && styles.tabCellMutedAttention,
                 pressed && styles.tabPressed,
               ]}
               accessibilityRole="tab"
@@ -579,8 +658,69 @@ export default function ActivityScreen() {
               <Text style={styles.tabPanelSubline}>
                 Your open and past requests · offers received on each card
               </Text>
+              {pendingListingRentals.length > 0 ? (
+                <>
+                  <Text style={styles.activePastHeading}>Pending listing rentals</Text>
+                  <Text style={styles.pendingListingSubtext}>
+                    Someone requested to rent your equipment · approve or decline
+                  </Text>
+                  {pendingListingRentals.map((row) => {
+                    const title = pendingListingTitle(row);
+                    const priceNum = Number(row.price);
+                    const priceLabel = Number.isFinite(priceNum) ? formatUsd(priceNum) : '—';
+                    const duration = listingRentalDurationLabel(row.duration_type);
+                    const busy = busyRentalRequestId === row.id;
+                    return (
+                      <View key={row.id} style={styles.pendingListingRentalCard}>
+                        <Text style={styles.matchedRentalTitle} numberOfLines={2}>
+                          {title}
+                        </Text>
+                        <Text style={styles.matchedRentalHint}>{priceLabel}</Text>
+                        <Text style={styles.matchedRentalHint}>{duration}</Text>
+                        <View style={styles.pendingRentalBtnRow}>
+                          <Pressable
+                            disabled={busy}
+                            pressOpacityFeedback={false}
+                            haptic
+                            style={({ pressed }) => [
+                              styles.pendingRentalBtn,
+                              styles.pendingRentalBtnApprove,
+                              busy && styles.pendingRentalBtnDisabled,
+                              pressed && !busy && styles.pendingRentalBtnApprovePressed,
+                            ]}
+                            onPress={() => void onApproveListingRental(row.id)}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Approve rental request for ${title}`}
+                          >
+                            <Text style={styles.pendingRentalBtnApproveText}>Approve</Text>
+                          </Pressable>
+                          <Pressable
+                            disabled={busy}
+                            pressOpacityFeedback={false}
+                            haptic
+                            style={({ pressed }) => [
+                              styles.pendingRentalBtn,
+                              styles.pendingRentalBtnDecline,
+                              busy && styles.pendingRentalBtnDisabled,
+                              pressed && !busy && styles.pendingRentalBtnDeclinePressed,
+                            ]}
+                            onPress={() => void onDeclineListingRental(row.id)}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Decline rental request for ${title}`}
+                          >
+                            <Text style={styles.pendingRentalBtnDeclineText}>Decline</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    );
+                  })}
+                  <View style={[styles.sectionRule, styles.sectionRuleTight]} />
+                </>
+              ) : null}
               {activeRequestsSorted.length === 0 && pastRequestsSorted.length === 0 ? (
-                <Text style={styles.emptyText}>No requests yet. Tap + to request equipment.</Text>
+                pendingListingRentals.length === 0 ? (
+                  <Text style={styles.emptyText}>No requests yet. Tap + to request equipment.</Text>
+                ) : null
               ) : (
                 <>
                   {activeRequestsSorted.length > 0 ? (
@@ -662,119 +802,126 @@ export default function ActivityScreen() {
             <View
               style={[
                 styles.tabPanel,
-                (rentalsActivityCount > 0 || pastRentals.length > 0) && styles.tabPanelAttention,
+                rentalsActivityCount > 0 && styles.tabPanelAttention,
               ]}
             >
               <Text style={styles.tabPanelSubline}>
-                Accepted matches, active rentals, and completed history
+                Accepted offers on requests (matched, active, and completed)
               </Text>
-              {activeRentalsSorted.length === 0 &&
-              matchedRentalsSorted.length === 0 &&
-              pastRentals.length === 0 ? (
+              {offerFlowRentalsSorted.length === 0 ? (
                 <View style={styles.emptyBlock}>
                   <Text style={styles.emptyTitle}>No rentals yet</Text>
                   <Text style={styles.emptySubline}>
-                    When an offer is accepted you will see it here, then active and completed stages.
+                    When an offer is accepted on a request, it shows here under Currently renting or
+                    Renting out.
                   </Text>
                 </View>
               ) : (
                 <>
-                  {matchedRentalsSorted.length > 0 ? (
-                    <>
-                      <Text style={styles.activePastHeading}>Accepted</Text>
-                      {matchedRentalsSorted.map((req) => {
-                      const ts = req.timestamp as number | undefined;
-                      const title = String(req.toolName ?? '').trim() || 'Untitled';
-                      const detailsId = getRequestSupabaseRowId(req as Record<string, unknown>);
-                      return (
-                        <CardPressable
-                          key={ts != null ? `m-${ts}` : title}
-                          onPress={() => {
-                            if (!detailsId) return;
-                            router.push({
-                              pathname: '/request-details',
-                              params: { requestId: detailsId },
-                            });
-                          }}
-                          disabled={!detailsId}
-                          style={({ pressed }) => [
-                            styles.matchedRentalCard,
-                            pressed && styles.matchedRentalCardPressed,
-                          ]}
+                  <View style={styles.rentalsSubTabRow}>
+                    <Pressable
+                      onPress={() => setRentalsSubView('renting')}
+                      style={({ pressed }) => [
+                        styles.rentalsSubTabCell,
+                        rentalsSubView === 'renting'
+                          ? styles.tabCellActive
+                          : styles.tabCellInactive,
+                        pressed && styles.tabPressed,
+                      ]}
+                      accessibilityRole="tab"
+                      accessibilityState={{ selected: rentalsSubView === 'renting' }}
+                      accessibilityLabel={`Currently renting, ${approvedAsRenter.length} rentals`}
+                    >
+                      <Text
+                        style={[
+                          styles.rentalsSubTabLabel,
+                          rentalsSubView === 'renting' && styles.tabLabelActive,
+                        ]}
+                        numberOfLines={2}
+                      >
+                        Currently renting
+                      </Text>
+                      <View style={rentalsSubView === 'renting' ? styles.tabBadge : styles.tabBadgeMuted}>
+                        <Text
+                          style={
+                            rentalsSubView === 'renting'
+                              ? styles.tabBadgeText
+                              : styles.tabBadgeMutedText
+                          }
                         >
-                          <Text style={styles.matchedRentalTitle} numberOfLines={2}>
-                            {title}
-                          </Text>
-                          <Text style={styles.matchedRentalHint}>
-                            Open for agreement, handoff, or messages
-                          </Text>
-                        </CardPressable>
-                      );
-                    })}
-                  </>
-                ) : null}
-                {activeRentalsSorted.length > 0 ? (
-                  <>
-                    {matchedRentalsSorted.length > 0 ? (
-                      <View style={[styles.sectionRule, styles.sectionRuleTight]} />
-                    ) : null}
-                    <Text style={styles.activePastHeading}>Active</Text>
-                    {activeRentalsSorted.map((req) => {
-                        const ts = req.timestamp as number;
-                        const title = String(req.toolName ?? '').trim() || 'Untitled';
-                        const party = getOtherPartyRentalPreview({
-                          timestamp: ts,
-                          posterUserId: req.posterUserId,
-                          matched: req.matched,
-                          acceptedOfferId: req.acceptedOfferId,
-                        });
-                        const rentalStart =
-                          typeof req.rentalStart === 'number' && Number.isFinite(req.rentalStart)
-                            ? req.rentalStart
-                            : null;
-                        return (
-                          <View key={ts} style={styles.activeCard}>
-                            <View style={styles.activeCardInfo}>
-                              <Text style={styles.activeToolName} numberOfLines={2}>
+                          {rentalsSubTabBadgeCount(approvedAsRenter.length)}
+                        </Text>
+                      </View>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => setRentalsSubView('listing')}
+                      style={({ pressed }) => [
+                        styles.rentalsSubTabCell,
+                        rentalsSubView === 'listing'
+                          ? styles.tabCellActive
+                          : styles.tabCellInactive,
+                        pressed && styles.tabPressed,
+                      ]}
+                      accessibilityRole="tab"
+                      accessibilityState={{ selected: rentalsSubView === 'listing' }}
+                      accessibilityLabel={`Renting out, ${approvedAsOwner.length} matches`}
+                    >
+                      <Text
+                        style={[
+                          styles.rentalsSubTabLabel,
+                          rentalsSubView === 'listing' && styles.tabLabelActive,
+                        ]}
+                        numberOfLines={2}
+                      >
+                        Renting out
+                      </Text>
+                      <View style={rentalsSubView === 'listing' ? styles.tabBadge : styles.tabBadgeMuted}>
+                        <Text
+                          style={
+                            rentalsSubView === 'listing'
+                              ? styles.tabBadgeText
+                              : styles.tabBadgeMutedText
+                          }
+                        >
+                          {rentalsSubTabBadgeCount(approvedAsOwner.length)}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  </View>
+
+                  {rentalsSubView === 'renting' ? (
+                    approvedAsRenter.length === 0 ? (
+                      <View style={styles.emptyBlock}>
+                        <Text style={styles.emptyTitle}>Nothing here yet</Text>
+                        <Text style={styles.emptySubline}>
+                          When your offer is accepted on someone else's request, it appears here.
+                        </Text>
+                      </View>
+                    ) : (
+                      <>
+                        <Text style={styles.activePastHeading}>My rentals</Text>
+                        {approvedAsRenter.map((request, idx) => {
+                          const row = request as Record<string, unknown>;
+                          const title = offerFlowRequestTitle(row);
+                          const priceLabel = offerFlowRequestPriceLabel(row, offers);
+                          const phase = offerFlowRentalPhaseLabel(row);
+                          const detailsId = getRequestSupabaseRowId(row);
+                          const rowKey =
+                            detailsId ??
+                            (typeof request.timestamp === 'number'
+                              ? `ts_${request.timestamp}`
+                              : `renter_rental_${idx}`);
+                          return (
+                            <View key={rowKey} style={styles.matchedRentalCard}>
+                              <Text style={styles.matchedRentalTitle} numberOfLines={2}>
                                 {title}
                               </Text>
-                              <View style={styles.activeBlockSpacer} />
-                              <Text style={styles.activeWithLine} numberOfLines={2}>
-                                With: {party?.name ?? '—'} ⭐{' '}
-                                {party != null ? party.rating.toFixed(1) : '—'}
-                              </Text>
-                              <View style={styles.activeBlockSpacer} />
-                              <Text style={styles.activeStartLabel}>Start time</Text>
-                              <Text style={styles.activeStartValue}>
-                                {rentalStart != null ? formatRentalStart(rentalStart) : '—'}
-                              </Text>
-                              {rentalStart != null ? (
-                                <Text style={styles.activeStartedAgo}>
-                                  Started {getTimeAgo(rentalStart)}
-                                </Text>
-                              ) : null}
+                              <Text style={styles.matchedRentalHint}>{priceLabel}</Text>
                               <View style={styles.activeBlockSpacer} />
                               <View style={styles.activeStatusRow}>
                                 <View style={styles.activeStatusDot} />
-                                <Text style={styles.activeStatusLabel}>Active</Text>
+                                <Text style={styles.activeStatusLabel}>{phase}</Text>
                               </View>
-                            </View>
-                            <View style={styles.activeBetweenCardSpacer} />
-                            <View style={styles.activeActionsColumn}>
-                              <Pressable
-                                pressOpacityFeedback={false}
-                                haptic
-                                style={({ pressed }) => [
-                                  styles.activeBtnPrimaryLarge,
-                                  pressed && styles.activeBtnPressed,
-                                ]}
-                                onPress={() => {
-                                  if (ts == null) return;
-                                  openChatForRequest(router, ts);
-                                }}
-                              >
-                                <Text style={styles.activeBtnPrimaryLargeText}>Message</Text>
-                              </Pressable>
                               <View style={styles.activeBtnStackGap} />
                               <Pressable
                                 pressOpacityFeedback={false}
@@ -784,57 +931,73 @@ export default function ActivityScreen() {
                                   pressed && styles.activeBtnPressed,
                                 ]}
                                 onPress={() => {
-                                  if (ts == null) return;
+                                  if (!detailsId) return;
                                   router.push({
-                                    pathname: '/end-rental',
-                                    params: { requestId: String(ts) },
+                                    pathname: '/request-details',
+                                    params: { requestId: detailsId },
                                   });
                                 }}
+                                disabled={!detailsId}
+                                accessibilityRole="button"
+                                accessibilityLabel="View rental details"
                               >
-                                <Text style={styles.activeBtnPrimaryLargeText}>End Rental</Text>
+                                <Text style={styles.activeBtnPrimaryLargeText}>View Details</Text>
                               </Pressable>
                             </View>
+                          );
+                        })}
+                      </>
+                    )
+                  ) : approvedAsOwner.length === 0 ? (
+                    <View style={styles.emptyBlock}>
+                      <Text style={styles.emptyTitle}>Nothing here yet</Text>
+                      <Text style={styles.emptySubline}>
+                        When an offer is accepted on your request, it appears under Renting out.
+                      </Text>
+                    </View>
+                  ) : (
+                    <>
+                      <Text style={styles.activePastHeading}>Your requests</Text>
+                      {approvedAsOwner.map((request, idx) => {
+                        const row = request as Record<string, unknown>;
+                        const title = offerFlowRequestTitle(row);
+                        const priceLabel = offerFlowRequestPriceLabel(row, offers);
+                        const phase = offerFlowRentalPhaseLabel(row);
+                        const rowKey =
+                          getRequestSupabaseRowId(row) ??
+                          (typeof request.timestamp === 'number'
+                            ? `ts_${request.timestamp}`
+                            : `owner_rental_${idx}`);
+                        return (
+                          <View key={rowKey} style={styles.matchedRentalCard}>
+                            <Text style={styles.matchedRentalTitle} numberOfLines={2}>
+                              {title}
+                            </Text>
+                            <Text style={styles.matchedRentalHint}>{priceLabel}</Text>
+                            <View style={styles.activeBlockSpacer} />
+                            <View style={styles.activeStatusRow}>
+                              <View style={styles.activeStatusDot} />
+                              <Text style={styles.activeStatusLabel}>{phase}</Text>
+                            </View>
+                            <View style={styles.activeBtnStackGap} />
+                            <Pressable
+                              pressOpacityFeedback={false}
+                              haptic
+                              style={({ pressed }) => [
+                                styles.activeBtnPrimaryLarge,
+                                pressed && styles.activeBtnPressed,
+                              ]}
+                              onPress={() => router.push('/(tabs)/chats')}
+                              accessibilityRole="button"
+                              accessibilityLabel="Contact renter"
+                            >
+                              <Text style={styles.activeBtnPrimaryLargeText}>Contact Renter</Text>
+                            </Pressable>
                           </View>
                         );
                       })}
                     </>
-                  ) : null}
-                  {pastRentals.length > 0 ? (
-                    <>
-                      {activeRentalsSorted.length + matchedRentalsSorted.length > 0 ? (
-                        <View style={[styles.sectionRule, styles.sectionRuleTight]} />
-                      ) : null}
-                      <Text style={styles.activePastHeading}>Completed</Text>
-                      {pastRentals.map((req) => {
-                        const ts = req.timestamp as number | undefined;
-                        const title = String(req.toolName ?? '').trim() || 'Untitled';
-                        const detailsId = getRequestSupabaseRowId(req as Record<string, unknown>);
-                        return (
-                          <CardPressable
-                            key={ts != null ? String(ts) : title}
-                            onPress={() => {
-                              if (!detailsId) return;
-                              router.push({
-                                pathname: '/request-details',
-                                params: { requestId: detailsId },
-                              });
-                            }}
-                            disabled={!detailsId}
-                            style={({ pressed }) => [
-                              styles.matchedRentalCard,
-                              styles.pastRentalCard,
-                              pressed && styles.matchedRentalCardPressed,
-                            ]}
-                          >
-                            <Text style={styles.matchedRentalTitle} numberOfLines={2}>
-                              {title}
-                            </Text>
-                            <Text style={styles.matchedRentalHint}>Completed rental — tap for details</Text>
-                          </CardPressable>
-                        );
-                      })}
-                    </>
-                  ) : null}
+                  )}
                 </>
               )}
             </View>
@@ -915,6 +1078,30 @@ const styles = StyleSheet.create({
     alignItems: 'stretch',
     gap: 8,
     marginTop: ui.spaceMd,
+  },
+  rentalsSubTabRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+    marginBottom: ui.spaceMd,
+  },
+  rentalsSubTabCell: {
+    flex: 1,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
+    borderRadius: 12,
+    minHeight: 56,
+  },
+  rentalsSubTabLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: ui.textSecondary,
+    letterSpacing: -0.1,
+    textAlign: 'center',
   },
   tabCell: {
     flex: 1,
@@ -1062,6 +1249,58 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: ui.textSecondary,
     lineHeight: 20,
+  },
+  pendingListingSubtext: {
+    fontSize: 13,
+    color: ui.textSecondary,
+    lineHeight: 18,
+    marginBottom: 12,
+    marginTop: -4,
+  },
+  pendingListingRentalCard: {
+    ...cardChrome,
+    marginBottom: 12,
+    paddingVertical: 14,
+    paddingHorizontal: ui.padCard,
+  },
+  pendingRentalBtnRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  pendingRentalBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: ui.radiusButton,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pendingRentalBtnApprove: {
+    backgroundColor: ui.primary,
+  },
+  pendingRentalBtnApprovePressed: {
+    backgroundColor: ui.primaryPressed,
+  },
+  pendingRentalBtnApproveText: {
+    color: ui.primaryOn,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  pendingRentalBtnDecline: {
+    backgroundColor: ui.background,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.danger,
+  },
+  pendingRentalBtnDeclinePressed: {
+    backgroundColor: '#FFEBEE',
+  },
+  pendingRentalBtnDeclineText: {
+    color: ui.danger,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  pendingRentalBtnDisabled: {
+    opacity: 0.55,
   },
   activePastHeading: {
     fontSize: 13,

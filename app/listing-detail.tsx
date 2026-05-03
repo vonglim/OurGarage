@@ -1,6 +1,7 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   FlatList,
   Image,
   ScrollView,
@@ -278,12 +279,26 @@ export default function ListingDetailScreen() {
 
                   const price = priceForDuration(listing.price, selectedDuration);
 
-                  await insertRentalRequest({
-                    listingId: listing.id,
-                    renterUserId: renterId,
-                    durationType: selectedDuration,
-                    price,
-                  });
+                  try {
+                    await insertRentalRequest({
+                      listingId: listing.id,
+                      renterUserId: renterId,
+                      durationType: selectedDuration,
+                      price,
+                    });
+                  } catch (err: unknown) {
+                    const msg =
+                      err instanceof Error
+                        ? err.message
+                        : typeof err === 'object' &&
+                            err !== null &&
+                            'message' in err &&
+                            typeof (err as { message: unknown }).message === 'string'
+                          ? (err as { message: string }).message
+                          : String(err ?? 'Unknown error');
+                    console.error('[rental_requests] Request Rental failed', err);
+                    Alert.alert('Could not send rental request', msg);
+                  }
                 }}
                 style={({ pressed }) => [
                   styles.primaryBtn,
