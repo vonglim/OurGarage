@@ -329,12 +329,6 @@ export default function OfferDetailScreen() {
   };
 
   const onConfirmRental = () => {
-    console.log('handleConfirmRental start', {
-      posterCanConfirmRental,
-      hasRequest: !!request,
-      hasOffer: !!offer,
-      offerStatus: offer?.status,
-    });
     if (!posterCanConfirmRental || !request || !offer) {
       console.warn('Confirm rental: early exit (state does not allow confirm)', {
         posterCanConfirmRental,
@@ -525,7 +519,6 @@ export default function OfferDetailScreen() {
               {canAcceptCurrent ? (
                 <RNPressable
                   onPress={() => {
-                    console.log('ACCEPT CLICKED');
                     handleAcceptOffer();
                   }}
                   style={({ pressed }) => [
@@ -618,7 +611,6 @@ export default function OfferDetailScreen() {
                 pressOpacityFeedback={false}
                 haptic
                 onPress={() => {
-                  console.log('CONFIRM RENTAL CLICKED');
                   onConfirmRental();
                 }}
                 style={({ pressed }) => [

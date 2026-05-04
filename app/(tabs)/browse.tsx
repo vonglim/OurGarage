@@ -15,7 +15,6 @@ import {
 import { formatMilesShort, milesFromViewerToRequest } from '@/lib/requestDistance';
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { normalizeListingImages } from '@/lib/normalizeListingImages';
-import { getSupabase } from '@/lib/supabase';
 import type { ToolListing } from '@/store/listingsStore';
 import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
 import { refreshRequestsFromSupabase, useRequestsStore } from '@/store/requestsStore';
@@ -74,15 +73,6 @@ export default function Browse() {
 
   const listings = useListingsStore((s) => s.listings);
   const requests = useRequestsStore((state) => state.requests);
-
-  useEffect(() => {
-    void (async () => {
-      const supabase = getSupabase();
-      const { data, error } = await supabase.from('requests').select('*');
-      console.log('data', data);
-      console.log('error', error);
-    })();
-  }, []);
 
   useFocusEffect(
     useCallback(() => {

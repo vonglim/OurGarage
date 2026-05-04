@@ -1,3 +1,6 @@
+import { Pressable } from '@/components/Pressable';
+import { ScreenBackButton } from '@/components/ScreenBackButton';
+import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -10,14 +13,16 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { Pressable } from '@/components/Pressable';
-import { ScreenBackButton } from '@/components/ScreenBackButton';
-import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { subtleControlPressed, ui } from '@/constants/appUi';
+import { useProfileCacheVersion } from '@/hooks/useProfileCacheVersion';
+import { useAuthUserId } from '@/lib/authUser';
 import { getProfileNameForUserId, prefetchProfileNamesForUserIds } from '@/lib/profileDisplayName';
 import { getPublicProfileForView } from '@/lib/publicProfiles';
+import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
+import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import {
   addChatMessage,
   getOtherParticipant,
@@ -27,11 +32,9 @@ import {
   useChatStore,
   type ChatMessage,
 } from '@/store/chatStore';
-import { useAuthUserId } from '@/lib/authUser';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
+import { getOfferById } from '@/store/offersStore';
 import { getRequestByTimestamp } from '@/store/requestsStore';
-import { subtleControlPressed, ui } from '@/constants/appUi';
-import { useProfileCacheVersion } from '@/hooks/useProfileCacheVersion';
 
 /** Metro sets `__DEV__` — true in development, stripped/false in production release builds. */
 declare const __DEV__: boolean;
@@ -41,8 +44,23 @@ export default function ChatDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const chatId = typeof id === 'string' ? id : Array.isArray(id) ? id[0] : '';
-  const chats = useChatStore((state) => state.chats);
+  const chatStore = useChatStore((s) => s);
+  const chats = chatStore.chats;
   const chat = chats.find((c) => c.id === chatId);
+
+  useEffect(() => {
+    if (!chatId) return;
+
+    const existing = chatStore.chats.find((c) => c.id === chatId);
+
+    if (!existing) {
+      if (__DEV__) {
+        console.log("Chat missing from store, forcing sync:", chatId);
+      }
+      syncChatWithSupabase(chatId);
+    }
+  }, [chatId, chatStore]);
+
   const meId = useAuthUserId();
   const other = chat ? getOtherParticipant(chat, meId) : null;
   useProfileCacheVersion();
@@ -86,6 +104,45 @@ export default function ChatDetailScreen() {
       let cancelled = false;
       void (async () => {
         await syncChatWithSupabase(chatId, { bumpUnreadForNewIncoming: false });
+        if (cancelled) return;
+
+        if (isSupabaseConfigured()) {
+          const c = chatStore.chats.find((x) => x.id === chatId);
+          if (c) {
+            const req = getRequestByTimestamp(c.requestId);
+            if (req != null) {
+              const offerFromChat =
+                c.offerId && c.offerId !== 'legacy' ? String(c.offerId).trim() : '';
+              const fromReq =
+                typeof (req as { acceptedOfferId?: string | null }).acceptedOfferId === 'string'
+                  ? String((req as { acceptedOfferId: string }).acceptedOfferId).trim()
+                  : '';
+              const offerUuid = (offerFromChat || fromReq).trim();
+              if (offerUuid !== '' && getOfferById(offerUuid) != null) {
+                const requestRowId = getRequestSupabaseRowId(req as Record<string, unknown>);
+                const rid =
+                  requestRowId != null && String(requestRowId).trim() !== ''
+                    ? String(requestRowId).trim()
+                    : '';
+                const supabase = getSupabase();
+                if (rid) {
+                  await supabase
+                    .from('offer_messages')
+                    .select('*')
+                    .eq('request_id', rid)
+                    .order('created_at', { ascending: true });
+                } else {
+                  await supabase
+                    .from('offer_messages')
+                    .select('*')
+                    .eq('offer_id', offerUuid)
+                    .order('created_at', { ascending: true });
+                }
+              }
+            }
+          }
+        }
+
         if (!cancelled) markChatRead(chatId);
       })();
       return () => {
@@ -158,7 +215,7 @@ export default function ChatDetailScreen() {
             </View>
           </View>
           <View style={styles.center}>
-            <Text style={styles.missing}>This chat is not available.</Text>
+          <Text style={styles.missing}>Loading chat...</Text>
           </View>
         </ScreenEntrance>
       </KeyboardDismissScreen>
@@ -217,10 +274,6 @@ export default function ChatDetailScreen() {
             const isCurrentUser = message.senderId === currentUserId;
             const prev = index > 0 ? visibleMessages[index - 1] : null;
             const senderChanged = prev != null && prev.senderId !== message.senderId;
-            if (__DEV__) {
-              console.log('message sender:', message.senderId);
-              console.log('current user:', currentUserId);
-            }
             return (
               <View style={styles.messageRow}>
                 <View

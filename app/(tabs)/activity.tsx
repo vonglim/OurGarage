@@ -1,48 +1,13 @@
-import { useFocusEffect } from '@react-navigation/native';
-import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import type { AppNotification } from '@/store/notificationsStore';
 import { CardPressable } from '@/components/CardPressable';
-import { Pressable } from '@/components/Pressable';
-import { ScreenEntrance } from '@/components/ScreenEntrance';
-import { Swipeable } from 'react-native-gesture-handler';
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
-import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
+import { Pressable } from '@/components/Pressable';
 import {
   RequestListCardInner,
   requestListCardSurface,
 } from '@/components/RequestListCardInner';
-import { formatMilesShort } from '@/lib/requestDistance';
-import {
-  activityRequestInvolvesUser,
-  getRequestOwnerId,
-  offerCountsForActivityRow,
-  rentalRequestInvolvesUser,
-} from '@/lib/activityScope';
-import {
-  fetchPendingRentalRequestsForOwner,
-  type PendingListingRentalRow,
-} from '@/lib/fetchPendingRentalRequestsForOwner';
-import { updateRentalRequestStatus } from '@/lib/updateRentalRequestStatus';
-import { markAllNotificationsAsRead } from '@/lib/markNotificationsRead';
-import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
-import { formatUsd, getNumericOfferPrice } from '@/lib/money';
-import type { Offer } from '@/store/offersStore';
-import { removeOffersForRequest, useOffersStore } from '@/store/offersStore';
-import { refreshActivityScreenFromSupabase } from '@/lib/supabaseActivityRefresh';
-import { getSupabase } from '@/lib/supabase';
-import {
-  getEffectiveRentalStatus,
-  removeRequest,
-  resolveRequestFromRouteId,
-  useRequestsStore,
-} from '@/store/requestsStore';
-import { useNotificationsStore } from '@/store/notificationsStore';
-import { useTotalUnreadChatCount } from '@/store/chatStore';
-import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
-import { useAuthUserId } from '@/lib/authUser';
+import { ScreenEntrance } from '@/components/ScreenEntrance';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import {
   cardChrome,
   primarySolidPressed,
@@ -51,6 +16,47 @@ import {
   shadowSegmentAttention,
   ui,
 } from '@/constants/appUi';
+import {
+  activityRequestInvolvesUser,
+  getRequestOwnerId,
+  offerCountsForActivityRow,
+} from '@/lib/activityScope';
+import { useAuthUserId } from '@/lib/authUser';
+import {
+  fetchPendingRentalRequestsForOwner,
+  type PendingListingRentalRow,
+} from '@/lib/fetchPendingRentalRequestsForOwner';
+import {
+  fetchUnifiedRentalsForUser,
+  unifiedRentalTitle,
+  type UnifiedRentalRow,
+} from '@/lib/fetchUnifiedRentalsForUser';
+import { markAllNotificationsAsRead } from '@/lib/markNotificationsRead';
+import { formatUsd, getNumericOfferPrice } from '@/lib/money';
+import { formatMilesShort } from '@/lib/requestDistance';
+import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
+import { getSupabase } from '@/lib/supabase';
+import { refreshActivityScreenFromSupabase } from '@/lib/supabaseActivityRefresh';
+import { updateRentalRequestStatus } from '@/lib/updateRentalRequestStatus';
+import { useChatStore, useTotalUnreadChatCount } from '@/store/chatStore';
+import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
+import type { AppNotification } from '@/store/notificationsStore';
+import { useNotificationsStore } from '@/store/notificationsStore';
+import type { Offer } from '@/store/offersStore';
+import { removeOffersForRequest, useOffersStore } from '@/store/offersStore';
+import {
+  getEffectiveRentalStatus,
+  removeRequest,
+  resolveRequestFromRouteId,
+  useRequestsStore,
+} from '@/store/requestsStore';
+import { useFocusEffect } from '@react-navigation/native';
+import { useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
+
+declare const __DEV__: boolean;
 
 function formatOffersReceived(n: number): string {
   if (n === 1) return '1 offer received';
@@ -109,34 +115,6 @@ function pendingListingTitle(row: PendingListingRentalRow): string {
   return name || row.listing_id;
 }
 
-function offerFlowRequestTitle(req: Record<string, unknown>): string {
-  const t = String(req.toolName ?? '').trim();
-  return t || 'Equipment request';
-}
-
-function offerFlowRequestPriceLabel(req: Record<string, unknown>, offersList: Offer[]): string {
-  const raw = req.acceptedPrice ?? req.accepted_price;
-  const n = typeof raw === 'number' ? raw : Number(raw);
-  if (Number.isFinite(n) && n >= 0) return formatUsd(n);
-  const accId = req.acceptedOfferId;
-  if (typeof accId === 'string' && accId.trim()) {
-    const o = offersList.find((x) => x.id === accId.trim());
-    if (o) {
-      const p = getNumericOfferPrice(o);
-      if (Number.isFinite(p)) return formatUsd(p);
-    }
-  }
-  return '—';
-}
-
-function offerFlowRentalPhaseLabel(req: Record<string, unknown>): string {
-  const st = getEffectiveRentalStatus(req as Parameters<typeof getEffectiveRentalStatus>[0]);
-  if (st === 'matched') return 'Matched';
-  if (st === 'active') return 'Active rental';
-  if (st === 'completed') return 'Completed';
-  return 'Rental';
-}
-
 type OutgoingOfferStatus = 'pending' | 'countered' | 'awaiting_poster' | 'accepted' | 'declined';
 
 function getOutgoingOfferStatus(o: Offer, req: unknown): OutgoingOfferStatus {
@@ -164,7 +142,7 @@ function getOutgoingOfferStatus(o: Offer, req: unknown): OutgoingOfferStatus {
 
 type ActivityTab = 'requests' | 'offers' | 'rentals';
 
-/** Rentals tab: renter-side vs poster-side for request / offer accepted matches. */
+/** Rentals tab: borrower vs equipment-owner segments (`rentals` table). */
 type RentalsSubView = 'renting' | 'listing';
 
 function outgoingOfferStatusLabel(s: OutgoingOfferStatus): string {
@@ -196,6 +174,7 @@ export default function ActivityScreen() {
   const hasUnreadMessages = unreadCount > 0;
   const requests = useRequestsStore((s) => s.requests);
   const [pendingListingRentals, setPendingListingRentals] = useState<PendingListingRentalRow[]>([]);
+  const [unifiedRentals, setUnifiedRentals] = useState<UnifiedRentalRow[]>([]);
   const [busyRentalRequestId, setBusyRentalRequestId] = useState<string | null>(null);
 
   const refreshListingRentalRequests = useCallback(async () => {
@@ -208,8 +187,21 @@ export default function ActivityScreen() {
     setPendingListingRentals(pending);
   }, [me]);
 
+  const refreshUnifiedRentals = useCallback(async () => {
+    const uid = me.trim();
+    if (!uid) {
+      setUnifiedRentals([]);
+      return;
+    }
+    const rows = await fetchUnifiedRentalsForUser(uid);
+    setUnifiedRentals(rows);
+  }, [me]);
+
   const refreshListingRentalRequestsRef = useRef(refreshListingRentalRequests);
   refreshListingRentalRequestsRef.current = refreshListingRentalRequests;
+
+  const refreshUnifiedRentalsRef = useRef(refreshUnifiedRentals);
+  refreshUnifiedRentalsRef.current = refreshUnifiedRentals;
 
   useFocusEffect(
     useCallback(() => {
@@ -217,7 +209,8 @@ export default function ActivityScreen() {
       void refreshActivityScreenFromSupabase();
       markAllNotificationsAsRead();
       void refreshListingRentalRequests();
-    }, [refreshListingRentalRequests])
+      void refreshUnifiedRentals();
+    }, [refreshListingRentalRequests, refreshUnifiedRentals])
   );
 
   useEffect(() => {
@@ -240,6 +233,26 @@ export default function ActivityScreen() {
     };
   }, [me]);
 
+  useEffect(() => {
+    const uid = me.trim();
+    if (!uid) return;
+    const supabase = getSupabase();
+    const channelId =
+      typeof globalThis.crypto?.randomUUID === 'function'
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+    const channel = supabase.channel(`activity_unified_rentals:${uid}:${channelId}`);
+    channel.on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'rentals' },
+      () => void refreshUnifiedRentalsRef.current()
+    );
+    channel.subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [me]);
+
   const onApproveListingRental = useCallback(
     async (id: string) => {
       setBusyRentalRequestId(id);
@@ -249,10 +262,13 @@ export default function ActivityScreen() {
         setBusyRentalRequestId(null);
         return;
       }
+      await refreshActivityScreenFromSupabase();
+      router.back();
       await refreshListingRentalRequests();
+      await refreshUnifiedRentals();
       setBusyRentalRequestId(null);
     },
-    [refreshListingRentalRequests]
+    [refreshListingRentalRequests, refreshUnifiedRentals]
   );
 
   const onDeclineListingRental = useCallback(
@@ -296,28 +312,14 @@ export default function ActivityScreen() {
   const swipeRefs = useRef(new Map<number, Swipeable>());
   const fabBottomReserve = useMainTabFabBottomReserve();
 
-  /** Request → offer → accepted: matched / active / completed (Supabase `rentals` row corresponds to these). */
-  const offerFlowRentalsSorted = useMemo(() => {
-    const rows = sortedActivityPool.filter((r) =>
-      rentalRequestInvolvesUser(r as Record<string, unknown>, me)
-    );
-    return [...rows].sort(byTimestampDesc);
-  }, [sortedActivityPool, me]);
-
   const approvedAsRenter = useMemo(
-    () =>
-      offerFlowRentalsSorted.filter(
-        (r) => getRequestOwnerId(r as Record<string, unknown>) === me
-      ),
-    [offerFlowRentalsSorted, me]
+    () => unifiedRentals.filter((r) => r.renter_user_id === me),
+    [unifiedRentals, me]
   );
 
   const approvedAsOwner = useMemo(
-    () =>
-      offerFlowRentalsSorted.filter(
-        (r) => getRequestOwnerId(r as Record<string, unknown>) !== me
-      ),
-    [offerFlowRentalsSorted, me]
+    () => unifiedRentals.filter((r) => r.owner_user_id === me),
+    [unifiedRentals, me]
   );
 
   const activeRequestsSorted = useMemo(
@@ -362,7 +364,7 @@ export default function ActivityScreen() {
     return n;
   }, [myLenderOffers, requests, offers]);
 
-  const rentalsTotalCount = offerFlowRentalsSorted.length;
+  const rentalsTotalCount = unifiedRentals.length;
 
   const requestsActivityCount = useMemo(() => {
     let total = 0;
@@ -391,8 +393,8 @@ export default function ActivityScreen() {
     return total;
   }, [notifications, ownedRequestsSorted, offers, me]);
 
-  /** Accepted offer rentals (Activity → Rentals tab). */
-  const rentalsActivityCount = offerFlowRentalsSorted.length;
+  /** Unified `rentals` rows (Activity → Rentals tab). */
+  const rentalsActivityCount = unifiedRentals.length;
 
   const goToChats = useCallback(() => {
     router.push('/(tabs)/chats');
@@ -806,14 +808,14 @@ export default function ActivityScreen() {
               ]}
             >
               <Text style={styles.tabPanelSubline}>
-                Accepted offers on requests (matched, active, and completed)
+                Active agreements from requests and listings (your unified rentals)
               </Text>
-              {offerFlowRentalsSorted.length === 0 ? (
+              {unifiedRentals.length === 0 ? (
                 <View style={styles.emptyBlock}>
                   <Text style={styles.emptyTitle}>No rentals yet</Text>
                   <Text style={styles.emptySubline}>
-                    When an offer is accepted on a request, it shows here under Currently renting or
-                    Renting out.
+                    When an agreement is finalized, it appears here under Currently renting or Renting
+                    out.
                   </Text>
                 </View>
               ) : (
@@ -894,25 +896,26 @@ export default function ActivityScreen() {
                       <View style={styles.emptyBlock}>
                         <Text style={styles.emptyTitle}>Nothing here yet</Text>
                         <Text style={styles.emptySubline}>
-                          When your offer is accepted on someone else's request, it appears here.
+                          Rentals where you're the borrower appear here (requests or listings).
                         </Text>
                       </View>
                     ) : (
                       <>
-                        <Text style={styles.activePastHeading}>My rentals</Text>
-                        {approvedAsRenter.map((request, idx) => {
-                          const row = request as Record<string, unknown>;
-                          const title = offerFlowRequestTitle(row);
-                          const priceLabel = offerFlowRequestPriceLabel(row, offers);
-                          const phase = offerFlowRentalPhaseLabel(row);
-                          const detailsId = getRequestSupabaseRowId(row);
-                          const rowKey =
-                            detailsId ??
-                            (typeof request.timestamp === 'number'
-                              ? `ts_${request.timestamp}`
-                              : `renter_rental_${idx}`);
+                        <Text style={styles.activePastHeading}>You are renting</Text>
+                        {approvedAsRenter.map((row) => {
+                          const title = unifiedRentalTitle(row);
+                          const priceNum = Number(row.price);
+                          const priceLabel = Number.isFinite(priceNum) ? formatUsd(priceNum) : '—';
+                          const rid =
+                            typeof row.request_id === 'string' && row.request_id.trim() !== ''
+                              ? row.request_id.trim()
+                              : null;
+                          const lid =
+                            typeof row.listing_id === 'string' && row.listing_id.trim() !== ''
+                              ? row.listing_id.trim()
+                              : null;
                           return (
-                            <View key={rowKey} style={styles.matchedRentalCard}>
+                            <View key={row.id} style={styles.matchedRentalCard}>
                               <Text style={styles.matchedRentalTitle} numberOfLines={2}>
                                 {title}
                               </Text>
@@ -920,7 +923,7 @@ export default function ActivityScreen() {
                               <View style={styles.activeBlockSpacer} />
                               <View style={styles.activeStatusRow}>
                                 <View style={styles.activeStatusDot} />
-                                <Text style={styles.activeStatusLabel}>{phase}</Text>
+                                <Text style={styles.activeStatusLabel}>You are renting</Text>
                               </View>
                               <View style={styles.activeBtnStackGap} />
                               <Pressable
@@ -931,13 +934,29 @@ export default function ActivityScreen() {
                                   pressed && styles.activeBtnPressed,
                                 ]}
                                 onPress={() => {
-                                  if (!detailsId) return;
-                                  router.push({
-                                    pathname: '/request-details',
-                                    params: { requestId: detailsId },
-                                  });
+                                  if (__DEV__) {
+                                    console.log('Rental debug → request_id:', rid, 'listing_id:', lid);
+                                  }
+
+                                  if (rid && rid.trim() !== '') {
+                                    router.push({
+                                      pathname: '/request-details',
+                                      params: { requestId: rid },
+                                    });
+                                    return;
+                                  }
+
+                                  if (lid && lid.trim() !== '') {
+                                    router.push({
+                                      pathname: '/listing-detail',
+                                      params: { listingId: lid },
+                                    });
+                                    return;
+                                  }
+
+                                  alert('This rental is missing its source (no request or listing linked).');
                                 }}
-                                disabled={!detailsId}
+                                disabled={!rid && !lid}
                                 accessibilityRole="button"
                                 accessibilityLabel="View rental details"
                               >
@@ -952,24 +971,18 @@ export default function ActivityScreen() {
                     <View style={styles.emptyBlock}>
                       <Text style={styles.emptyTitle}>Nothing here yet</Text>
                       <Text style={styles.emptySubline}>
-                        When an offer is accepted on your request, it appears under Renting out.
+                        Rentals where you're lending equipment appear here.
                       </Text>
                     </View>
                   ) : (
                     <>
-                      <Text style={styles.activePastHeading}>Your requests</Text>
-                      {approvedAsOwner.map((request, idx) => {
-                        const row = request as Record<string, unknown>;
-                        const title = offerFlowRequestTitle(row);
-                        const priceLabel = offerFlowRequestPriceLabel(row, offers);
-                        const phase = offerFlowRentalPhaseLabel(row);
-                        const rowKey =
-                          getRequestSupabaseRowId(row) ??
-                          (typeof request.timestamp === 'number'
-                            ? `ts_${request.timestamp}`
-                            : `owner_rental_${idx}`);
+                      <Text style={styles.activePastHeading}>You are renting out</Text>
+                      {approvedAsOwner.map((row) => {
+                        const title = unifiedRentalTitle(row);
+                        const priceNum = Number(row.price);
+                        const priceLabel = Number.isFinite(priceNum) ? formatUsd(priceNum) : '—';
                         return (
-                          <View key={rowKey} style={styles.matchedRentalCard}>
+                          <View key={row.id} style={styles.matchedRentalCard}>
                             <Text style={styles.matchedRentalTitle} numberOfLines={2}>
                               {title}
                             </Text>
@@ -977,7 +990,7 @@ export default function ActivityScreen() {
                             <View style={styles.activeBlockSpacer} />
                             <View style={styles.activeStatusRow}>
                               <View style={styles.activeStatusDot} />
-                              <Text style={styles.activeStatusLabel}>{phase}</Text>
+                              <Text style={styles.activeStatusLabel}>Rented out</Text>
                             </View>
                             <View style={styles.activeBtnStackGap} />
                             <Pressable
@@ -987,7 +1000,44 @@ export default function ActivityScreen() {
                                 styles.activeBtnPrimaryLarge,
                                 pressed && styles.activeBtnPressed,
                               ]}
-                              onPress={() => router.push('/(tabs)/chats')}
+                              onPress={() => {
+                                const chats = useChatStore.getState().chats;
+
+                                const chat = chats.find(
+                                  (c) =>
+                                    (row.request_id != null &&
+                                      resolveRequestFromRouteId(row.request_id)?.timestamp ===
+                                        c.requestId) ||
+                                    (c as { listingId?: string | null }).listingId ===
+                                      row.listing_id
+                                );
+
+                                if (!chat) {
+                                  const newChatId = `chat-${Date.now()}`;
+
+                                  useChatStore.getState().createChat({
+                                    id: newChatId,
+                                    requestId:
+                                      resolveRequestFromRouteId(row.request_id)?.timestamp ?? null,
+                                    participants: [
+                                      { userId: row.owner_user_id },
+                                      { userId: row.renter_user_id },
+                                    ],
+                                  });
+
+                                  router.push({
+                                    pathname: '/chat/[id]',
+                                    params: { id: newChatId },
+                                  });
+
+                                  return;
+                                }
+
+                                router.push({
+                                  pathname: '/chat/[id]',
+                                  params: { id: chat.id },
+                                });
+                              }}
                               accessibilityRole="button"
                               accessibilityLabel="Contact renter"
                             >

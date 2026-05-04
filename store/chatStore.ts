@@ -508,7 +508,9 @@ export async function addChatMessage(chatId: string, text: string): Promise<void
     receiverId,
     body: trimmed,
   });
-  console.log('INSERT RESULT', { data: res.data, error: res.error });
+  if (__DEV__) {
+    console.log('INSERT RESULT', { data: res.data, error: res.error });
+  }
   if (res.error != null) {
     console.error('Message insert failed', res.error);
     return;
@@ -589,7 +591,9 @@ export async function syncChatWithSupabase(
   if (rows == null) {
     return;
   }
-  console.log('SYNC RESULT COUNT', rows.length);
+  if (__DEV__) {
+    console.log('SYNC RESULT COUNT', rows.length);
+  }
   if (rows.length === 0) {
     return;
   }
@@ -820,24 +824,79 @@ export function listChatsSortedByLatest(): Chat[] {
   });
 }
 
+export type CreateChatPayload = {
+  id: string;
+  requestId: number | null;
+  participants: [{ userId: string }, { userId: string }];
+};
+
+function createChat(payload: CreateChatPayload): void {
+  ensureLoad();
+  const { id, requestId, participants } = payload;
+  const trimmedId = id.trim();
+  if (!trimmedId || chats.some((c) => c.id === trimmedId)) return;
+
+  const p0 = participants[0];
+  const p1 = participants[1];
+  const a: ChatParticipant = {
+    userId: p0.userId,
+    displayName: displayNameForUserId(p0.userId),
+  };
+  const b: ChatParticipant = {
+    userId: p1.userId,
+    displayName: displayNameForUserId(p1.userId),
+  };
+  const ordered: [ChatParticipant, ChatParticipant] =
+    p0.userId === p1.userId ? withDistinctParticipants(a, b) : sortParticipants(a, b);
+
+  const now = Date.now();
+  chats = [
+    {
+      id: trimmedId,
+      requestId: requestId ?? 0,
+      offerId: 'legacy',
+      participants: ordered,
+      messages: [],
+      createdAt: now,
+      archived: false,
+      unreadCountByUserId: {},
+    },
+    ...chats,
+  ];
+  emit();
+  void persist();
+}
+
 export type ChatStoreState = {
   chats: Chat[];
+  createChat: (payload: CreateChatPayload) => void;
 };
 
 function getChatStoreState(): ChatStoreState {
-  return { chats: listChatsSortedByLatest() };
+  return { chats: listChatsSortedByLatest(), createChat };
+}
+
+function useChatStoreImpl(): ChatStoreState;
+function useChatStoreImpl<T>(selector: (state: ChatStoreState) => T): T;
+function useChatStoreImpl<T>(
+  selector?: (state: ChatStoreState) => T
+): ChatStoreState | T {
+  const sel =
+    selector ?? ((state: ChatStoreState) => state as unknown as T);
+  const selectorRef = useRef(sel);
+  selectorRef.current = sel;
+  const v = useSyncExternalStore(subscribeChats, getVersion, getVersion);
+  return useMemo(() => selectorRef.current!(getChatStoreState()), [v]);
 }
 
 /**
  * Subscribe to chat store; selector runs on each store update (new messages, etc.).
  * Example: `const chats = useChatStore((s) => s.chats);`
+ * `useChatStore()` (no selector) returns the full snapshot, same as `useChatStore((s) => s)`.
  */
-export function useChatStore<T>(selector: (state: ChatStoreState) => T): T {
-  const selectorRef = useRef(selector);
-  selectorRef.current = selector;
-  const v = useSyncExternalStore(subscribeChats, getVersion, getVersion);
-  return useMemo(() => selectorRef.current(getChatStoreState()), [v]);
-}
+export const useChatStore = Object.assign(useChatStoreImpl, {
+  getState: getChatStoreState,
+});
 
 export function useChats(): Chat[] {
   return useChatStore((state) => state.chats);

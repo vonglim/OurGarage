@@ -23,6 +23,8 @@ import { ui } from '@/constants/appUi';
 import { uploadListingImage } from '@/lib/uploadListingImage';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
 
+declare const __DEV__: boolean;
+
 const NAVY = '#0B1F3A';
 const BORDER = '#E5E7EB';
 const HELPER_GRAY = '#6B7280';
@@ -112,8 +114,6 @@ export default function RentOutScreen() {
   }
 
   const handleSubmit = async () => {
-    console.log('Submitting...');
-
     const photoOk = listingPhotoUris.length > 0;
     const titleOk = title.trim().length > 0;
     const dailyOk = daily.trim().length > 0;
@@ -151,7 +151,9 @@ export default function RentOutScreen() {
         }
       }
 
-      console.log('[rent-out] final images for insert', uploadedImageUrls);
+      if (__DEV__) {
+        console.log('[rent-out] final images for insert', uploadedImageUrls);
+      }
 
       const response = await supabase.from('listings').insert({
         title,
@@ -162,9 +164,11 @@ export default function RentOutScreen() {
         replacement_value: Number(replacementValue) || null,
         images: uploadedImageUrls,
       });
-  
-      console.log('FULL RESPONSE:', response);
-  
+
+      if (__DEV__) {
+        console.log('FULL RESPONSE:', response);
+      }
+
       if (response.error) {
         console.error('INSERT ERROR:', response.error);
         alert('Error: ' + response.error.message);

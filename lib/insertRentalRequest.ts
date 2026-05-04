@@ -2,6 +2,8 @@ import { Alert } from 'react-native';
 
 import { getSupabase } from '@/lib/supabase';
 
+declare const __DEV__: boolean;
+
 /** UI / store may still use `weekly`; DB column expects `week`. */
 export type RentalRequestDurationInput = 'half' | 'full' | 'weekly';
 
@@ -38,13 +40,15 @@ export async function insertRentalRequest(row: {
     throw new Error('owner_user_id missing');
   }
 
-  console.log('[INSERT INPUT]', {
-    listingId,
-    renterUserId,
-    ownerUserId,
-    durationType,
-    price,
-  });
+  if (__DEV__) {
+    console.log('[INSERT INPUT]', {
+      listingId,
+      renterUserId,
+      ownerUserId,
+      durationType,
+      price,
+    });
+  }
 
   /** DB constraint uses half | full | week (not weekly). */
   const duration_type = durationTypeForDb(durationType);
@@ -61,7 +65,9 @@ export async function insertRentalRequest(row: {
     })
     .select();
 
-  console.log('[INSERT RESULT]', { data, error });
+  if (__DEV__) {
+    console.log('[INSERT RESULT]', { data, error });
+  }
 
   if (error) {
     console.error('❌ INSERT FAILED', error);

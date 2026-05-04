@@ -4,6 +4,8 @@ import { File as ExpoFsFile } from 'expo-file-system';
 import { getAuthUserIdSync } from '@/lib/authUser';
 import { getSupabase } from '@/lib/supabase';
 
+declare const __DEV__: boolean;
+
 function normalizeContentType(blob: Blob): string {
   const t = blob.type?.trim();
   if (t && t.startsWith('image/')) return t;
@@ -42,7 +44,6 @@ async function loadNativeImageForUpload(localUri: string): Promise<{
       contentType: contentTypeHintFromUri(localUri),
     };
   } catch (e) {
-    console.log('UPLOAD ERROR:', e);
     console.error('[uploadListingImage] native file read failed', e);
     throw e;
   }
@@ -56,14 +57,12 @@ async function loadWebImageForUpload(localUri: string): Promise<{ body: Blob; co
   try {
     response = await fetch(localUri);
   } catch (fetchErr) {
-    console.log('UPLOAD ERROR:', fetchErr);
     console.error('[uploadListingImage] fetch image URI failed', fetchErr);
     throw fetchErr;
   }
 
   if (!response.ok) {
     const msg = `Fetch image failed: HTTP ${response.status}`;
-    console.log('UPLOAD ERROR:', msg);
     throw new Error(msg);
   }
 
@@ -73,7 +72,6 @@ async function loadWebImageForUpload(localUri: string): Promise<{ body: Blob; co
   try {
     blob = await response.blob();
   } catch (blobErr) {
-    console.log('UPLOAD ERROR:', blobErr);
     console.error('[uploadListingImage] response.blob() failed', blobErr);
     throw blobErr;
   }
@@ -86,13 +84,11 @@ async function loadWebImageForUpload(localUri: string): Promise<{ body: Blob; co
       const buf = await fallbackCopy.arrayBuffer();
       if (!buf || buf.byteLength === 0) {
         const msg = 'Empty image data';
-        console.log('UPLOAD ERROR:', msg);
         throw new Error(msg);
       }
       uploadBlob = new Blob([buf], { type: contentType });
       contentType = normalizeContentType(uploadBlob);
     } catch (fallbackErr) {
-      console.log('UPLOAD ERROR:', fallbackErr);
       console.error('[uploadListingImage] empty blob fallback failed', fallbackErr);
       throw fallbackErr;
     }
@@ -130,7 +126,6 @@ export async function uploadListingImage(localUri: string): Promise<string> {
   });
 
   if (error) {
-    console.log('UPLOAD ERROR:', error);
     console.error('[uploadListingImage] storage upload error', error);
     throw error;
   }
@@ -138,11 +133,12 @@ export async function uploadListingImage(localUri: string): Promise<string> {
   const { data } = supabase.storage.from('listing-images').getPublicUrl(path);
   const publicUrl = data.publicUrl;
   if (typeof publicUrl !== 'string' || !publicUrl.startsWith('http')) {
-    console.log('UPLOAD ERROR:', data);
     console.error('[uploadListingImage] invalid public URL', data);
     throw new Error('Could not resolve public URL for uploaded image');
   }
 
-  console.log('[uploadListingImage] upload success', publicUrl);
+  if (__DEV__) {
+    console.log('[uploadListingImage] upload success', publicUrl);
+  }
   return publicUrl;
 }

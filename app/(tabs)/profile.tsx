@@ -293,7 +293,6 @@ export default function ProfileScreen() {
               <Button
                 title="Logout"
                 onPress={async () => {
-                  console.log('LOGOUT CLICKED');
                   const { error } = await supabase.auth.signOut();
                   if (error) {
                     console.error('Logout error', error);

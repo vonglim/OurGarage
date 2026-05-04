@@ -28,6 +28,8 @@ import {
   useListingsStore,
 } from '@/store/listingsStore';
 
+declare const __DEV__: boolean;
+
 /** Browse/supabase rows attach `images` at runtime; store type stays unchanged. */
 type ListingDetailRow = ToolListing & { images?: string[] };
 
@@ -112,8 +114,10 @@ export default function ListingDetailScreen() {
     [row.images]
   );
 
-  console.log('RAW images:', row.images);
-  console.log('NORMALIZED images:', heroUrls);
+  if (__DEV__) {
+    console.log('RAW images:', row.images);
+    console.log('NORMALIZED images:', heroUrls);
+  }
   const pageWidth = heroWidth > 0 ? heroWidth : windowWidth;
 
   useEffect(() => {

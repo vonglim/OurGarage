@@ -65,14 +65,15 @@ export async function persistAcceptOfferToSupabase(
     }
 
     logOfferSync('before_write', 'persistAcceptOffer: insert rental', { requestRowId });
-    const { error: e3 } = await supabase.from('rentals').insert({
+    const payload = {
+      renter_user_id: renterId,
+      owner_user_id: ownerId,
       request_id: requestRowId,
-      offer_id: acceptedOfferId,
-      owner_id: ownerId,
-      renter_id: renterId,
       price,
-      status: 'active',
-    });
+      duration_type: 'full' as const,
+    };
+    console.log('[RENTALS INSERT]', payload);
+    const { error: e3 } = await supabase.from('rentals').insert(payload);
     if (e3) {
       logOfferSync('supabase_response', 'rental insert failed', e3.message);
       return false;

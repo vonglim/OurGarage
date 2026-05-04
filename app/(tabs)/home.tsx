@@ -163,8 +163,6 @@ export default function Home() {
   );
 
   const fetchListings = async () => {
-    console.log('Fetching listings...');
-  
     try {
       const { supabase } = await import('@/lib/supabase');
   
@@ -179,8 +177,7 @@ export default function Home() {
         console.error('Fetch error:', error);
         return;
       }
-  
-      console.log('Listings from DB:', data);
+
       const mapped = (data || []).map((item) => {
         const createdRaw = item.created_at;
         const createdMs =
