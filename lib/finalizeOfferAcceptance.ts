@@ -143,18 +143,32 @@ export async function finalizeOfferAcceptance(
       return { ok: false, error: e2b.message || 'Could not update other offers' };
     }
 
+    const ownerIdForRental =
+      typeof rec.poster_user_id === 'string' && rec.poster_user_id.trim() !== ''
+        ? rec.poster_user_id.trim()
+        : typeof rec.posterUserId === 'string'
+          ? rec.posterUserId.trim()
+          : owner;
     const payload = {
-      renter_user_id: renterId,
-      owner_user_id: owner,
       request_id: requestRowId,
-      price: acceptedPrice,
-      duration_type: (() => {
-        const v = rec.duration_type ?? rec.durationType;
-        return typeof v === 'string' && v.trim() !== '' ? v.trim() : 'full';
-      })(),
+      offer_id: offer.id,
+      renter_user_id: offer.renterId,
+      owner_user_id: ownerIdForRental,
+      status: 'pending_meetup' as const,
+      duration_type:
+        (typeof requestRow.durationType === 'string' && requestRow.durationType.trim() !== ''
+          ? requestRow.durationType
+          : typeof rec.duration_type === 'string' && rec.duration_type.trim() !== ''
+            ? rec.duration_type
+            : 'fullDay'),
+      price: offer.price ?? 0,
     };
     console.log('[RENTALS INSERT]', payload);
-    const { error: e3 } = await supabase.from('rentals').insert(payload);
+    const { data: rentalRow, error: e3 } = await supabase
+      .from('rentals')
+      .insert(payload)
+      .select('id')
+      .single();
     if (e3) {
       console.error('CONFIRM RENTAL ERROR (rentals insert)', e3);
       return { ok: false, error: e3.message || 'Rental record failed' };
@@ -176,14 +190,25 @@ export async function finalizeOfferAcceptance(
     }
     emitAcceptMatchSideEffects(before, ts, acceptedOfferId, acceptedPrice);
 
-    router.push({
-      pathname: '/rental-agreement',
-      params: {
-        requestId: requestRowId,
-        offerId: acceptedOfferId,
-        price: String(acceptedPrice),
-      },
-    });
+    const rentalId =
+      rentalRow != null && typeof (rentalRow as { id?: unknown }).id === 'string'
+        ? (rentalRow as { id: string }).id
+        : '';
+    if (rentalId !== '') {
+      router.push({
+        pathname: '/rental/[id]',
+        params: { id: rentalId },
+      });
+    } else {
+      router.push({
+        pathname: '/rental-agreement',
+        params: {
+          requestId: requestRowId,
+          offerId: acceptedOfferId,
+          price: String(acceptedPrice),
+        },
+      });
+    }
     return { ok: true };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
