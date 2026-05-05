@@ -6,6 +6,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
@@ -86,7 +87,9 @@ export default function ChatDetailScreen() {
   const visibleMessages = useMemo(
     () =>
       (chat?.messages ?? []).filter(
-        (m) => typeof m.text === 'string' && m.text.trim() !== ''
+        (m) =>
+          (typeof m.text === 'string' && m.text.trim() !== '') ||
+          (Array.isArray(m.offer_images) && m.offer_images.length > 0)
       ),
     [chat?.messages]
   );
@@ -268,7 +271,14 @@ export default function ChatDetailScreen() {
             if (visibleMessages.length > 0) scrollToEnd(false);
           }}
           renderItem={({ item: message, index }) => {
-            if (!isUserChatMessage(message) || !message.text || !message.text.trim()) {
+            console.log("VISIBLE MESSAGE:", message);
+            if (!isUserChatMessage(message)) {
+              return null;
+            }
+            const hasText = typeof message.text === 'string' && message.text.trim() !== '';
+            const hasImages =
+              Array.isArray(message.offer_images) && message.offer_images.length > 0;
+            if (!hasText && !hasImages) {
               return null;
             }
             const isCurrentUser = message.senderId === currentUserId;
@@ -293,6 +303,23 @@ export default function ChatDetailScreen() {
                     <Text style={isCurrentUser ? styles.rightText : styles.leftText}>
                       {message.text}
                     </Text>
+                    {Array.isArray(message.offer_images) && message.offer_images.length > 0 && (
+                      <View style={{ marginTop: 8 }}>
+                        {message.offer_images.map((img, i) => (
+                          <Image
+                            key={i}
+                            source={{ uri: img }}
+                            style={{
+                              width: 160,
+                              height: 160,
+                              borderRadius: 10,
+                              marginTop: 6,
+                            }}
+                            resizeMode="cover"
+                          />
+                        ))}
+                      </View>
+                    )}
                   </View>
                   <Text
                     style={[

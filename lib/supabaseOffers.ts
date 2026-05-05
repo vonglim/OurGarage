@@ -180,6 +180,14 @@ export function mapSupabaseOfferRowToOffer(
   if (message) out.message = message;
   if (toolDescription) out.toolDescription = toolDescription;
 
+  const oi = row.offer_images;
+  if (Array.isArray(oi)) {
+    const urls = oi
+      .filter((x): x is string => typeof x === 'string' && x.trim() !== '')
+      .map((s) => s.trim());
+    if (urls.length > 0) out.offer_images = urls;
+  }
+
   const prof = readProfilesFromOfferRow(row);
   if (prof) {
     out.profiles = { id: prof.id, name: prof.name };

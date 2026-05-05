@@ -15,6 +15,7 @@ export type SupabaseRequestChatMessageRow = {
   price: number | null;
   kind: string;
   created_at: string;
+  offer_images?: string[] | null;
   [key: string]: unknown;
 };
 

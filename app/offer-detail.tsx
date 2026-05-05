@@ -1,8 +1,11 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  Dimensions,
+  FlatList,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -81,6 +84,8 @@ export default function OfferDetailScreen() {
   const [counterModalVisible, setCounterModalVisible] = useState(false);
   const [counterPriceDraft, setCounterPriceDraft] = useState('');
   const [counterMessageDraft, setCounterMessageDraft] = useState('');
+  const [viewerVisible, setViewerVisible] = useState(false);
+  const [viewerIndex, setViewerIndex] = useState(0);
 
   const offersFromStore = useOffersStore((s) => s.offers);
 
@@ -99,6 +104,12 @@ export default function OfferDetailScreen() {
     }
     return undefined;
   }, [offerIdTrim, requestIdStr, offersFromStore]);
+
+  useEffect(() => {
+    if (viewerVisible && Array.isArray(offer?.offer_images)) {
+      console.log('VIEWER IMAGES:', offer.offer_images);
+    }
+  }, [viewerVisible, offer?.offer_images]);
 
   useFocusEffect(
     useCallback(() => {
@@ -498,6 +509,34 @@ export default function OfferDetailScreen() {
               ) : (
                 <Text style={styles.mutedSmall}>No message with this offer.</Text>
               )}
+              {Array.isArray(offer.offer_images) && offer.offer_images.length > 0 && (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={{ marginTop: 12 }}
+                >
+                  {offer.offer_images.map((img, i) => (
+                    <Pressable
+                      key={i}
+                      onPress={() => {
+                        setViewerIndex(i);
+                        setViewerVisible(true);
+                      }}
+                      style={{ marginRight: 10 }}
+                    >
+                      <Image
+                        source={{ uri: img }}
+                        style={{
+                          width: 140,
+                          height: 140,
+                          borderRadius: 12,
+                        }}
+                        resizeMode="cover"
+                      />
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              )}
               <Text style={styles.currentOfferName}>
                 {getOfferUserPreview(offer).name}
               </Text>
@@ -675,6 +714,91 @@ export default function OfferDetailScreen() {
         </View>
       ) : null}
       </ScreenEntrance>
+
+      {Array.isArray(offer.offer_images) && offer.offer_images.length > 0 ? (
+        <Modal
+          visible={viewerVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setViewerVisible(false)}
+        >
+          <View style={{ flex: 1, backgroundColor: 'black' }}>
+            <FlatList
+              style={{ flex: 1 }}
+              data={offer.offer_images}
+              horizontal
+              pagingEnabled
+              getItemLayout={(_, index) => {
+                const w = Dimensions.get('window').width;
+                return {
+                  length: w,
+                  offset: w * index,
+                  index,
+                };
+              }}
+              keyExtractor={(_, i) => String(i)}
+              showsHorizontalScrollIndicator={false}
+              onMomentumScrollEnd={(e) => {
+                const index = Math.round(
+                  e.nativeEvent.contentOffset.x / e.nativeEvent.layoutMeasurement.width
+                );
+                setViewerIndex(index);
+              }}
+              renderItem={({ item }) => (
+                <View
+                  style={{
+                    width: Dimensions.get('window').width,
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                  }}
+                >
+                  <Image
+                    source={{ uri: item }}
+                    style={{
+                      width: Dimensions.get('window').width,
+                      height: Dimensions.get('window').height * 0.8,
+                    }}
+                    resizeMode="contain"
+                  />
+                </View>
+              )}
+            />
+
+            <Pressable
+              onPress={() => setViewerVisible(false)}
+              style={{
+                position: 'absolute',
+                top: 50,
+                right: 20,
+              }}
+            >
+              <Text style={{ color: 'white', fontSize: 18 }}>Close</Text>
+            </Pressable>
+
+            <View
+              style={{
+                position: 'absolute',
+                bottom: 40,
+                flexDirection: 'row',
+                alignSelf: 'center',
+              }}
+            >
+              {offer.offer_images.map((_, i) => (
+                <View
+                  key={i}
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: 4,
+                    margin: 4,
+                    backgroundColor: i === viewerIndex ? 'white' : 'gray',
+                  }}
+                />
+              ))}
+            </View>
+          </View>
+        </Modal>
+      ) : null}
 
       <Modal
           visible={counterModalVisible}

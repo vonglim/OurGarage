@@ -39,16 +39,61 @@ export type ChatMessage = {
    * (system rows like `initial` / `poster_counter` are omitted).
    */
   kind?: string;
+  /** From `offer_messages.offer_images` (Supabase). Sync sets `[]` when the column is missing or not an array. */
+  offer_images?: string[];
   /** MS since epoch; mirrors `createdAt` for list ordering. */
   timestamp: number;
   createdAt: number;
 };
 
+function parseOfferImageUrls(row: Record<string, unknown>): string[] {
+  const raw = row.offer_images;
+
+  if (Array.isArray(raw)) {
+    return raw.filter((x): x is string => typeof x === 'string' && x.trim() !== '');
+  }
+
+  // handle stringified arrays (Supabase sometimes returns this)
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((x): x is string => typeof x === 'string' && x.trim() !== '');
+      }
+    } catch {}
+  }
+
+  return [];
+}
+
+/** Rows we merge into the in-app thread (post-accept DMs + negotiation rows with text or images). */
+function offerMessageRowVisibleInThread(row: Record<string, unknown>): boolean {
+  const b = row.body == null ? '' : String(row.body).trim();
+  const k = String((row as { kind?: string | null }).kind ?? '');
+  const imgs = parseOfferImageUrls(row);
+  const hasContent = b !== '' || imgs.length > 0;
+  if (!hasContent) return false;
+  if (k === OFFER_USER_CHAT_MESSAGE_KIND) return true;
+  return (
+    k === 'initial' ||
+    k === 'renter_update' ||
+    k === 'poster_counter' ||
+    k === 'renter_accepts'
+  );
+}
+
 /** True for post-accept user DMs; also true when `kind` is missing (legacy storage before the field). */
 export function isUserChatMessage(m: ChatMessage): boolean {
-  const k = m.kind;
-  if (k == null || k === '') return true;
-  return k === OFFER_USER_CHAT_MESSAGE_KIND;
+  const k = m.kind ?? '';
+  if (k === OFFER_USER_CHAT_MESSAGE_KIND || k === '') return true;
+  if (Array.isArray(m.offer_images) && m.offer_images.length > 0) return true;
+  if (
+    (k === 'initial' || k === 'renter_update' || k === 'poster_counter' || k === 'renter_accepts') &&
+    (m.text.trim() !== '' || (m.offer_images != null && m.offer_images.length > 0))
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export type Chat = {
@@ -184,7 +229,9 @@ function normalizeLoaded(raw: unknown): Chat[] {
         const senderId = typeof msg.senderId === 'string' ? msg.senderId : '';
         const text = typeof msg.text === 'string' ? msg.text : '';
         const ts = typeof msg.timestamp === 'number' ? msg.timestamp : 0;
-        if (mid && senderId && text && ts) {
+        const offer_images = Array.isArray(msg.offer_images) ? msg.offer_images : [];
+        const hasContent = text.trim() !== '' || offer_images.length > 0;
+        if (mid && senderId && hasContent && ts) {
           const rec: string =
             typeof msg.receiverId === 'string' && msg.receiverId.length > 0
               ? msg.receiverId
@@ -212,6 +259,7 @@ function normalizeLoaded(raw: unknown): Chat[] {
             requestId: rApp,
             offerId: oid,
             kind: k,
+            offer_images,
             timestamp: ts,
             createdAt: created,
           });
@@ -483,6 +531,7 @@ export async function addChatMessage(chatId: string, text: string): Promise<void
     requestId: existing.requestId,
     offerId: offerIdStr,
     kind: OFFER_USER_CHAT_MESSAGE_KIND,
+    offer_images: [],
     timestamp: now,
     createdAt: now,
   };
@@ -602,14 +651,9 @@ export async function syncChatWithSupabase(
   const oldIds = new Set(chat.messages.map((m) => m.id));
   const bump = options?.bumpUnreadForNewIncoming ?? true;
   const fromServer: ChatMessage[] = rows
-    .filter((row) => {
-      const b = row.body == null ? '' : String(row.body).trim();
-      if (b === '') return false;
-      const k = String((row as { kind?: string | null }).kind ?? '');
-      if (k !== OFFER_USER_CHAT_MESSAGE_KIND) return false;
-      return true;
-    })
+    .filter((row) => offerMessageRowVisibleInThread(row as Record<string, unknown>))
     .flatMap((row) => {
+      console.log('SYNC ROW:', row.offer_images);
       const created = Date.parse(String(row.created_at)) || 0;
       const author = (row.author_id ?? '').trim();
       if (!author) {
@@ -643,6 +687,7 @@ export async function syncChatWithSupabase(
         requestId: appRequestId,
         offerId: offerIdFromRow,
         kind: String((row as { kind?: string | null }).kind ?? OFFER_USER_CHAT_MESSAGE_KIND),
+        offer_images: parseOfferImageUrls(row as Record<string, unknown>),
         timestamp: created,
         createdAt: created,
       };
@@ -713,6 +758,7 @@ export function addMessage(chatId: string, msg: ChatMessage): void {
     receiverId: (msg.receiverId ?? '').trim() || other.userId,
     requestId: typeof msg.requestId === 'number' && Number.isFinite(msg.requestId) ? msg.requestId : existing.requestId,
     offerId: (msg.offerId ?? '').trim() || (oid || 'legacy'),
+    offer_images: Array.isArray(msg.offer_images) ? msg.offer_images : [],
     timestamp: ts,
     createdAt: typeof msg.createdAt === 'number' && msg.createdAt > 0 ? msg.createdAt : ts,
   };

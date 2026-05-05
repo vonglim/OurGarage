@@ -118,7 +118,7 @@ function notifyUserOfCounterOffer(args: {
 export async function addOffer(
   requestId: number,
   requestRowId: string,
-  opts?: { message?: string; price: number; toolDescription?: string }
+  opts?: { message?: string; price: number; toolDescription?: string; offer_images?: string[] }
 ): Promise<boolean> {
   if (!isSupabaseConfigured() || !requestRowId) return false;
   if (!requestAcceptsOffers(requestId)) return false;
@@ -162,6 +162,7 @@ export async function addOffer(
     message: opts.message,
     posterCounterCount: nextPosterCount,
     messageKind: existing ? 'renter_update' : 'initial',
+    ...(opts.offer_images !== undefined ? { offer_images: opts.offer_images } : {}),
   });
   if (res == null) {
     logOfferSync('supabase_response', 'addOffer write failed', { requestRowId });

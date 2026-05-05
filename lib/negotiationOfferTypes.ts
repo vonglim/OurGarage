@@ -37,6 +37,8 @@ export type Offer = {
   posterCounterCount: number;
   message?: string;
   toolDescription?: string;
+  /** From Supabase `offers.offer_images` when present. */
+  offer_images?: string[];
   messageHistory: OfferMessageEntry[];
   /** Populated from Supabase `select (..., profiles (id, name))` when the embed succeeds. */
   profiles?: { id: string; name: string } | null;

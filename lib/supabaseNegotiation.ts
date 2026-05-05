@@ -38,6 +38,8 @@ export async function upsertNegotiationOfferToSupabase(input: {
   message?: string;
   posterCounterCount?: number;
   messageKind: OfferMessageKind;
+  /** When set (including empty array), persisted on `offers` and copied to this `offer_messages` row. Omit to leave DB unchanged on update. */
+  offer_images?: string[];
 }): Promise<{ id: string } | null> {
   const supabase = getSupabase();
   const status = input.status ?? 'pending';
@@ -71,6 +73,10 @@ export async function upsertNegotiationOfferToSupabase(input: {
     updated_at: new Date().toISOString(),
   };
   if (msg) baseFields.message = msg;
+  if (input.offer_images !== undefined) {
+    baseFields.offer_images =
+      input.offer_images.length > 0 ? input.offer_images.map((u) => String(u).trim()).filter(Boolean) : null;
+  }
 
   let offerId: string;
 
@@ -105,7 +111,7 @@ export async function upsertNegotiationOfferToSupabase(input: {
     input.renterId
   );
 
-  const { error: msgErr } = await supabase.from('offer_messages').insert({
+  const offerMsgRow: Record<string, unknown> = {
     request_id: input.requestRowId,
     offer_id: offerId,
     author_id: input.lastUpdatedBy,
@@ -113,7 +119,12 @@ export async function upsertNegotiationOfferToSupabase(input: {
     body: msg ?? null,
     price: input.currentPrice,
     kind: input.messageKind,
-  });
+  };
+  if (input.offer_images !== undefined) {
+    offerMsgRow.offer_images =
+      input.offer_images.length > 0 ? input.offer_images.map((u) => String(u).trim()).filter(Boolean) : null;
+  }
+  const { error: msgErr } = await supabase.from('offer_messages').insert(offerMsgRow);
   if (msgErr) {
     logOfferSync('supabase_response', 'offer_messages insert failed', msgErr.message);
     return null;
