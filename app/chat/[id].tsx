@@ -1,6 +1,7 @@
 import { Pressable } from '@/components/Pressable';
 import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -19,7 +20,11 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
-import { RentalDetailsCard, type RentalMeetupDetails } from '@/components/RentalDetailsCard';
+import {
+  RentalDetailsCard,
+  type RentalDetailsCardHandle,
+  type RentalMeetupDetails,
+} from '@/components/RentalDetailsCard';
 import { subtleControlPressed, ui } from '@/constants/appUi';
 import { useAuthUserId } from '@/lib/authUser';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
@@ -39,6 +44,7 @@ type ChatMessage = {
   senderId: string;
   text: string;
   timestamp: number;
+  kind?: string | null;
   offer_images?: string[];
 };
 
@@ -51,7 +57,7 @@ function normalizeChatRouteId(raw: string | string[] | undefined): string {
 const NEAR_BOTTOM_PX = 160;
 const TOUCH_DEBUG = true;
 
-const OFFER_MESSAGES_SELECT = 'id, author_id, body, created_at, offer_images';
+const OFFER_MESSAGES_SELECT = 'id, author_id, body, kind, created_at, offer_images';
 
 function normalizeImages(val: unknown): string[] {
   if (!val) return [];
@@ -92,6 +98,7 @@ function mapOfferMessageRows(
         senderId: r.author_id,
         text: String(r.body ?? '').trim(),
         timestamp: Date.parse(r.created_at) || Date.now(),
+        kind: r.kind ?? null,
         offer_images,
       };
       console.log(logPrefix, 'mapped ChatMessage', mapped);
@@ -112,8 +119,12 @@ export default function ChatDetailScreen() {
   const [threadOfferId, setThreadOfferId] = useState('');
   const [threadRentalId, setThreadRentalId] = useState<string | null>(null);
   const [rental, setRental] = useState<RentalMeetupDetails | null>(null);
+  const [rentalTitle, setRentalTitle] = useState<string>('');
   const [rentalBusy, setRentalBusy] = useState(false);
+  const [acceptingMessageId, setAcceptingMessageId] = useState<string | null>(null);
+  const [acceptedMessageIds, setAcceptedMessageIds] = useState<string[]>([]);
   const listRef = useRef<FlatList<ChatMessage>>(null);
+  const rentalDetailsCardRef = useRef<RentalDetailsCardHandle>(null);
   const threadRef = useRef({ routeId: '', offerId: '', rentalId: null as string | null });
   const nearBottomRef = useRef(true);
 
@@ -216,8 +227,20 @@ export default function ChatDetailScreen() {
 
       if (cancelled) return;
       setRental(r);
+      setRentalTitle('');
       setThreadOfferId(oid);
       setThreadRentalId(rid);
+
+      if (r?.request_id) {
+        const { data: requestRow } = await supabase
+          .from('requests')
+          .select('title')
+          .eq('id', r.request_id)
+          .maybeSingle();
+        if (!cancelled) {
+          setRentalTitle(typeof requestRow?.title === 'string' ? requestRow.title.trim() : '');
+        }
+      }
 
       await loadMessages(id, oid, rid);
       if (cancelled) return;
@@ -278,6 +301,7 @@ export default function ChatDetailScreen() {
             senderId: authorId,
             text: text.trim(),
             timestamp: Date.parse(createdAt) || Date.now(),
+            kind: String((row as { kind?: unknown }).kind ?? ''),
             offer_images,
           };
           console.log(logPrefix, 'mapped ChatMessage', msg);
@@ -364,6 +388,37 @@ export default function ChatDetailScreen() {
     scrollToEnd({ animated: true, force: true });
     showFeedbackToast('Sent');
   };
+
+  const onAcceptRentalSystemMessage = useCallback(
+    async (message: ChatMessage) => {
+      if (!rental || !meId) return;
+      if (message.senderId === meId) return;
+
+      const patch: Record<string, unknown> = {};
+      if (rental.renter_user_id === meId) patch.confirmed_by_renter = true;
+      if (rental.owner_user_id === meId) patch.confirmed_by_owner = true;
+      if (Object.keys(patch).length === 0) return;
+
+      setAcceptingMessageId(message.id);
+      try {
+        const { data, error } = await getSupabase()
+          .from('rentals')
+          .update(patch)
+          .eq('id', rental.id)
+          .select('*')
+          .single();
+        if (error) {
+          showFeedbackToast('Could not confirm yet.');
+          return;
+        }
+        if (data) setRental(data as RentalMeetupDetails);
+        setAcceptedMessageIds((prev) => (prev.includes(message.id) ? prev : [...prev, message.id]));
+      } finally {
+        setAcceptingMessageId(null);
+      }
+    },
+    [rental, meId]
+  );
 
   const insertMeetupSystemMessage = useCallback(
     async (input: {
@@ -461,7 +516,7 @@ export default function ChatDetailScreen() {
         ]}
       >
         <ScreenEntrance style={styles.entranceFlex}>
-          <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+          <View style={[styles.topContext, { paddingTop: insets.top + 8 }]}>
             <View style={styles.headerBackSlot}>
               <ScreenBackButton onPress={() => router.back()} />
             </View>
@@ -494,21 +549,6 @@ export default function ChatDetailScreen() {
       >
         <ScreenEntrance style={styles.entranceFlex}>
           <View style={styles.chatMain}>
-            <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-              <View style={styles.headerBackSlot}>
-                <ScreenBackButton onPress={() => router.back()} />
-              </View>
-              <View style={styles.headerTitleBlock}>
-                <Text style={styles.title} numberOfLines={1}>
-                  Chat
-                </Text>
-                <Text style={styles.subtitle} numberOfLines={1}>
-                  {threadOfferId ? `Offer ${threadOfferId.slice(0, 8)}` : 'Chat'}
-                </Text>
-              </View>
-              <View style={styles.headerSpacer} />
-            </View>
-
             <View
               style={styles.chatBody}
               onTouchStart={() => {
@@ -519,6 +559,7 @@ export default function ChatDetailScreen() {
                 <View
                   style={[
                     styles.rentalCardSlot,
+                    { paddingTop: insets.top + 2 },
                     TOUCH_DEBUG ? { backgroundColor: 'rgba(255,165,0,0.15)' } : null,
                   ]}
                   pointerEvents="box-none"
@@ -527,7 +568,16 @@ export default function ChatDetailScreen() {
                   }}
                 >
                   <RentalDetailsCard
+                    ref={rentalDetailsCardRef}
                     rental={rental}
+                    headerTitle={rentalTitle ? `Rental: ${rentalTitle}` : 'Rental'}
+                    headerLeftAccessory={
+                      <ScreenBackButton
+                        onPress={() => router.back()}
+                        style={styles.integratedBackBtn}
+                        iconSize={18}
+                      />
+                    }
                     itemName="Rental"
                     durationLabel={(rental as { duration_type?: string }).duration_type ?? '—'}
                     isRenter={rental.renter_user_id === meId}
@@ -575,6 +625,23 @@ export default function ChatDetailScreen() {
                     const hasImages = Array.isArray(message.offer_images) && message.offer_images.length > 0;
                     if (!hasText && !hasImages) return null;
                     const isCurrentUser = message.senderId === meId;
+                  const isRentalDetailsSystem =
+                    message.kind === 'system_rental_details' ||
+                    message.text.startsWith('Rental details updated:');
+                  const iAmRenter = rental?.renter_user_id === meId;
+                  const iAmOwner = rental?.owner_user_id === meId;
+                  const myConfirmed = iAmRenter
+                    ? Boolean(rental?.confirmed_by_renter)
+                    : iAmOwner
+                      ? Boolean(rental?.confirmed_by_owner)
+                      : true;
+                  const canAcceptInChat =
+                    Boolean(rental) && isRentalDetailsSystem && !isCurrentUser && !myConfirmed;
+                  const showAcceptedState =
+                    Boolean(rental) &&
+                    isRentalDetailsSystem &&
+                    !isCurrentUser &&
+                    (myConfirmed || acceptedMessageIds.includes(message.id));
                     const prev = index > 0 ? messages[index - 1] : null;
                     const senderChanged = prev != null && prev.senderId !== message.senderId;
                     return (
@@ -599,6 +666,28 @@ export default function ChatDetailScreen() {
                                     resizeMode="cover"
                                   />
                                 ))}
+                              </View>
+                            ) : null}
+                            {canAcceptInChat ? (
+                              <View style={styles.systemActionRow}>
+                                <Pressable
+                                  pressOpacityFeedback={false}
+                                  onPress={() => void onAcceptRentalSystemMessage(message)}
+                                  disabled={acceptingMessageId === message.id}
+                                  style={({ pressed }) => [
+                                    styles.systemAcceptBtn,
+                                    pressed && styles.systemAcceptBtnPressed,
+                                  ]}
+                                >
+                                  <Text style={styles.systemAcceptText}>
+                                    {acceptingMessageId === message.id ? 'Accepting...' : 'Accept'}
+                                  </Text>
+                                </Pressable>
+                              </View>
+                            ) : null}
+                            {showAcceptedState ? (
+                              <View style={styles.systemAcceptedRow}>
+                                <Text style={styles.systemAcceptedText}>✓ Accepted</Text>
                               </View>
                             ) : null}
                           </View>
@@ -630,6 +719,16 @@ export default function ChatDetailScreen() {
                   multiline
                   maxLength={2000}
                 />
+                <Pressable
+                  pressOpacityFeedback={false}
+                  haptic
+                  onPress={() => rentalDetailsCardRef.current?.openProposeModal()}
+                  hitSlop={10}
+                  style={({ pressed }) => [styles.proposeBtn, pressed && styles.sendBtnPressed]}
+                  accessibilityLabel="Propose pickup and return details"
+                >
+                  <Ionicons name="calendar-outline" size={17} color={ui.primary} />
+                </Pressable>
                 <Pressable
                   pressOpacityFeedback={false}
                   haptic
@@ -674,6 +773,18 @@ const styles = StyleSheet.create({
   },
   rentalCardSlot: {
     flexShrink: 0,
+    paddingHorizontal: 10,
+    backgroundColor: ui.surfaceGrouped,
+  },
+  integratedBackBtn: {
+    minWidth: 30,
+    minHeight: 30,
+    borderRadius: 15,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(0,0,0,0.36)',
+    shadowOpacity: 0,
+    elevation: 0,
   },
   messagesArea: {
     flex: 1,
@@ -688,14 +799,12 @@ const styles = StyleSheet.create({
     minHeight: 0,
     width: '100%',
   },
-  topBar: {
-    paddingHorizontal: 16,
-    paddingBottom: 10,
+  topContext: {
+    paddingHorizontal: 10,
+    paddingBottom: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: ui.border,
+    justifyContent: 'flex-start',
     backgroundColor: ui.surfaceGrouped,
   },
   headerBackSlot: {
@@ -703,43 +812,12 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     justifyContent: 'center',
   },
-  headerTitleBlock: {
-    flex: 1,
-    alignItems: 'center',
-    marginHorizontal: 8,
-    gap: 2,
-  },
-  title: {
-    textAlign: 'center',
-    fontSize: 17,
-    fontWeight: '700',
-    color: ui.textPrimary,
-    width: '100%',
-  },
-  subtitle: {
-    textAlign: 'center',
-    fontSize: 13,
-    fontWeight: '500',
-    color: ui.textSecondary,
-    width: '100%',
-  },
-  headerArchivedPill: {
-    marginTop: 4,
-    fontSize: 11,
-    fontWeight: '600',
-    color: ui.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  headerSpacer: {
-    width: 64,
-  },
   messagesContent: {
     paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingTop: 12,
   },
   messagesContentBelowCard: {
-    paddingTop: 20,
+    paddingTop: 14,
   },
   messagesContentEmpty: {
     flexGrow: 1,
@@ -833,6 +911,18 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: ui.textPrimary,
   },
+  proposeBtn: {
+    marginLeft: 8,
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.primary,
+    backgroundColor: ui.surfaceTintPrimary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
   sendBtn: {
     marginLeft: 8,
     paddingHorizontal: 16,
@@ -853,6 +943,35 @@ const styles = StyleSheet.create({
   },
   sendTextDisabled: {
     color: ui.textSecondary,
+  },
+  systemActionRow: {
+    marginTop: 8,
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+  },
+  systemAcceptBtn: {
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.primary,
+    backgroundColor: ui.surfaceTintPrimary,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  systemAcceptBtnPressed: {
+    ...subtleControlPressed,
+  },
+  systemAcceptText: {
+    color: ui.primary,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  systemAcceptedRow: {
+    marginTop: 8,
+  },
+  systemAcceptedText: {
+    color: ui.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
   },
   center: {
     flex: 1,

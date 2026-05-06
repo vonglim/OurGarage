@@ -12,6 +12,7 @@ export type ScreenBackButtonProps = {
   style?: StyleProp<ViewStyle>;
   /** Defaults to light haptics on overlay only */
   haptic?: boolean;
+  iconSize?: number;
 };
 
 export function ScreenBackButton({
@@ -19,6 +20,7 @@ export function ScreenBackButton({
   variant = 'inline',
   style,
   haptic,
+  iconSize = ICON_SIZE,
 }: ScreenBackButtonProps) {
   const useHaptic = haptic ?? variant === 'overlay';
 
@@ -41,7 +43,7 @@ export function ScreenBackButton({
         style,
       ]}
     >
-      <Ionicons name="chevron-back" size={ICON_SIZE} color="#FFFFFF" />
+      <Ionicons name="chevron-back" size={iconSize} color="#FFFFFF" />
     </Pressable>
   );
 }

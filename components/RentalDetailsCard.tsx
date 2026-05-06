@@ -1,5 +1,5 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
-import React, { useMemo, useRef, useState } from 'react';
+import React, { forwardRef, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
   Keyboard,
   Modal,
@@ -31,6 +31,8 @@ export type RentalMeetupDetails = {
 
 type Props = {
   rental: RentalMeetupDetails;
+  headerTitle?: string;
+  headerLeftAccessory?: React.ReactNode;
   itemName: string;
   durationLabel: string;
   isRenter: boolean;
@@ -42,6 +44,10 @@ type Props = {
     returnTimeIso: string;
     meetupLocation: string;
   }) => Promise<void>;
+};
+
+export type RentalDetailsCardHandle = {
+  openProposeModal: () => void;
 };
 
 type PickerField = 'pickupDate' | 'pickupTime' | 'returnDate' | 'returnTime';
@@ -101,16 +107,21 @@ function initialReturnDraft(iso: string | null, pickup: Date): Date {
 /** Android uses system dialogs; iOS (and web) use embedded spinners + Done. */
 const useEmbeddedPickers = Platform.OS === 'ios' || Platform.OS === 'web';
 
-export function RentalDetailsCard({
-  rental,
-  itemName: _itemName,
-  durationLabel,
-  isRenter,
-  isOwner,
-  busy = false,
-  onConfirm,
-  onProposeChange,
-}: Props) {
+export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(function RentalDetailsCard(
+  {
+    rental,
+    headerTitle = 'Rental',
+    headerLeftAccessory,
+    itemName: _itemName,
+    durationLabel,
+    isRenter,
+    isOwner,
+    busy = false,
+    onConfirm,
+    onProposeChange,
+  }: Props,
+  ref
+) {
   const [proposeOpen, setProposeOpen] = useState(false);
   const [meetupDraft, setMeetupDraft] = useState<Date>(() => initialDraftDate(rental.meetup_time));
   const [returnDraft, setReturnDraft] = useState<Date>(() =>
@@ -129,8 +140,6 @@ export function RentalDetailsCard({
   const canConfirm = Boolean(
     rental.meetup_time && sharedRentalLocation !== '' && rental.return_time
   );
-  const roleLabel = isRenter ? 'Renter' : isOwner ? 'Owner' : 'Participant';
-
   React.useEffect(() => {
     setMeetupLocation((rental.meetup_location || rental.return_location || '').trim() || '');
   }, [rental]);
@@ -144,6 +153,13 @@ export function RentalDetailsCard({
     setActivePicker(null);
     setProposeOpen(true);
   };
+  useImperativeHandle(
+    ref,
+    () => ({
+      openProposeModal: openPropose,
+    }),
+    [rental]
+  );
 
   const closePicker = () => {
     pickerTargetRef.current = null;
@@ -247,50 +263,41 @@ export function RentalDetailsCard({
 
   return (
     <View style={styles.card}>
-      <Text style={styles.title}>Rental Details</Text>
-      <Text style={styles.durationLabel}>Duration · {durationLabel || '—'}</Text>
-
-      <Text style={styles.detailLine}>
-        <Text style={styles.detailEmoji}>📅 </Text>
-        <Text style={styles.detailLabel}>Pickup: </Text>
-        <Text style={styles.detailValue}>{formatCompactMeetup(rental.meetup_time)}</Text>
-      </Text>
-
-      <Text style={[styles.detailLine, styles.returnBlockTop]}>
-        <Text style={styles.detailEmoji}>🔁 </Text>
-        <Text style={styles.detailLabel}>Return: </Text>
-        <Text style={styles.detailValue}>{formatCompactMeetup(rental.return_time ?? null)}</Text>
-      </Text>
-      <View style={styles.locationRow}>
-        <Text style={styles.locationEmoji}>📍</Text>
-        <Text style={styles.locationText} numberOfLines={2}>
-          {sharedRentalLocation || 'Not set'}
+      <View style={styles.headerRow}>
+        {headerLeftAccessory ? <View style={styles.headerLeftAccessory}>{headerLeftAccessory}</View> : null}
+        <Text style={styles.title} numberOfLines={1}>
+          {headerTitle}
+        </Text>
+        <Text style={styles.confirmTicks} numberOfLines={1}>
+          Owner {rental.confirmed_by_owner ? '✓' : '○'}  Renter {rental.confirmed_by_renter ? '✓' : '○'}
         </Text>
       </View>
 
-      <Text style={styles.confirmTicks}>
-        Owner {rental.confirmed_by_owner ? '✓' : '○'} · Renter {rental.confirmed_by_renter ? '✓' : '○'}
-      </Text>
-      <Text style={styles.status}>{statusLabel}</Text>
-      <Text style={styles.role}>You are: {roleLabel}</Text>
+      <View style={styles.infoRow}>
+        <Text style={styles.locationText} numberOfLines={1}>
+          Location: {sharedRentalLocation || 'Not set'}
+        </Text>
+        <Text
+          style={[styles.status, bothConfirmed ? styles.statusConfirmed : styles.statusAwaiting]}
+          numberOfLines={1}
+        >
+          {bothConfirmed ? '✓ Confirmed' : statusLabel}
+        </Text>
+      </View>
 
-      <View style={styles.actions}>
-        <Pressable
-          pressOpacityFeedback={false}
-          onPress={openPropose}
-          style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
-          disabled={busy || submitting}
-        >
-          <Text style={styles.secondaryBtnText}>Propose</Text>
-        </Pressable>
-        <Pressable
-          pressOpacityFeedback={false}
-          onPress={() => void onConfirm()}
-          style={({ pressed }) => [styles.primaryBtn, pressed && styles.primaryBtnPressed]}
-          disabled={busy || submitting || !canConfirm}
-        >
-          <Text style={[styles.primaryBtnText, !canConfirm && styles.disabledText]}>Confirm</Text>
-        </Pressable>
+      <View style={styles.timeRow}>
+        <View style={styles.timeCol}>
+          <Text style={styles.metaLabel}>Pickup</Text>
+          <Text style={styles.metaValue} numberOfLines={1}>
+            {formatCompactMeetup(rental.meetup_time)}
+          </Text>
+        </View>
+        <View style={styles.timeCol}>
+          <Text style={styles.metaLabel}>Return</Text>
+          <Text style={styles.metaValue} numberOfLines={1}>
+            {formatCompactMeetup(rental.return_time ?? null)}
+          </Text>
+        </View>
       </View>
 
       <Modal
@@ -452,88 +459,92 @@ export function RentalDetailsCard({
       </Modal>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 10,
-    backgroundColor: '#F7F8FB',
+    borderBottomLeftRadius: 12,
+    borderBottomRightRadius: 12,
+    backgroundColor: '#F3F5FA',
     borderColor: ui.border,
     borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 8,
+    borderTopWidth: 0,
+    paddingHorizontal: 12,
     paddingVertical: 7,
-    marginBottom: 8,
+    marginBottom: 0,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  headerLeftAccessory: {
+    flexShrink: 0,
+    marginRight: 2,
   },
   title: {
-    fontSize: 13,
+    fontSize: 17,
     fontWeight: '700',
     color: ui.textPrimary,
-    marginBottom: 2,
+    lineHeight: 21,
+    flex: 1,
+    paddingRight: 8,
   },
-  durationLabel: {
-    fontSize: 11,
-    color: ui.textSecondary,
-    marginBottom: 3,
-    fontWeight: '500',
-  },
-  detailLine: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: ui.textPrimary,
-    lineHeight: 18,
-    marginBottom: 2,
+  infoRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: 4,
   },
-  detailEmoji: {
-    fontSize: 14,
-  },
-  detailLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: ui.textPrimary,
-  },
-  detailValue: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: ui.textPrimary,
-  },
-  returnBlockTop: {
+  timeRow: {
+    flexDirection: 'row',
+    gap: 16,
     marginTop: 6,
   },
-  locationRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 4,
-    gap: 4,
+  timeCol: {
+    flex: 1,
   },
-  locationEmoji: {
-    fontSize: 12,
-    marginTop: 1,
+  metaLabel: {
+    fontSize: 10,
+    color: ui.textSecondary,
+    fontWeight: '700',
+    marginBottom: 1,
+    textTransform: 'uppercase',
+    letterSpacing: 0.2,
+  },
+  metaValue: {
+    fontSize: 14,
+    color: ui.textPrimary,
+    fontWeight: '600',
+    lineHeight: 18,
   },
   locationText: {
     flex: 1,
-    fontSize: 12,
+    fontSize: 13,
     color: ui.textPrimary,
-    lineHeight: 16,
+    lineHeight: 17,
+    fontWeight: '600',
   },
   confirmTicks: {
-    fontSize: 10,
+    fontSize: 11,
     color: ui.textSubtle,
     fontWeight: '500',
-    marginBottom: 2,
+    lineHeight: 12,
+    flexShrink: 0,
   },
   status: {
-    marginTop: 2,
     fontSize: 11,
-    color: ui.textSecondary,
-    fontWeight: '400',
+    fontWeight: '600',
+    lineHeight: 14,
+    flexShrink: 0,
   },
-  role: {
-    marginTop: 1,
-    fontSize: 10,
-    color: ui.textSubtle,
+  statusAwaiting: {
+    color: '#A06B00',
+  },
+  statusConfirmed: {
+    color: '#1C8C4D',
   },
   actions: {
     marginTop: 6,
