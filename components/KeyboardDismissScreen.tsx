@@ -19,9 +19,15 @@ type Props = {
  */
 export function KeyboardDismissScreen({ children, style, pointerEvents }: Props) {
   return (
-    <View style={[{ flex: 1 }, style]} pointerEvents={pointerEvents}>
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-        <View style={{ flex: 1 }}>
+    <View style={[{ flex: 1, minHeight: 0 }, style]} pointerEvents={pointerEvents}>
+      <TouchableWithoutFeedback
+        onPress={() => {
+          console.log('[TOUCH DEBUG] KeyboardDismissScreen onPress');
+          Keyboard.dismiss();
+        }}
+        accessible={false}
+      >
+        <View style={{ flex: 1, minHeight: 0 }}>
           {children}
         </View>
       </TouchableWithoutFeedback>

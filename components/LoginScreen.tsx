@@ -1,5 +1,4 @@
-import * as Linking from 'expo-linking';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -15,55 +14,61 @@ import { Pressable } from '@/components/Pressable';
 import { ui } from '@/constants/appUi';
 import { supabase } from '@/lib/supabase';
 
-const OTP_COOLDOWN_SEC = 10;
-
 /**
- * Email OTP (magic link). No password; user completes sign-in from the link and session restores in-app.
- * Cooldown after each request limits Supabase rate limits (429) from button spam.
+ * Email + password sign-in and sign-up. Session is handled by the root layout auth listener.
  */
 export function LoginScreen() {
   const insets = useSafeAreaInsets();
   const [email, setEmail] = useState('');
-  const [sending, setSending] = useState(false);
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState<'signin' | 'signup' | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [sent, setSent] = useState(false);
-  const [cooldownSec, setCooldownSec] = useState(0);
+  const [signUpNote, setSignUpNote] = useState<string | null>(null);
 
   const trimmed = email.trim();
-  const canSubmit = trimmed.length > 0 && !sending && cooldownSec === 0;
+  const canSubmit =
+    trimmed.length > 0 && password.length > 0 && busy == null;
 
-  useEffect(() => {
-    if (cooldownSec <= 0) return;
-    const t = setTimeout(() => {
-      setCooldownSec((s) => Math.max(0, s - 1));
-    }, 1000);
-    return () => clearTimeout(t);
-  }, [cooldownSec]);
-
-  const onSend = async () => {
+  const onSignIn = async () => {
     if (!canSubmit) return;
     setError(null);
-    setSending(true);
+    setSignUpNote(null);
+    setBusy('signin');
     try {
-      const { error: otpError } = await supabase.auth.signInWithOtp({
+      const { error: signInError } = await supabase.auth.signInWithPassword({
         email: trimmed,
-        options: {
-          emailRedirectTo:
-            Platform.OS === 'web' && typeof window !== 'undefined'
-              ? window.location.origin
-              : Linking.createURL('/'),
-        },
+        password,
       });
-      if (otpError) {
-        setError(otpError.message);
+      if (signInError) {
+        setError(signInError.message);
         return;
       }
-      setSent(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong');
     } finally {
-      setSending(false);
-      setCooldownSec(OTP_COOLDOWN_SEC);
+      setBusy(null);
+    }
+  };
+
+  const onSignUp = async () => {
+    if (!canSubmit) return;
+    setError(null);
+    setSignUpNote(null);
+    setBusy('signup');
+    try {
+      const { error: signUpError } = await supabase.auth.signUp({
+        email: trimmed,
+        password,
+      });
+      if (signUpError) {
+        setError(signUpError.message);
+        return;
+      }
+      setSignUpNote('Account created. If your project requires email confirmation, check your inbox.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Something went wrong');
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -74,7 +79,7 @@ export function LoginScreen() {
     >
       <View style={styles.inner}>
         <Text style={styles.title}>Sign in or create an account</Text>
-        <Text style={styles.subtitle}>We’ll email you a login link.</Text>
+        <Text style={styles.subtitle}>Use your email and password.</Text>
 
         <TextInput
           value={email}
@@ -87,12 +92,26 @@ export function LoginScreen() {
           keyboardType="email-address"
           textContentType="emailAddress"
           autoCorrect={false}
-          editable={!sending}
+          editable={busy == null}
+        />
+
+        <TextInput
+          value={password}
+          onChangeText={setPassword}
+          placeholder="Password"
+          placeholderTextColor={ui.textSecondary}
+          style={styles.input}
+          autoCapitalize="none"
+          autoComplete="password"
+          textContentType="password"
+          autoCorrect={false}
+          secureTextEntry
+          editable={busy == null}
         />
 
         <Pressable
           onPress={() => {
-            void onSend();
+            void onSignIn();
           }}
           style={({ pressed }) => [
             styles.button,
@@ -103,24 +122,37 @@ export function LoginScreen() {
           disabled={!canSubmit}
           haptic
         >
-          {sending ? (
+          {busy === 'signin' ? (
             <ActivityIndicator color={ui.primaryOn} />
           ) : (
-            <Text style={styles.buttonLabel}>{sent ? 'Resend link' : 'Continue'}</Text>
+            <Text style={styles.buttonLabel}>Sign In</Text>
+          )}
+        </Pressable>
+
+        <Pressable
+          onPress={() => {
+            void onSignUp();
+          }}
+          style={({ pressed }) => [
+            styles.buttonSecondary,
+            pressed && styles.buttonSecondaryPressed,
+            !canSubmit && styles.buttonDisabled,
+          ]}
+          pressOpacityFeedback={false}
+          disabled={!canSubmit}
+          haptic
+        >
+          {busy === 'signup' ? (
+            <ActivityIndicator color={ui.primary} />
+          ) : (
+            <Text style={styles.buttonSecondaryLabel}>Create Account</Text>
           )}
         </Pressable>
 
         {error != null && error.length > 0 ? <Text style={styles.error}>{error}</Text> : null}
-
-        {cooldownSec > 0 ? (
-          <Text style={styles.cooldown} accessibilityLiveRegion="polite">
-            {sent && error == null
-              ? `Check your email. You can request another link in ${cooldownSec}s.`
-              : `Please wait ${cooldownSec}s before trying again.`}
-          </Text>
-        ) : sent && error == null ? (
+        {signUpNote != null && error == null ? (
           <Text style={styles.success} accessibilityLiveRegion="polite">
-            Check your email. You can request another link if you don&apos;t see it.
+            {signUpNote}
           </Text>
         ) : null}
       </View>
@@ -169,11 +201,22 @@ const styles = StyleSheet.create({
     backgroundColor: ui.primary,
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: 12,
   },
   buttonPressed: { backgroundColor: ui.primaryPressed },
   buttonDisabled: { opacity: 0.5 },
   buttonLabel: { fontSize: 17, fontWeight: '600', color: ui.primaryOn },
+  buttonSecondary: {
+    height: 50,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.primary,
+    backgroundColor: ui.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buttonSecondaryPressed: { backgroundColor: ui.surfaceTintPrimary },
+  buttonSecondaryLabel: { fontSize: 17, fontWeight: '600', color: ui.primary },
   error: { marginTop: 16, color: '#B91C1C', fontSize: 15 },
   success: { marginTop: 16, color: ui.textPrimary, fontSize: 16, lineHeight: 22 },
-  cooldown: { marginTop: 16, color: ui.textSecondary, fontSize: 15, lineHeight: 22 },
 });

@@ -91,9 +91,13 @@ export default function ChatsScreen() {
                   return (
                     <Pressable
                       key={chat.id}
-                      onPress={() =>
-                        router.push({ pathname: '/chat/[id]', params: { id: chat.id } })
-                      }
+                      onPress={() => {
+                        const routeId =
+                          chat.offerId && chat.offerId !== 'legacy'
+                            ? chat.offerId
+                            : chat.id;
+                        router.push({ pathname: '/chat/[id]', params: { id: routeId } });
+                      }}
                       style={({ pressed }) => [
                         styles.row,
                         !isLast && styles.rowBorder,
@@ -137,9 +141,13 @@ export default function ChatsScreen() {
                   return (
                     <Pressable
                       key={chat.id}
-                      onPress={() =>
-                        router.push({ pathname: '/chat/[id]', params: { id: chat.id } })
-                      }
+                      onPress={() => {
+                        const routeId =
+                          chat.offerId && chat.offerId !== 'legacy'
+                            ? chat.offerId
+                            : chat.id;
+                        router.push({ pathname: '/chat/[id]', params: { id: routeId } });
+                      }}
                       style={({ pressed }) => [
                         styles.rowArchived,
                         !isLast && styles.rowBorderArchived,

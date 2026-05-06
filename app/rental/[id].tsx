@@ -8,12 +8,13 @@ import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import { formatUsd } from '@/lib/money';
 import { getSupabase } from '@/lib/supabase';
 import { primarySolidPressed, shadowCard, shadowKey, ui } from '@/constants/appUi';
-import { useChatStore } from '@/store/chatStore';
 
 type RentalRow = {
   id: string;
   request_id: string;
   offer_id: string;
+  renter_user_id: string;
+  owner_user_id: string;
   status: string | null;
   price: number | null;
   duration_type?: string | null;
@@ -175,22 +176,13 @@ export default function RentalScreen() {
               haptic
               style={({ pressed }) => [styles.messageButton, pressed && styles.messageButtonPressed]}
               onPress={() => {
-                if (!rental) return;
-
-                const chats = useChatStore.getState().chats;
-
-                const chat = chats.find(
-                  (c) => c.offerId === rental.offer_id
-                );
-
-                if (!chat) {
-                  console.warn('No chat found for rental');
+                if (!rental?.id) {
+                  console.warn('Missing rental id');
                   return;
                 }
-
                 router.push({
                   pathname: '/chat/[id]',
-                  params: { id: chat.id },
+                  params: { id: rental.id },
                 });
               }}
             >

@@ -11,7 +11,6 @@ import { formatDurationDisplay } from '@/lib/durationFormat';
 import { formatUsd } from '@/lib/money';
 import { formatDistanceFromYou } from '@/lib/requestDistance';
 import { isUuidString } from '@/lib/requestOwnership';
-import { openChatForRequest } from '@/lib/openRequestChat';
 import {
   getEffectiveRentalStatus,
   getRequestBySupabaseId,
@@ -140,7 +139,17 @@ export default function MatchSummaryScreen() {
           pressOpacityFeedback={false}
           haptic
           style={({ pressed }) => [styles.messageButton, pressed && styles.messageButtonPressed]}
-          onPress={() => openChatForRequest(router, request.timestamp)}
+          onPress={() => {
+            const offerId = String(request.acceptedOfferId ?? '').trim();
+            if (!offerId) {
+              console.warn('Missing offer_id');
+              return;
+            }
+            router.push({
+              pathname: '/chat/[id]',
+              params: { id: offerId },
+            });
+          }}
         >
           <Text style={styles.messageButtonText}>Message</Text>
         </Pressable>

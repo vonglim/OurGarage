@@ -144,6 +144,13 @@ export default function NotificationsScreen() {
       return;
     }
     if (n.type === 'message') {
+      if (n.offerId != null && String(n.offerId).trim() !== '') {
+        router.push({
+          pathname: '/chat/[id]',
+          params: { id: String(n.offerId).trim() },
+        });
+        return;
+      }
       if (n.chatId) {
         router.push({ pathname: '/chat/[id]', params: { id: n.chatId } });
         return;

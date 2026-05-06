@@ -155,6 +155,12 @@ export async function finalizeOfferAcceptance(
       renter_user_id: offer.renterId,
       owner_user_id: ownerIdForRental,
       status: 'pending_meetup' as const,
+      meetup_time: null,
+      meetup_location: null,
+      return_time: null,
+      return_location: null,
+      confirmed_by_renter: false,
+      confirmed_by_owner: false,
       duration_type:
         (typeof requestRow.durationType === 'string' && requestRow.durationType.trim() !== ''
           ? requestRow.durationType

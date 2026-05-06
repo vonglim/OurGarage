@@ -28,7 +28,7 @@ const MIN_LEN = 2;
 const MAX_LEN = 32;
 
 /**
- * Shown after magic-link login when `profiles.name` is still a placeholder; saves `profiles.name`
+ * Shown after sign-in when `profiles.name` is still a placeholder; saves `profiles.name`
  * and refreshes the session profile cache.
  */
 export function CreateUsernameScreen({ user, onCompleted }: Props) {

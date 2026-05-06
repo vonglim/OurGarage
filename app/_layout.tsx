@@ -1,5 +1,6 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import type { Session } from '@supabase/supabase-js';
+import * as Linking from 'expo-linking';
 import { Stack, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
@@ -20,7 +21,7 @@ import { ensureProfile } from '@/lib/ensureProfile';
 import { startNotificationsServerSync } from '@/lib/notificationsServerSync';
 import { registerAndStorePushTokenAsync } from '@/lib/notifications';
 import { clearRemoteProfileCache } from '@/lib/remoteProfileCache';
-import { supabase } from '../lib/supabase';
+import { getSupabase, supabase } from '../lib/supabase';
 import { applySessionToAuthStore } from '@/store/authSessionStore';
 import { resetProfileToDefault } from '@/store/profileStore';
 
@@ -47,6 +48,31 @@ export default function RootLayout() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [needsCreateUsername, setNeedsCreateUsername] = useState(false);
+
+  useEffect(() => {
+    const client = getSupabase();
+
+    const handleUrl = async (event: { url: string }) => {
+      const url = event.url;
+
+      if (url && (url.includes('access_token') || url.includes('code='))) {
+        const { error } = await client.auth.exchangeCodeForSession(url);
+        if (error && __DEV__) {
+          console.warn('[auth] exchangeCodeForSession', error.message);
+        }
+      }
+    };
+
+    const subscription = Linking.addEventListener('url', handleUrl);
+
+    void Linking.getInitialURL().then((initial) => {
+      if (initial) void handleUrl({ url: initial });
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
 
   useEffect(() => {
     const syncProfileAndSession = async (next: Session | null) => {
@@ -179,7 +205,15 @@ export default function RootLayout() {
               <Stack.Screen name="renby/[id]" />
               <Stack.Screen name="offer-detail" />
               <Stack.Screen name="match-summary" />
-              <Stack.Screen name="chat/[id]" />
+              <Stack.Screen
+                name="chat/[id]"
+                options={{
+                  gestureEnabled: true,
+                  fullScreenGestureEnabled: false,
+                  // Keep iOS back swipe, but only from a narrow left edge zone.
+                  gestureResponseDistance: { start: 25 },
+                }}
+              />
               <Stack.Screen name="handoff-confirmation" />
               <Stack.Screen name="edit-profile" />
               <Stack.Screen name="rentals-management" />

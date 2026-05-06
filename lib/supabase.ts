@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { Platform } from 'react-native';
 
 /**
  * Project URL must be the Supabase host only (no `/rest/v1/` — the client adds API paths).
@@ -25,7 +25,7 @@ export function getSupabase(): SupabaseClient {
       autoRefreshToken: true,
       persistSession: true,
       // Web: read magic-link / OAuth params from the URL on load.
-      detectSessionInUrl: isWeb,
+      detectSessionInUrl: true,
     },
   });
   return client;

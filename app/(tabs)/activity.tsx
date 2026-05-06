@@ -38,7 +38,7 @@ import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { getSupabase } from '@/lib/supabase';
 import { refreshActivityScreenFromSupabase } from '@/lib/supabaseActivityRefresh';
 import { updateRentalRequestStatus } from '@/lib/updateRentalRequestStatus';
-import { useChatStore, useTotalUnreadChatCount } from '@/store/chatStore';
+import { useTotalUnreadChatCount } from '@/store/chatStore';
 import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
 import type { AppNotification } from '@/store/notificationsStore';
 import { useNotificationsStore } from '@/store/notificationsStore';
@@ -926,42 +926,50 @@ export default function ActivityScreen() {
                                 <Text style={styles.activeStatusLabel}>You are renting</Text>
                               </View>
                               <View style={styles.activeBtnStackGap} />
-                              <Pressable
-                                pressOpacityFeedback={false}
-                                haptic
-                                style={({ pressed }) => [
-                                  styles.activeBtnPrimaryLarge,
-                                  pressed && styles.activeBtnPressed,
-                                ]}
-                                onPress={() => {
-                                  if (__DEV__) {
-                                    console.log('Rental debug → request_id:', rid, 'listing_id:', lid);
-                                  }
-
-                                  if (rid && rid.trim() !== '') {
+                              <View style={{ flexDirection: 'row', gap: 10 }}>
+                                <Pressable
+                                  pressOpacityFeedback={false}
+                                  haptic
+                                  style={({ pressed }) => [
+                                    styles.activeBtnPrimaryLarge,
+                                    { flex: 1 },
+                                    pressed && styles.activeBtnPressed,
+                                  ]}
+                                  onPress={() => {
+                                    if (!row.id) {
+                                      console.warn('Missing rental id');
+                                      return;
+                                    }
                                     router.push({
-                                      pathname: '/request-details',
-                                      params: { requestId: rid },
+                                      pathname: '/chat/[id]',
+                                      params: { id: row.id },
                                     });
-                                    return;
-                                  }
-
-                                  if (lid && lid.trim() !== '') {
+                                  }}
+                                  accessibilityRole="button"
+                                  accessibilityLabel="Message"
+                                >
+                                  <Text style={styles.activeBtnPrimaryLargeText}>Message</Text>
+                                </Pressable>
+                                <Pressable
+                                  pressOpacityFeedback={false}
+                                  haptic
+                                  style={({ pressed }) => [
+                                    styles.activeBtnPrimaryLarge,
+                                    { flex: 1 },
+                                    pressed && styles.activeBtnPressed,
+                                  ]}
+                                  onPress={() => {
                                     router.push({
-                                      pathname: '/listing-detail',
-                                      params: { listingId: lid },
+                                      pathname: '/rental/[id]',
+                                      params: { id: row.id },
                                     });
-                                    return;
-                                  }
-
-                                  alert('This rental is missing its source (no request or listing linked).');
-                                }}
-                                disabled={!rid && !lid}
-                                accessibilityRole="button"
-                                accessibilityLabel="View rental details"
-                              >
-                                <Text style={styles.activeBtnPrimaryLargeText}>View Details</Text>
-                              </Pressable>
+                                  }}
+                                  accessibilityRole="button"
+                                  accessibilityLabel="View details"
+                                >
+                                  <Text style={styles.activeBtnPrimaryLargeText}>View Details</Text>
+                                </Pressable>
+                              </View>
                             </View>
                           );
                         })}
@@ -993,56 +1001,50 @@ export default function ActivityScreen() {
                               <Text style={styles.activeStatusLabel}>Rented out</Text>
                             </View>
                             <View style={styles.activeBtnStackGap} />
-                            <Pressable
-                              pressOpacityFeedback={false}
-                              haptic
-                              style={({ pressed }) => [
-                                styles.activeBtnPrimaryLarge,
-                                pressed && styles.activeBtnPressed,
-                              ]}
-                              onPress={() => {
-                                const chats = useChatStore.getState().chats;
-
-                                const chat = chats.find(
-                                  (c) =>
-                                    (row.request_id != null &&
-                                      resolveRequestFromRouteId(row.request_id)?.timestamp ===
-                                        c.requestId) ||
-                                    (c as { listingId?: string | null }).listingId ===
-                                      row.listing_id
-                                );
-
-                                if (!chat) {
-                                  const newChatId = `chat-${Date.now()}`;
-
-                                  useChatStore.getState().createChat({
-                                    id: newChatId,
-                                    requestId:
-                                      resolveRequestFromRouteId(row.request_id)?.timestamp ?? null,
-                                    participants: [
-                                      { userId: row.owner_user_id },
-                                      { userId: row.renter_user_id },
-                                    ],
-                                  });
-
+                            <View style={{ flexDirection: 'row', gap: 10 }}>
+                              <Pressable
+                                pressOpacityFeedback={false}
+                                haptic
+                                style={({ pressed }) => [
+                                  styles.activeBtnPrimaryLarge,
+                                  { flex: 1 },
+                                  pressed && styles.activeBtnPressed,
+                                ]}
+                                onPress={() => {
+                                  if (!row.id) {
+                                    console.warn('Missing rental id');
+                                    return;
+                                  }
                                   router.push({
                                     pathname: '/chat/[id]',
-                                    params: { id: newChatId },
+                                    params: { id: row.id },
                                   });
-
-                                  return;
-                                }
-
-                                router.push({
-                                  pathname: '/chat/[id]',
-                                  params: { id: chat.id },
-                                });
-                              }}
-                              accessibilityRole="button"
-                              accessibilityLabel="Contact renter"
-                            >
-                              <Text style={styles.activeBtnPrimaryLargeText}>Contact Renter</Text>
-                            </Pressable>
+                                }}
+                                accessibilityRole="button"
+                                accessibilityLabel="Message"
+                              >
+                                <Text style={styles.activeBtnPrimaryLargeText}>Message</Text>
+                              </Pressable>
+                              <Pressable
+                                pressOpacityFeedback={false}
+                                haptic
+                                style={({ pressed }) => [
+                                  styles.activeBtnPrimaryLarge,
+                                  { flex: 1 },
+                                  pressed && styles.activeBtnPressed,
+                                ]}
+                                onPress={() => {
+                                  router.push({
+                                    pathname: '/rental/[id]',
+                                    params: { id: row.id },
+                                  });
+                                }}
+                                accessibilityRole="button"
+                                accessibilityLabel="View details"
+                              >
+                                <Text style={styles.activeBtnPrimaryLargeText}>View Details</Text>
+                              </Pressable>
+                            </View>
                           </View>
                         );
                       })}
