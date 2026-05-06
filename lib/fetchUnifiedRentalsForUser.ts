@@ -11,6 +11,16 @@ export type UnifiedRentalRow = {
   offer_id: string | null;
   listing_id: string | null;
   rental_request_id: string | null;
+  pickup_datetime?: string | null;
+  return_datetime?: string | null;
+  meetup_location?: string | null;
+  owner_confirmed?: boolean;
+  renter_confirmed?: boolean;
+  agreement_status?: 'pending' | 'confirmed' | string | null;
+  confirmed_at?: string | null;
+  proposal_version?: number | null;
+  proposal_updated_at?: string | null;
+  latest_proposal_message_id?: string | null;
   /** Resolved in fetch — never a bare UUID. */
   displayTitle: string;
 };

@@ -60,6 +60,33 @@ const TOUCH_DEBUG = false;
 const OFFER_MESSAGES_SELECT = 'id, author_id, body, kind, created_at, offer_images';
 const HEADER_SURFACE = '#F7F8FB';
 
+function rentalPickupIso(rental: RentalMeetupDetails | null): string | null {
+  if (!rental) return null;
+  return rental.pickup_datetime ?? rental.meetup_time ?? null;
+}
+
+function rentalReturnIso(rental: RentalMeetupDetails | null): string | null {
+  if (!rental) return null;
+  return rental.return_datetime ?? rental.return_time ?? null;
+}
+
+function rentalSharedLocation(rental: RentalMeetupDetails | null): string {
+  if (!rental) return '';
+  return (rental.meetup_location || rental.return_location || '').trim();
+}
+
+function ownerConfirmed(rental: RentalMeetupDetails | null): boolean {
+  if (!rental) return false;
+  if (typeof rental.owner_confirmed === 'boolean') return rental.owner_confirmed;
+  return Boolean(rental.confirmed_by_owner);
+}
+
+function renterConfirmed(rental: RentalMeetupDetails | null): boolean {
+  if (!rental) return false;
+  if (typeof rental.renter_confirmed === 'boolean') return rental.renter_confirmed;
+  return Boolean(rental.confirmed_by_renter);
+}
+
 function normalizeImages(val: unknown): string[] {
   if (!val) return [];
   if (Array.isArray(val)) {
@@ -406,10 +433,14 @@ export default function ChatDetailScreen() {
       if (!rental || !meId) return;
       if (message.senderId === meId) return;
 
-      const patch: Record<string, unknown> = {};
-      if (rental.renter_user_id === meId) patch.confirmed_by_renter = true;
-      if (rental.owner_user_id === meId) patch.confirmed_by_owner = true;
-      if (Object.keys(patch).length === 0) return;
+      const patch: Record<string, unknown> = {
+        confirmed_by_owner: true,
+        confirmed_by_renter: true,
+        owner_confirmed: true,
+        renter_confirmed: true,
+        agreement_status: 'confirmed',
+        confirmed_at: new Date().toISOString(),
+      };
 
       setAcceptingMessageId(message.id);
       try {
@@ -438,7 +469,7 @@ export default function ChatDetailScreen() {
       meetupTimeIso: string;
       returnTimeIso: string;
     }) => {
-      if (!rental || !meId) return;
+      if (!rental || !meId) return null;
       const pickupLine = new Date(input.meetupTimeIso).toLocaleString();
       const returnLine = new Date(input.returnTimeIso).toLocaleString();
       const body = `Rental details updated:\n📅 Pickup: ${pickupLine}\n🔁 Return: ${returnLine}\n📍 ${input.meetupLocation}`;
@@ -451,27 +482,48 @@ export default function ChatDetailScreen() {
         kind: 'system',
       };
       if (rental.id) insertRow.rental_id = rental.id;
-      await getSupabase().from('offer_messages').insert(insertRow);
+      const { data, error } = await getSupabase()
+        .from('offer_messages')
+        .insert(insertRow)
+        .select('id')
+        .single();
+      if (error) return null;
+      return typeof data?.id === 'string' ? data.id : null;
     },
     [rental, meId]
   );
 
   const onConfirmRentalDetails = useCallback(async () => {
     if (!rental || !meId) return;
-    const sharedLoc = (rental.meetup_location || rental.return_location || '').trim();
-    if (!rental.meetup_time || sharedLoc === '') {
+    const sharedLoc = rentalSharedLocation(rental);
+    if (!rentalPickupIso(rental) || sharedLoc === '') {
       showFeedbackToast('Set pickup time and meetup location first.');
       return;
     }
-    if (!rental.return_time) {
+    if (!rentalReturnIso(rental)) {
       showFeedbackToast('Set return time first.');
       return;
     }
     setRentalBusy(true);
     try {
       const patch: Record<string, unknown> = {};
-      if (rental.renter_user_id === meId) patch.confirmed_by_renter = true;
-      if (rental.owner_user_id === meId) patch.confirmed_by_owner = true;
+      if (rental.renter_user_id === meId) {
+        patch.confirmed_by_renter = true;
+        patch.renter_confirmed = true;
+      }
+      if (rental.owner_user_id === meId) {
+        patch.confirmed_by_owner = true;
+        patch.owner_confirmed = true;
+      }
+      const nextOwnerConfirmed = patch.owner_confirmed ?? ownerConfirmed(rental);
+      const nextRenterConfirmed = patch.renter_confirmed ?? renterConfirmed(rental);
+      if (nextOwnerConfirmed && nextRenterConfirmed) {
+        patch.agreement_status = 'confirmed';
+        patch.confirmed_at = new Date().toISOString();
+      } else {
+        patch.agreement_status = 'pending';
+        patch.confirmed_at = null;
+      }
       const { data, error } = await getSupabase()
         .from('rentals')
         .update(patch)
@@ -496,9 +548,16 @@ export default function ChatDetailScreen() {
         const supabase = getSupabase();
         const iAmOwner = rental.owner_user_id === meId;
         const iAmRenter = rental.renter_user_id === meId;
+        const nowIso = new Date().toISOString();
+        const nextProposalVersion =
+          typeof rental.proposal_version === 'number' && Number.isFinite(rental.proposal_version)
+            ? rental.proposal_version + 1
+            : 2;
         const { error } = await supabase
           .from('rentals')
           .update({
+            pickup_datetime: input.meetupTimeIso,
+            return_datetime: input.returnTimeIso,
             meetup_time: input.meetupTimeIso,
             meetup_location: input.meetupLocation,
             return_time: input.returnTimeIso,
@@ -506,15 +565,29 @@ export default function ChatDetailScreen() {
             // Proposer auto-confirms their own proposal; other party resets to pending.
             confirmed_by_owner: iAmOwner ? true : false,
             confirmed_by_renter: iAmRenter ? true : false,
+            owner_confirmed: iAmOwner ? true : false,
+            renter_confirmed: iAmRenter ? true : false,
+            agreement_status: 'pending',
+            confirmed_at: null,
+            last_proposed_by: meId,
+            proposal_version: nextProposalVersion,
+            proposal_updated_at: nowIso,
+            latest_proposal_message_id: null,
           })
           .eq('id', rental.id);
         if (error) {
           showFeedbackToast('Could not update rental details.');
           return;
         }
+        const messageId = await insertMeetupSystemMessage(input);
+        if (messageId) {
+          await supabase
+            .from('rentals')
+            .update({ latest_proposal_message_id: messageId })
+            .eq('id', rental.id);
+        }
         const { data } = await supabase.from('rentals').select('*').eq('id', rental.id).single();
         if (data) setRental(data as RentalMeetupDetails);
-        await insertMeetupSystemMessage(input);
       } finally {
         setRentalBusy(false);
       }
@@ -658,9 +731,9 @@ export default function ChatDetailScreen() {
                     const iAmRenter = rental?.renter_user_id === meId;
                     const iAmOwner = rental?.owner_user_id === meId;
                     const myConfirmed = iAmRenter
-                      ? Boolean(rental?.confirmed_by_renter)
+                    ? renterConfirmed(rental)
                       : iAmOwner
-                        ? Boolean(rental?.confirmed_by_owner)
+                      ? ownerConfirmed(rental)
                         : true;
                     const canAcceptInChat =
                       Boolean(rental) && isRentalDetailsSystem && !isCurrentUser && !myConfirmed;

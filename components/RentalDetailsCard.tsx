@@ -24,11 +24,21 @@ export type RentalMeetupDetails = {
   renter_user_id: string;
   owner_user_id: string;
   meetup_time: string | null;
+  pickup_datetime?: string | null;
   meetup_location: string | null;
   return_time: string | null;
+  return_datetime?: string | null;
   return_location: string | null;
   confirmed_by_renter: boolean;
   confirmed_by_owner: boolean;
+  renter_confirmed?: boolean;
+  owner_confirmed?: boolean;
+  agreement_status?: 'pending' | 'confirmed' | string | null;
+  confirmed_at?: string | null;
+  last_proposed_by?: string | null;
+  proposal_version?: number | null;
+  proposal_updated_at?: string | null;
+  latest_proposal_message_id?: string | null;
 };
 
 type Props = {
@@ -139,9 +149,16 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
   const [activePicker, setActivePicker] = useState<PickerField | null>(null);
   const pickerTargetRef = useRef<PickerField | null>(null);
 
-  const bothConfirmed = rental.confirmed_by_owner && rental.confirmed_by_renter;
+  const isOwnerConfirmed =
+    typeof rental.owner_confirmed === 'boolean' ? rental.owner_confirmed : rental.confirmed_by_owner;
+  const isRenterConfirmed =
+    typeof rental.renter_confirmed === 'boolean' ? rental.renter_confirmed : rental.confirmed_by_renter;
+  const bothConfirmed =
+    rental.agreement_status === 'confirmed' || (isOwnerConfirmed && isRenterConfirmed);
   const confirmAnim = useRef(new Animated.Value(bothConfirmed ? 1 : 0)).current;
   const sharedRentalLocation = (rental.meetup_location || rental.return_location || '').trim();
+  const pickupIso = rental.pickup_datetime ?? rental.meetup_time;
+  const returnIso = rental.return_datetime ?? rental.return_time ?? null;
   const canConfirm = Boolean(
     rental.meetup_time && sharedRentalLocation !== '' && rental.return_time
   );
@@ -300,13 +317,13 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
         <View style={styles.timeCol}>
           <Text style={styles.metaLabel}>Pickup</Text>
           <Text style={styles.metaValue} numberOfLines={1}>
-            {formatCompactMeetup(rental.meetup_time)}
+            {formatCompactMeetup(pickupIso)}
           </Text>
         </View>
         <View style={styles.timeCol}>
           <Text style={styles.metaLabel}>Return</Text>
           <Text style={styles.metaValue} numberOfLines={1}>
-            {formatCompactMeetup(rental.return_time ?? null)}
+            {formatCompactMeetup(returnIso)}
           </Text>
         </View>
       </View>
@@ -324,7 +341,7 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
           ]}
           numberOfLines={1}
         >
-          {rental.confirmed_by_owner ? '✓' : '○'} Owner   {rental.confirmed_by_renter ? '✓' : '○'} Renter
+          {isOwnerConfirmed ? '✓' : '○'} Owner   {isRenterConfirmed ? '✓' : '○'} Renter
         </Animated.Text>
         {!bothConfirmed ? (
           <Animated.Text
