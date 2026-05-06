@@ -1,9 +1,9 @@
 import { Pressable } from '@/components/Pressable';
 import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
-import Ionicons from '@expo/vector-icons/Ionicons';
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
@@ -13,6 +13,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -22,7 +23,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import {
   RentalDetailsCard,
-  type RentalDetailsCardHandle,
   type RentalMeetupDetails,
 } from '@/components/RentalDetailsCard';
 import { subtleControlPressed, ui } from '@/constants/appUi';
@@ -55,9 +55,10 @@ function normalizeChatRouteId(raw: string | string[] | undefined): string {
 }
 
 const NEAR_BOTTOM_PX = 160;
-const TOUCH_DEBUG = true;
+const TOUCH_DEBUG = false;
 
 const OFFER_MESSAGES_SELECT = 'id, author_id, body, kind, created_at, offer_images';
+const HEADER_SURFACE = '#F7F8FB';
 
 function normalizeImages(val: unknown): string[] {
   if (!val) return [];
@@ -79,6 +80,16 @@ function normalizeImages(val: unknown): string[] {
 
 function chatLogPrefix(routeId: string, rentalId: string | null): '[REQUEST CHAT]' | '[RENTAL CHAT]' {
   return rentalId != null && routeId === rentalId ? '[RENTAL CHAT]' : '[REQUEST CHAT]';
+}
+
+function parseRentalUpdateMessage(text: string): { pickup: string; returnAt: string; location: string } | null {
+  if (!text.startsWith('Rental details updated:')) return null;
+  const lines = text.split('\n');
+  const pickup = lines.find((line) => line.startsWith('📅 Pickup:'))?.replace('📅 Pickup:', '').trim() ?? '';
+  const returnAt = lines.find((line) => line.startsWith('🔁 Return:'))?.replace('🔁 Return:', '').trim() ?? '';
+  const location = lines.find((line) => line.startsWith('📍'))?.replace('📍', '').trim() ?? '';
+  if (!pickup && !returnAt && !location) return null;
+  return { pickup, returnAt, location };
 }
 
 function mapOfferMessageRows(
@@ -109,9 +120,11 @@ function mapOfferMessageRows(
 export default function ChatDetailScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { width: screenWidth } = useWindowDimensions();
   const { id: idParam } = useLocalSearchParams<{ id?: string | string[] }>();
   const id = useMemo(() => normalizeChatRouteId(idParam), [idParam]);
   const meId = useAuthUserId();
+  const bubbleMaxWidth = useMemo(() => Math.min(Math.max(screenWidth * 0.76, 240), 520), [screenWidth]);
 
   const [draft, setDraft] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -124,7 +137,6 @@ export default function ChatDetailScreen() {
   const [acceptingMessageId, setAcceptingMessageId] = useState<string | null>(null);
   const [acceptedMessageIds, setAcceptedMessageIds] = useState<string[]>([]);
   const listRef = useRef<FlatList<ChatMessage>>(null);
-  const rentalDetailsCardRef = useRef<RentalDetailsCardHandle>(null);
   const threadRef = useRef({ routeId: '', offerId: '', rentalId: null as string | null });
   const nearBottomRef = useRef(true);
 
@@ -482,6 +494,8 @@ export default function ChatDetailScreen() {
       setRentalBusy(true);
       try {
         const supabase = getSupabase();
+        const iAmOwner = rental.owner_user_id === meId;
+        const iAmRenter = rental.renter_user_id === meId;
         const { error } = await supabase
           .from('rentals')
           .update({
@@ -489,8 +503,9 @@ export default function ChatDetailScreen() {
             meetup_location: input.meetupLocation,
             return_time: input.returnTimeIso,
             return_location: input.meetupLocation,
-            confirmed_by_renter: false,
-            confirmed_by_owner: false,
+            // Proposer auto-confirms their own proposal; other party resets to pending.
+            confirmed_by_owner: iAmOwner ? true : false,
+            confirmed_by_renter: iAmRenter ? true : false,
           })
           .eq('id', rental.id);
         if (error) {
@@ -504,7 +519,7 @@ export default function ChatDetailScreen() {
         setRentalBusy(false);
       }
     },
-    [rental, insertMeetupSystemMessage]
+    [rental, meId, insertMeetupSystemMessage]
   );
 
   if (!id) {
@@ -515,6 +530,7 @@ export default function ChatDetailScreen() {
           TOUCH_DEBUG ? { backgroundColor: 'rgba(0,128,255,0.08)' } : null,
         ]}
       >
+        <StatusBar style="dark" backgroundColor={HEADER_SURFACE} />
         <ScreenEntrance style={styles.entranceFlex}>
           <View style={[styles.topContext, { paddingTop: insets.top + 8 }]}>
             <View style={styles.headerBackSlot}>
@@ -539,6 +555,7 @@ export default function ChatDetailScreen() {
         if (TOUCH_DEBUG) console.log('[TOUCH DEBUG] Chat root View touch start');
       }}
     >
+      <StatusBar style="dark" backgroundColor={HEADER_SURFACE} />
       <KeyboardAvoidingView
         style={styles.keyboardAvoiding}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -549,17 +566,11 @@ export default function ChatDetailScreen() {
       >
         <ScreenEntrance style={styles.entranceFlex}>
           <View style={styles.chatMain}>
-            <View
-              style={styles.chatBody}
-              onTouchStart={() => {
-                if (TOUCH_DEBUG) console.log('[TOUCH DEBUG] chatBody touch start');
-              }}
-            >
+            <View style={[styles.headerRegion, { paddingTop: insets.top + 2 }]}>
               {rental ? (
                 <View
                   style={[
                     styles.rentalCardSlot,
-                    { paddingTop: insets.top + 2 },
                     TOUCH_DEBUG ? { backgroundColor: 'rgba(255,165,0,0.15)' } : null,
                   ]}
                   pointerEvents="box-none"
@@ -568,7 +579,6 @@ export default function ChatDetailScreen() {
                   }}
                 >
                   <RentalDetailsCard
-                    ref={rentalDetailsCardRef}
                     rental={rental}
                     headerTitle={rentalTitle ? `Rental: ${rentalTitle}` : 'Rental'}
                     headerLeftAccessory={
@@ -578,6 +588,7 @@ export default function ChatDetailScreen() {
                         iconSize={18}
                       />
                     }
+                    showHeaderEditAction
                     itemName="Rental"
                     durationLabel={(rental as { duration_type?: string }).duration_type ?? '—'}
                     isRenter={rental.renter_user_id === meId}
@@ -587,8 +598,23 @@ export default function ChatDetailScreen() {
                     onProposeChange={onProposeRentalDetails}
                   />
                 </View>
-              ) : null}
+              ) : (
+                <View style={styles.headerOnlyBackRow}>
+                  <ScreenBackButton
+                    onPress={() => router.back()}
+                    style={styles.integratedBackBtn}
+                    iconSize={18}
+                  />
+                </View>
+              )}
+            </View>
 
+            <View
+              style={styles.chatBody}
+              onTouchStart={() => {
+                if (TOUCH_DEBUG) console.log('[TOUCH DEBUG] chatBody touch start');
+              }}
+            >
               <View
                 style={[
                   styles.messagesArea,
@@ -617,98 +643,128 @@ export default function ChatDetailScreen() {
                     styles.messagesContent,
                     rental ? styles.messagesContentBelowCard : null,
                     messages.length === 0 ? styles.messagesContentEmpty : null,
+                    { paddingHorizontal: 14 },
                     { paddingBottom: 12 + insets.bottom },
                   ]}
                   ListEmptyComponent={<Text style={styles.hint}>No messages yet</Text>}
                   renderItem={({ item: message, index }) => {
-                    const hasText = typeof message.text === 'string' && message.text.trim() !== '';
-                    const hasImages = Array.isArray(message.offer_images) && message.offer_images.length > 0;
-                    if (!hasText && !hasImages) return null;
-                    const isCurrentUser = message.senderId === meId;
-                  const isRentalDetailsSystem =
-                    message.kind === 'system_rental_details' ||
-                    message.text.startsWith('Rental details updated:');
-                  const iAmRenter = rental?.renter_user_id === meId;
-                  const iAmOwner = rental?.owner_user_id === meId;
-                  const myConfirmed = iAmRenter
-                    ? Boolean(rental?.confirmed_by_renter)
-                    : iAmOwner
-                      ? Boolean(rental?.confirmed_by_owner)
-                      : true;
-                  const canAcceptInChat =
-                    Boolean(rental) && isRentalDetailsSystem && !isCurrentUser && !myConfirmed;
-                  const showAcceptedState =
-                    Boolean(rental) &&
-                    isRentalDetailsSystem &&
-                    !isCurrentUser &&
-                    (myConfirmed || acceptedMessageIds.includes(message.id));
-                    const prev = index > 0 ? messages[index - 1] : null;
-                    const senderChanged = prev != null && prev.senderId !== message.senderId;
-                    return (
-                      <View style={styles.messageRow}>
-                        <View
-                          style={[
-                            styles.messageStack,
-                            isCurrentUser ? styles.messageStackRight : styles.messageStackLeft,
-                            index > 0 &&
-                              (senderChanged ? styles.messageStackNewSender : styles.messageStackSameSender),
-                          ]}
-                        >
-                          <View style={[styles.messageBubble, isCurrentUser ? styles.right : styles.left]}>
-                            <Text style={isCurrentUser ? styles.rightText : styles.leftText}>{message.text}</Text>
-                            {hasImages ? (
-                              <View style={{ marginTop: 8 }}>
-                                {(message.offer_images ?? []).map((img, i) => (
-                                  <Image
-                                    key={i}
-                                    source={{ uri: String(img) }}
-                                    style={{ width: 160, height: 160, borderRadius: 10, marginTop: 6 }}
-                                    resizeMode="cover"
-                                  />
-                                ))}
-                              </View>
-                            ) : null}
-                            {canAcceptInChat ? (
-                              <View style={styles.systemActionRow}>
-                                <Pressable
-                                  pressOpacityFeedback={false}
-                                  onPress={() => void onAcceptRentalSystemMessage(message)}
-                                  disabled={acceptingMessageId === message.id}
-                                  style={({ pressed }) => [
-                                    styles.systemAcceptBtn,
-                                    pressed && styles.systemAcceptBtnPressed,
-                                  ]}
-                                >
-                                  <Text style={styles.systemAcceptText}>
-                                    {acceptingMessageId === message.id ? 'Accepting...' : 'Accept'}
-                                  </Text>
-                                </Pressable>
-                              </View>
-                            ) : null}
-                            {showAcceptedState ? (
-                              <View style={styles.systemAcceptedRow}>
-                                <Text style={styles.systemAcceptedText}>✓ Accepted</Text>
-                              </View>
-                            ) : null}
-                          </View>
-                          <Text
+                      const hasText = typeof message.text === 'string' && message.text.trim() !== '';
+                      const hasImages = Array.isArray(message.offer_images) && message.offer_images.length > 0;
+                      if (!hasText && !hasImages) return null;
+                      const isCurrentUser = message.senderId === meId;
+                    const isRentalDetailsSystem =
+                      message.kind === 'system_rental_details' ||
+                      message.text.startsWith('Rental details updated:');
+                    const iAmRenter = rental?.renter_user_id === meId;
+                    const iAmOwner = rental?.owner_user_id === meId;
+                    const myConfirmed = iAmRenter
+                      ? Boolean(rental?.confirmed_by_renter)
+                      : iAmOwner
+                        ? Boolean(rental?.confirmed_by_owner)
+                        : true;
+                    const canAcceptInChat =
+                      Boolean(rental) && isRentalDetailsSystem && !isCurrentUser && !myConfirmed;
+                    const showAcceptedState =
+                      Boolean(rental) &&
+                      isRentalDetailsSystem &&
+                      !isCurrentUser &&
+                      (myConfirmed || acceptedMessageIds.includes(message.id));
+                      const prev = index > 0 ? messages[index - 1] : null;
+                      const senderChanged = prev != null && prev.senderId !== message.senderId;
+                      const parsedRentalUpdate = parseRentalUpdateMessage(message.text);
+                      return (
+                        <View style={styles.messageRow}>
+                          <View
                             style={[
-                              styles.timestamp,
-                              isCurrentUser ? styles.timestampRight : styles.timestampLeft,
+                              styles.messageStack,
+                              { maxWidth: bubbleMaxWidth },
+                              isRentalDetailsSystem ? styles.messageStackSystem : null,
+                              isCurrentUser ? styles.messageStackRight : styles.messageStackLeft,
+                              index > 0 &&
+                                (senderChanged ? styles.messageStackNewSender : styles.messageStackSameSender),
                             ]}
                           >
-                            {new Date(message.timestamp).toLocaleTimeString([], {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
-                          </Text>
+                            <View
+                              style={[
+                                styles.messageBubble,
+                                isRentalDetailsSystem
+                                  ? styles.systemBubble
+                                  : isCurrentUser
+                                    ? styles.right
+                                    : styles.left,
+                              ]}
+                            >
+                              {isRentalDetailsSystem ? (
+                                <View>
+                                  <Text style={styles.systemTitle}>Rental updated</Text>
+                                  {parsedRentalUpdate?.pickup ? (
+                                    <Text style={styles.systemLine}>{parsedRentalUpdate.pickup}</Text>
+                                  ) : null}
+                                  {parsedRentalUpdate?.returnAt ? (
+                                    <Text style={styles.systemLine}>{parsedRentalUpdate.returnAt}</Text>
+                                  ) : null}
+                                  {parsedRentalUpdate?.location ? (
+                                    <Text style={styles.systemLocation}>📍 {parsedRentalUpdate.location}</Text>
+                                  ) : null}
+                                  {!parsedRentalUpdate ? (
+                                    <Text style={styles.systemFallbackText}>{message.text}</Text>
+                                  ) : null}
+                                </View>
+                              ) : (
+                                <Text style={isCurrentUser ? styles.rightText : styles.leftText}>{message.text}</Text>
+                              )}
+                              {hasImages ? (
+                                <View style={styles.imageGroup}>
+                                  {(message.offer_images ?? []).map((img, i) => (
+                                    <Image
+                                      key={i}
+                                      source={{ uri: String(img) }}
+                                      style={styles.messageImage}
+                                      resizeMode="cover"
+                                    />
+                                  ))}
+                                </View>
+                              ) : null}
+                              {canAcceptInChat ? (
+                                <View style={styles.systemActionRow}>
+                                  <Pressable
+                                    pressOpacityFeedback={false}
+                                    onPress={() => void onAcceptRentalSystemMessage(message)}
+                                    disabled={acceptingMessageId === message.id}
+                                    style={({ pressed }) => [
+                                      styles.systemAcceptBtn,
+                                      pressed && styles.systemAcceptBtnPressed,
+                                    ]}
+                                  >
+                                    <Text style={styles.systemAcceptText}>
+                                      {acceptingMessageId === message.id ? 'Accepting...' : 'Accept'}
+                                    </Text>
+                                  </Pressable>
+                                </View>
+                              ) : null}
+                              {showAcceptedState ? (
+                                <View style={styles.systemAcceptedRow}>
+                                  <Text style={styles.systemAcceptedText}>✓ Accepted</Text>
+                                </View>
+                              ) : null}
+                            </View>
+                            <Text
+                              style={[
+                                styles.timestamp,
+                                isCurrentUser ? styles.timestampRight : styles.timestampLeft,
+                              ]}
+                            >
+                              {new Date(message.timestamp).toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </Text>
+                          </View>
                         </View>
-                      </View>
-                    );
+                      );
                   }}
                 />
               </View>
-
               <View style={[styles.inputContainer, { paddingBottom: 10 + insets.bottom }]}>
                 <TextInput
                   value={draft}
@@ -719,16 +775,6 @@ export default function ChatDetailScreen() {
                   multiline
                   maxLength={2000}
                 />
-                <Pressable
-                  pressOpacityFeedback={false}
-                  haptic
-                  onPress={() => rentalDetailsCardRef.current?.openProposeModal()}
-                  hitSlop={10}
-                  style={({ pressed }) => [styles.proposeBtn, pressed && styles.sendBtnPressed]}
-                  accessibilityLabel="Propose pickup and return details"
-                >
-                  <Ionicons name="calendar-outline" size={17} color={ui.primary} />
-                </Pressable>
                 <Pressable
                   pressOpacityFeedback={false}
                   haptic
@@ -752,7 +798,7 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     minHeight: 0,
-    backgroundColor: ui.surfaceGrouped,
+    backgroundColor: '#EFF2F6',
   },
   entranceFlex: {
     flex: 1,
@@ -765,16 +811,24 @@ const styles = StyleSheet.create({
     width: '100%',
     flexDirection: 'column',
   },
+  headerRegion: {
+    backgroundColor: HEADER_SURFACE,
+  },
+  headerOnlyBackRow: {
+    paddingHorizontal: 10,
+    paddingBottom: 8,
+  },
   chatBody: {
     flex: 1,
     minHeight: 0,
     width: '100%',
     flexDirection: 'column',
+    backgroundColor: '#EFF2F6',
   },
   rentalCardSlot: {
     flexShrink: 0,
-    paddingHorizontal: 10,
-    backgroundColor: ui.surfaceGrouped,
+    paddingHorizontal: 0,
+    backgroundColor: HEADER_SURFACE,
   },
   integratedBackBtn: {
     minWidth: 30,
@@ -813,18 +867,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   messagesContent: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
+    paddingTop: 10,
   },
   messagesContentBelowCard: {
-    paddingTop: 14,
+    paddingTop: 10,
   },
   messagesContentEmpty: {
     flexGrow: 1,
     justifyContent: 'center',
   },
   hint: {
-    fontSize: 15,
+    fontSize: 14,
     color: ui.textSubtle,
     textAlign: 'center',
     paddingTop: 24,
@@ -833,14 +886,17 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   messageStack: {
-    maxWidth: '75%',
-    marginBottom: 4,
+    marginBottom: 1,
   },
   messageStackNewSender: {
-    marginTop: 10,
+    marginTop: 7,
   },
   messageStackSameSender: {
-    marginTop: 2,
+    marginTop: 0,
+  },
+  messageStackSystem: {
+    alignSelf: 'stretch',
+    maxWidth: '100%',
   },
   messageStackRight: {
     alignSelf: 'flex-end',
@@ -849,19 +905,31 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   messageBubble: {
-    padding: 10,
-    borderRadius: 16,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: 14,
   },
   right: {
-    backgroundColor: ui.primary,
+    backgroundColor: '#285A95',
   },
   left: {
-    backgroundColor: ui.border,
+    backgroundColor: '#FFFFFF',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D7DDE6',
+  },
+  systemBubble: {
+    alignSelf: 'center',
+    backgroundColor: '#F5F7FB',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D5DCE6',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
   timestamp: {
-    fontSize: 10,
-    color: ui.textSecondary,
-    marginTop: 2,
+    fontSize: 9,
+    color: '#8A95A6',
+    marginTop: 0,
   },
   timestampRight: {
     textAlign: 'right',
@@ -871,13 +939,45 @@ const styles = StyleSheet.create({
   },
   rightText: {
     color: ui.primaryOn,
-    fontSize: 16,
-    lineHeight: 22,
+    fontSize: 15,
+    lineHeight: 20,
   },
   leftText: {
     color: ui.textPrimary,
-    fontSize: 16,
-    lineHeight: 22,
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  systemTitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#4A5568',
+    marginBottom: 4,
+  },
+  systemLine: {
+    fontSize: 12,
+    color: '#4E5B70',
+    lineHeight: 16,
+  },
+  systemLocation: {
+    marginTop: 3,
+    fontSize: 12,
+    color: '#4E5B70',
+    lineHeight: 16,
+    fontWeight: '500',
+  },
+  systemFallbackText: {
+    fontSize: 12,
+    color: '#4E5B70',
+    lineHeight: 16,
+  },
+  imageGroup: {
+    marginTop: 7,
+  },
+  messageImage: {
+    width: 156,
+    height: 156,
+    borderRadius: 8,
+    marginTop: 4,
   },
   archivedComposer: {
     paddingHorizontal: 16,
@@ -895,51 +995,44 @@ const styles = StyleSheet.create({
   inputContainer: {
     flexShrink: 0,
     flexDirection: 'row',
-    alignItems: 'flex-end',
-    padding: 10,
-    borderTopWidth: 1,
-    borderTopColor: ui.border,
-    backgroundColor: ui.background,
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#D7DDE6',
+    backgroundColor: '#F6F8FB',
   },
   input: {
     flex: 1,
-    padding: 10,
-    borderRadius: 20,
-    backgroundColor: ui.surfaceInput,
-    minHeight: 40,
-    maxHeight: 120,
-    fontSize: 16,
-    color: ui.textPrimary,
-  },
-  proposeBtn: {
-    marginLeft: 8,
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 18,
+    backgroundColor: '#FFFFFF',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: ui.primary,
-    backgroundColor: ui.surfaceTintPrimary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
+    borderColor: '#D6DCE6',
+    minHeight: 38,
+    maxHeight: 120,
+    fontSize: 15,
+    color: ui.textPrimary,
   },
   sendBtn: {
     marginLeft: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    minWidth: 48,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    minWidth: 58,
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: ui.radiusButton,
+    borderRadius: 12,
+    backgroundColor: ui.primary,
     overflow: 'hidden',
   },
   sendBtnPressed: {
     ...subtleControlPressed,
   },
   sendText: {
-    fontSize: 17,
+    fontSize: 14,
     fontWeight: '700',
-    color: ui.primary,
+    color: ui.primaryOn,
   },
   sendTextDisabled: {
     color: ui.textSecondary,
@@ -950,27 +1043,27 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
   },
   systemAcceptBtn: {
-    borderRadius: 8,
+    borderRadius: 7,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: ui.primary,
-    backgroundColor: ui.surfaceTintPrimary,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    borderColor: '#B7C6DF',
+    backgroundColor: '#EDF2FB',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
   },
   systemAcceptBtnPressed: {
     ...subtleControlPressed,
   },
   systemAcceptText: {
-    color: ui.primary,
-    fontSize: 12,
+    color: '#305A95',
+    fontSize: 11,
     fontWeight: '700',
   },
   systemAcceptedRow: {
-    marginTop: 8,
+    marginTop: 7,
   },
   systemAcceptedText: {
-    color: ui.textSecondary,
-    fontSize: 12,
+    color: '#6A778C',
+    fontSize: 11,
     fontWeight: '600',
   },
   center: {
