@@ -164,6 +164,7 @@ export default function MakeOfferScreen() {
       document.getElementById(MAKE_OFFER_WEB_FILE_INPUT_ID)?.click();
       return;
     }
+    useCameraSessionStore.getState().setRentalEvidenceSession(null);
     routerNav.push('/camera');
   }, [routerNav]);
 

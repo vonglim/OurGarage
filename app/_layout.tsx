@@ -21,6 +21,7 @@ import { ensureProfile } from '@/lib/ensureProfile';
 import { startNotificationsServerSync } from '@/lib/notificationsServerSync';
 import { registerAndStorePushTokenAsync } from '@/lib/notifications';
 import { clearRemoteProfileCache } from '@/lib/remoteProfileCache';
+import { logRentalEvidenceStorageHealthInDev } from '@/lib/devStorageVerification';
 import { getSupabase, supabase } from '../lib/supabase';
 import { applySessionToAuthStore } from '@/store/authSessionStore';
 import { resetProfileToDefault } from '@/store/profileStore';
@@ -48,6 +49,11 @@ export default function RootLayout() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [needsCreateUsername, setNeedsCreateUsername] = useState(false);
+
+  useEffect(() => {
+    if (!__DEV__) return;
+    void logRentalEvidenceStorageHealthInDev();
+  }, []);
 
   useEffect(() => {
     const client = getSupabase();

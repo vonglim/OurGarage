@@ -1,14 +1,45 @@
+import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Image } from 'expo-image';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Alert,
+  Animated,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useAuthUserId } from '@/lib/authUser';
 import { formatUsd } from '@/lib/money';
+import {
+  RENTAL_EVIDENCE_BUCKET_MISSING_MESSAGE,
+  uploadRentalEvidencePhoto,
+} from '@/lib/rentalEvidenceUpload';
+import {
+  deriveDualConfirmation,
+  ensureVerificationRows,
+  fetchVerificationPhotos,
+  fetchVerificationRows,
+  mergeChecklistMapsFromRows,
+  persistChecklistState,
+  persistConfirmation,
+  sharedNotesFromRows,
+  signedUrlForEvidencePath,
+  syncSharedNotes,
+  type PartyRole,
+  type VerificationPhase,
+} from '@/lib/rentalVerification';
 import { getSupabase } from '@/lib/supabase';
+import { useCameraSessionStore } from '@/store/cameraSessionStore';
 import { primarySolidPressed, shadowCard, shadowKey, ui } from '@/constants/appUi';
 
 type RentalRow = {
@@ -59,32 +90,25 @@ function formatCompactDateTime(value: string | null | undefined): string {
 }
 
 const OWNER_PICKUP_ITEMS = [
-  { id: 'op-verify-renter', label: 'Verify renter identity' },
-  { id: 'op-show-working', label: 'Show item working' },
-  { id: 'op-accessories', label: 'Confirm included accessories' },
-  { id: 'op-photo', label: 'Photograph item condition' },
-  { id: 'op-return-expect', label: 'Confirm return expectations' },
+  { id: 'op-verify-identity', label: 'Verify renter identity' },
+  { id: 'op-review-photos', label: 'Review pickup photos' },
+  { id: 'op-review-notes', label: 'Review pickup notes' },
 ] as const;
 
 const RENTER_PICKUP_ITEMS = [
-  { id: 'rp-condition', label: 'Verify item condition' },
-  { id: 'rp-accessories', label: 'Confirm accessories received' },
-  { id: 'rp-test', label: 'Test basic functionality' },
-  { id: 'rp-photos', label: 'Take pickup photos' },
-  { id: 'rp-deadline', label: 'Confirm return deadline' },
+  { id: 'rp-photo-condition', label: 'Photograph item condition' },
+  { id: 'rp-photo-accessories', label: 'Photograph included accessories' },
+  { id: 'rp-notes', label: 'Add pickup notes' },
 ] as const;
 
 const OWNER_RETURN_ITEMS = [
-  { id: 'or-condition', label: 'Verify item condition' },
-  { id: 'or-accessories', label: 'Confirm all accessories returned' },
-  { id: 'or-test', label: 'Test functionality' },
-  { id: 'or-damage', label: 'Confirm no major damage' },
+  { id: 'or-review-return', label: 'Review return condition' },
+  { id: 'or-review-ret-notes', label: 'Review return notes' },
 ] as const;
 
 const RENTER_RETURN_ITEMS = [
-  { id: 'rr-accessories', label: 'Return all accessories' },
-  { id: 'rr-clean', label: 'Clean/reset item' },
-  { id: 'rr-inspected', label: 'Confirm owner inspected item' },
+  { id: 'rr-photo-return', label: 'Photograph return condition' },
+  { id: 'rr-return-notes', label: 'Add return notes' },
 ] as const;
 
 type ChecklistMaps = { owner: Record<string, boolean>; renter: Record<string, boolean> };
@@ -102,6 +126,17 @@ function emptyChecklistMaps(
 
 function allItemsDone(items: readonly { id: string }[], done: Record<string, boolean>): boolean {
   return items.every((i) => done[i.id]);
+}
+
+function fillDefaults(
+  items: readonly { id: string }[],
+  stored: Record<string, boolean>
+): Record<string, boolean> {
+  const o: Record<string, boolean> = {};
+  for (const it of items) {
+    o[it.id] = Boolean(stored[it.id]);
+  }
+  return o;
 }
 
 function splitForTwoColumns<T>(items: readonly T[]): [T[], T[]] {
@@ -166,12 +201,87 @@ function PartyAckFeedback({
       <View style={styles.ackBlock}>
         <Text style={styles.ackLine}>✓ You confirmed</Text>
         <Text style={styles.ackWaiting}>
-          {viewerRole === 'owner' ? 'Waiting for renter...' : 'Waiting for owner...'}
+          {viewerRole === 'owner' ? 'Waiting for renter confirmation…' : 'Waiting for owner confirmation…'}
         </Text>
       </View>
     );
   }
   return null;
+}
+
+function VerificationPhotosSubsection({
+  photos,
+  uploading,
+  onAddPress,
+}: {
+  photos: { id: string; uri: string }[];
+  uploading: boolean;
+  onAddPress: () => void;
+}) {
+  const slots = [0, 1, 2] as const;
+  const extra = Math.max(0, photos.length - 3);
+  return (
+    <View style={styles.verificationSubsection}>
+      <Text style={styles.verificationSubhead}>Photos</Text>
+      <Text style={styles.verificationSubtext}>Evidence for this handoff</Text>
+      <View style={styles.photoTileRow}>
+        {slots.map((i) => {
+          const p = photos[i];
+          return p ? (
+            <Image key={p.id} source={{ uri: p.uri }} style={styles.photoThumb} contentFit="cover" />
+          ) : (
+            <View key={`ph-${i}`} style={styles.photoTilePlaceholder}>
+              <Text style={styles.photoTilePlaceholderGlyph}>◇</Text>
+            </View>
+          );
+        })}
+        <Pressable
+          pressOpacityFeedback={false}
+          disabled={uploading}
+          style={({ pressed }) => [
+            styles.photoTileAdd,
+            (pressed || uploading) && { opacity: 0.85 },
+            uploading && { opacity: 0.6 },
+          ]}
+          onPress={onAddPress}
+        >
+          <Text style={styles.photoTileAddText}>{uploading ? '…' : '+'}</Text>
+          <Text style={styles.photoTileAddLabel}>{uploading ? 'Upload' : 'Add'}</Text>
+        </Pressable>
+      </View>
+      {extra > 0 ? (
+        <Text style={styles.photoExtraCount}>+{extra} more in this handoff</Text>
+      ) : null}
+    </View>
+  );
+}
+
+function SharedNotesSubsection({
+  value,
+  onChangeText,
+  placeholder,
+}: {
+  value: string;
+  onChangeText: (t: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <View style={styles.verificationSubsection}>
+      <Text style={styles.verificationSubhead}>Shared Notes</Text>
+      <Text style={styles.verificationSubtext}>
+        Visible to both parties — saved to your rental verification record.
+      </Text>
+      <TextInput
+        style={styles.sharedNotesInput}
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor={ui.textMuted}
+        multiline
+        textAlignVertical="top"
+      />
+    </View>
+  );
 }
 
 export default function RentalScreen() {
@@ -198,13 +308,16 @@ export default function RentalScreen() {
   /** Local simulation of two-party pickup/return confirmations */
   const [pickupAck, setPickupAck] = useState({ owner: false, renter: false });
   const [returnAck, setReturnAck] = useState({ owner: false, renter: false });
+  const [pickupSharedNotes, setPickupSharedNotes] = useState('');
+  const [returnSharedNotes, setReturnSharedNotes] = useState('');
+  const [pickupEvidenceDisplay, setPickupEvidenceDisplay] = useState<{ id: string; uri: string }[]>([]);
+  const [returnEvidenceDisplay, setReturnEvidenceDisplay] = useState<{ id: string; uri: string }[]>([]);
+  const [uploadingEvidence, setUploadingEvidence] = useState(false);
 
   useEffect(() => {
-    setLifecyclePhase('pickup');
-    setPickupChecklist(emptyChecklistMaps(OWNER_PICKUP_ITEMS, RENTER_PICKUP_ITEMS));
-    setReturnChecklist(emptyChecklistMaps(OWNER_RETURN_ITEMS, RENTER_RETURN_ITEMS));
-    setPickupAck({ owner: false, renter: false });
-    setReturnAck({ owner: false, renter: false });
+    setPickupEvidenceDisplay([]);
+    setReturnEvidenceDisplay([]);
+    setUploadingEvidence(false);
   }, [rentalId]);
 
   useEffect(() => {
@@ -248,6 +361,245 @@ export default function RentalScreen() {
 
     void fetchRequest();
   }, [rental?.request_id, supabase]);
+
+  useEffect(() => {
+    if (!rental?.id || !rental.owner_user_id || !rental.renter_user_id || !me) return;
+    let cancelled = false;
+
+    const ownerConfirmedRow =
+      typeof rental.owner_confirmed === 'boolean'
+        ? rental.owner_confirmed
+        : typeof rental.confirmed_by_owner === 'boolean'
+          ? rental.confirmed_by_owner
+          : false;
+    const renterConfirmedRow =
+      typeof rental.renter_confirmed === 'boolean'
+        ? rental.renter_confirmed
+        : typeof rental.confirmed_by_renter === 'boolean'
+          ? rental.confirmed_by_renter
+          : false;
+    const agr =
+      rental.agreement_status === 'confirmed'
+        ? true
+        : rental.agreement_status === 'pending'
+          ? false
+          : ownerConfirmedRow && renterConfirmedRow;
+
+    if (!agr) return;
+
+    void (async () => {
+      await ensureVerificationRows(
+        supabase,
+        rental.id,
+        rental.owner_user_id,
+        rental.renter_user_id,
+        'pickup'
+      );
+      const rows = await fetchVerificationRows(supabase, rental.id);
+      if (cancelled) return;
+
+      const mergedP = mergeChecklistMapsFromRows(rows, 'pickup');
+      setPickupChecklist({
+        owner: fillDefaults(OWNER_PICKUP_ITEMS, mergedP.owner),
+        renter: fillDefaults(RENTER_PICKUP_ITEMS, mergedP.renter),
+      });
+      const mergedR = mergeChecklistMapsFromRows(rows, 'return');
+      setReturnChecklist({
+        owner: fillDefaults(OWNER_RETURN_ITEMS, mergedR.owner),
+        renter: fillDefaults(RENTER_RETURN_ITEMS, mergedR.renter),
+      });
+
+      setPickupSharedNotes(sharedNotesFromRows(rows, 'pickup'));
+      setReturnSharedNotes(sharedNotesFromRows(rows, 'return'));
+
+      const pAck = deriveDualConfirmation(rows, 'pickup');
+      const rAck = deriveDualConfirmation(rows, 'return');
+      setPickupAck(pAck);
+      setReturnAck(rAck);
+
+      const hasReturnRows = rows.some((r) => r.phase === 'return');
+      if (rAck.owner && rAck.renter) setLifecyclePhase('completed');
+      else if (hasReturnRows) setLifecyclePhase('return');
+      else if (pAck.owner && pAck.renter) setLifecyclePhase('active');
+      else setLifecyclePhase('pickup');
+
+      const [pPhotos, rPhotos] = await Promise.all([
+        fetchVerificationPhotos(supabase, rental.id, 'pickup'),
+        fetchVerificationPhotos(supabase, rental.id, 'return'),
+      ]);
+      if (cancelled) return;
+
+      const signList = async (list: Awaited<ReturnType<typeof fetchVerificationPhotos>>) => {
+        const out: { id: string; uri: string }[] = [];
+        for (const row of list) {
+          const uri = await signedUrlForEvidencePath(supabase, row.storage_path);
+          if (uri) out.push({ id: row.id, uri });
+        }
+        return out;
+      };
+
+      const [pSigned, rSigned] = await Promise.all([signList(pPhotos), signList(rPhotos)]);
+      if (cancelled) return;
+      setPickupEvidenceDisplay(pSigned);
+      setReturnEvidenceDisplay(rSigned);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [rental, me, supabase]);
+
+  useEffect(() => {
+    if (!rental?.id || !me) return;
+    const ownerConfirmedRow =
+      typeof rental.owner_confirmed === 'boolean'
+        ? rental.owner_confirmed
+        : typeof rental.confirmed_by_owner === 'boolean'
+          ? rental.confirmed_by_owner
+          : false;
+    const renterConfirmedRow =
+      typeof rental.renter_confirmed === 'boolean'
+        ? rental.renter_confirmed
+        : typeof rental.confirmed_by_renter === 'boolean'
+          ? rental.confirmed_by_renter
+          : false;
+    const agr =
+      rental.agreement_status === 'confirmed'
+        ? true
+        : rental.agreement_status === 'pending'
+          ? false
+          : ownerConfirmedRow && renterConfirmedRow;
+    if (!agr) return;
+    if (lifecyclePhase !== 'pickup') return;
+    const t = setTimeout(() => {
+      void syncSharedNotes(supabase, rental.id, 'pickup', pickupSharedNotes);
+    }, 550);
+    return () => clearTimeout(t);
+  }, [pickupSharedNotes, rental, me, lifecyclePhase, supabase]);
+
+  useEffect(() => {
+    if (!rental?.id || !me) return;
+    const ownerConfirmedRow =
+      typeof rental.owner_confirmed === 'boolean'
+        ? rental.owner_confirmed
+        : typeof rental.confirmed_by_owner === 'boolean'
+          ? rental.confirmed_by_owner
+          : false;
+    const renterConfirmedRow =
+      typeof rental.renter_confirmed === 'boolean'
+        ? rental.renter_confirmed
+        : typeof rental.confirmed_by_renter === 'boolean'
+          ? rental.confirmed_by_renter
+          : false;
+    const agr =
+      rental.agreement_status === 'confirmed'
+        ? true
+        : rental.agreement_status === 'pending'
+          ? false
+          : ownerConfirmedRow && renterConfirmedRow;
+    if (!agr) return;
+    if (lifecyclePhase !== 'return') return;
+    const t = setTimeout(() => {
+      void syncSharedNotes(supabase, rental.id, 'return', returnSharedNotes);
+    }, 550);
+    return () => clearTimeout(t);
+  }, [returnSharedNotes, rental, me, lifecyclePhase, supabase]);
+
+  /** Same as listing / offers: multi-capture `/camera` session, then upload each frame to rental evidence. */
+  useFocusEffect(
+    useCallback(() => {
+      if (!rental?.id || !rental.owner_user_id || !rental.renter_user_id || !me) return;
+
+      const {
+        capturedPhotoUris,
+        setCapturedPhotoUris,
+        rentalEvidenceSession,
+        setRentalEvidenceSession,
+      } = useCameraSessionStore.getState();
+
+      const sess = rentalEvidenceSession;
+      if (capturedPhotoUris.length === 0) {
+        if (sess?.rentalId === rental.id) setRentalEvidenceSession(null);
+        return;
+      }
+
+      if (!sess || sess.rentalId !== rental.id) {
+        return;
+      }
+
+      const phase = sess.phase;
+      const role: PartyRole =
+        me === rental.owner_user_id ? 'owner' : me === rental.renter_user_id ? 'renter' : 'renter';
+
+      setRentalEvidenceSession(null);
+      const uris = [...capturedPhotoUris];
+      setCapturedPhotoUris([]);
+
+      void (async () => {
+        setUploadingEvidence(true);
+        await ensureVerificationRows(
+          supabase,
+          rental.id,
+          rental.owner_user_id,
+          rental.renter_user_id,
+          phase
+        );
+        try {
+          const failures: { index: number; detail: string; code?: string }[] = [];
+          let photoIndex = 0;
+          for (const uri of uris) {
+            photoIndex += 1;
+            if (!uri) continue;
+            const res = await uploadRentalEvidencePhoto({
+              client: supabase,
+              rentalId: rental.id,
+              phase,
+              userId: me,
+              role,
+              localUri: uri,
+            });
+            if (!res.ok) {
+              failures.push({
+                index: photoIndex,
+                detail: `${res.stage}: ${res.message}`,
+                code: res.code,
+              });
+              continue;
+            }
+            let signed = await signedUrlForEvidencePath(supabase, res.storagePath);
+            if (!signed) {
+              signed = await signedUrlForEvidencePath(supabase, res.storagePath);
+            }
+            const displayUri = signed ?? uri;
+            if (!signed) {
+              failures.push({
+                index: photoIndex,
+                detail: 'saved to cloud; preview link failed — try leaving and reopening this rental',
+              });
+            }
+            const entry = { id: res.dbRowId, uri: displayUri };
+            if (phase === 'pickup') {
+              setPickupEvidenceDisplay((prev) => [...prev, entry]);
+            } else {
+              setReturnEvidenceDisplay((prev) => [...prev, entry]);
+            }
+          }
+          if (failures.length > 0) {
+            const allBucketMissing = failures.every((f) => f.code === 'bucket_missing');
+            if (allBucketMissing) {
+              Alert.alert('Rental evidence storage', RENTAL_EVIDENCE_BUCKET_MISSING_MESSAGE);
+            } else {
+              const lines = failures.map((f) => `• Photo ${f.index}: ${f.detail}`);
+              const body = [...new Set(lines)].join('\n');
+              Alert.alert('Some photos could not be saved', body);
+            }
+          }
+        } finally {
+          setUploadingEvidence(false);
+        }
+      })();
+    }, [rental, me, supabase])
+  );
 
   useEffect(() => {
     if (!rental) return;
@@ -336,17 +688,23 @@ export default function RentalScreen() {
           : 1;
 
   const togglePickupItem = (id: string) => {
-    setPickupChecklist((prev) => ({
-      ...prev,
-      [viewerRole]: { ...prev[viewerRole], [id]: !prev[viewerRole][id] },
-    }));
+    setPickupChecklist((prev) => {
+      const nextMap = { ...prev[viewerRole], [id]: !prev[viewerRole][id] };
+      if (me) {
+        void persistChecklistState(supabase, rental.id, 'pickup', me, nextMap);
+      }
+      return { ...prev, [viewerRole]: nextMap };
+    });
   };
 
   const toggleReturnItem = (id: string) => {
-    setReturnChecklist((prev) => ({
-      ...prev,
-      [viewerRole]: { ...prev[viewerRole], [id]: !prev[viewerRole][id] },
-    }));
+    setReturnChecklist((prev) => {
+      const nextMap = { ...prev[viewerRole], [id]: !prev[viewerRole][id] };
+      if (me) {
+        void persistChecklistState(supabase, rental.id, 'return', me, nextMap);
+      }
+      return { ...prev, [viewerRole]: nextMap };
+    });
   };
 
   const onReportIssue = () => {
@@ -354,51 +712,98 @@ export default function RentalScreen() {
   };
 
   const onConfirmPickup = () => {
-    if (!allPickupItemsDone) return;
-    Alert.alert('Confirm pickup', 'Have both you and your match confirmed pickup?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Confirm',
-        onPress: () => {
-          setPickupAck((prev) => {
-            const next = {
-              owner: viewerRole === 'owner' ? true : prev.owner,
-              renter: viewerRole === 'renter' ? true : prev.renter,
-            };
-            if (next.owner && next.renter) {
-              queueMicrotask(() => setLifecyclePhase('active'));
+    if (!allPickupItemsDone || !me) return;
+    Alert.alert(
+      'Record pickup confirmation',
+      'This records your side of pickup. The rental advances once both parties have confirmed.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Confirm',
+          onPress: async () => {
+            await ensureVerificationRows(
+              supabase,
+              rental.id,
+              rental.owner_user_id,
+              rental.renter_user_id,
+              'pickup'
+            );
+            const ok = await persistConfirmation(supabase, rental.id, 'pickup', me, true);
+            if (!ok) {
+              Alert.alert('Could not save', 'Check your connection and try again.');
+              return;
             }
-            return next;
-          });
+            const rows = await fetchVerificationRows(supabase, rental.id);
+            const ack = deriveDualConfirmation(rows, 'pickup');
+            setPickupAck(ack);
+            if (ack.owner && ack.renter) {
+              setLifecyclePhase('active');
+            }
+          },
         },
-      },
-    ]);
+      ]
+    );
   };
 
-  const onStartReturn = () => {
+  const onStartReturn = async () => {
+    if (!me) return;
+    await ensureVerificationRows(
+      supabase,
+      rental.id,
+      rental.owner_user_id,
+      rental.renter_user_id,
+      'return'
+    );
     setLifecyclePhase('return');
   };
 
   const onConfirmReturn = () => {
-    if (!allReturnItemsDone) return;
-    Alert.alert('Confirm return', 'Have both you and your match completed the return?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Confirm',
-        onPress: () => {
-          setReturnAck((prev) => {
-            const next = {
-              owner: viewerRole === 'owner' ? true : prev.owner,
-              renter: viewerRole === 'renter' ? true : prev.renter,
-            };
-            if (next.owner && next.renter) {
-              queueMicrotask(() => setLifecyclePhase('completed'));
+    if (!allReturnItemsDone || !me) return;
+    Alert.alert(
+      'Record return confirmation',
+      'This records your side of return. The rental completes once both parties have confirmed.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Confirm',
+          onPress: async () => {
+            await ensureVerificationRows(
+              supabase,
+              rental.id,
+              rental.owner_user_id,
+              rental.renter_user_id,
+              'return'
+            );
+            const ok = await persistConfirmation(supabase, rental.id, 'return', me, true);
+            if (!ok) {
+              Alert.alert('Could not save', 'Check your connection and try again.');
+              return;
             }
-            return next;
-          });
+            const rows = await fetchVerificationRows(supabase, rental.id);
+            const ack = deriveDualConfirmation(rows, 'return');
+            setReturnAck(ack);
+            if (ack.owner && ack.renter) {
+              setLifecyclePhase('completed');
+            }
+          },
         },
-      },
-    ]);
+      ]
+    );
+  };
+
+  const openEvidenceCamera = (phase: VerificationPhase) => {
+    if (!me) return;
+    if (Platform.OS === 'web') {
+      Alert.alert(
+        'Camera',
+        'Pickup and return verification photos must be taken live in the OurGarage mobile app.'
+      );
+      return;
+    }
+    const st = useCameraSessionStore.getState();
+    st.setCapturedPhotoUris([]);
+    st.setRentalEvidenceSession({ rentalId: rental.id, phase });
+    router.push('/camera');
   };
 
   const openRentalChat = () => {
@@ -602,10 +1007,18 @@ export default function RentalScreen() {
 
             {agreementStatus === 'confirmed' && lifecyclePhase === 'pickup' ? (
               <View style={[styles.checklistCard, !isTabletMargins && styles.cardPadPhone]}>
-                <Text style={styles.cardSectionTitle}>Pickup Checklist</Text>
-                <Text style={styles.checklistRoleLine}>
-                  {viewerRole === 'owner' ? 'As owner' : 'As renter'}
-                </Text>
+                <View style={styles.verificationTitleRow}>
+                  <Text style={styles.verificationSectionTitle}>Pickup / Drop-off Verification</Text>
+                  <Text style={styles.inlineRoleLabel}>
+                    {viewerRole === 'owner' ? 'As owner' : 'As renter'}
+                  </Text>
+                </View>
+                <VerificationPhotosSubsection
+                  photos={pickupEvidenceDisplay}
+                  uploading={uploadingEvidence}
+                  onAddPress={() => openEvidenceCamera('pickup')}
+                />
+                <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Your responsibilities</Text>
                 {checklistTwoColumns ? (
                   <View style={styles.checklistTwoColWrap}>
                     <View style={styles.checklistCol}>
@@ -639,15 +1052,73 @@ export default function RentalScreen() {
                     />
                   ))
                 )}
+                <SharedNotesSubsection
+                  value={pickupSharedNotes}
+                  onChangeText={setPickupSharedNotes}
+                  placeholder="e.g. fuel level, existing scratches, accessories, battery health, usage expectations…"
+                />
+              </View>
+            ) : null}
+
+            {agreementStatus === 'confirmed' &&
+            (lifecyclePhase === 'active' || lifecyclePhase === 'return' || lifecyclePhase === 'completed') ? (
+              <View style={[styles.checklistCard, styles.verificationCollapsedCard, !isTabletMargins && styles.cardPadPhone]}>
+                <View style={styles.verificationCollapsedHeader}>
+                  <Text style={[styles.cardSectionTitle, styles.verificationCollapsedTitle]}>
+                    Pickup / Drop-off Verification
+                  </Text>
+                  <Text style={styles.verificationCollapsedBadge}>✓ Completed</Text>
+                </View>
+                <Text style={styles.verificationCollapsedLine}>✓ Pickup verified</Text>
+                <Text style={styles.verificationCollapsedMeta}>
+                  {pickupEvidenceDisplay.length > 0
+                    ? `· ${pickupEvidenceDisplay.length} photo${pickupEvidenceDisplay.length === 1 ? '' : 's'} documented`
+                    : '· No photos uploaded yet'}
+                </Text>
+                <Text style={styles.verificationCollapsedMeta}>
+                  {pickupSharedNotes.trim() ? '· Shared notes recorded' : '· No shared notes added'}
+                </Text>
+                <Text style={styles.verificationCollapsedMeta}>· Both parties confirmed</Text>
+              </View>
+            ) : null}
+
+            {agreementStatus === 'confirmed' && lifecyclePhase === 'active' ? (
+              <View style={[styles.prepareForReturnCard, !isTabletMargins && styles.cardPadPhone]}>
+                <Text style={styles.prepareForReturnTitle}>Prepare for Return</Text>
+                <View style={styles.prepareForReturnRow}>
+                  <Text style={styles.metaLabel}>Return time</Text>
+                  <Text style={styles.prepareForReturnValue}>
+                    {formatCompactDateTime(rental.return_datetime ?? rental.return_time)}
+                  </Text>
+                </View>
+                <View style={styles.prepareForReturnRow}>
+                  <Text style={styles.metaLabel}>Return location</Text>
+                  <Text style={styles.prepareForReturnValue}>
+                    {rental.return_location || rental.meetup_location || 'Not set'}
+                  </Text>
+                </View>
+                <Text style={styles.prepareForReturnRemindersHead}>Before return</Text>
+                <Text style={styles.prepareReminderLine}>· Recharge battery if needed</Text>
+                <Text style={styles.prepareReminderLine}>· Clean the item if your agreement expects it</Text>
+                <Text style={styles.prepareReminderLine}>· Include all accessories</Text>
+                <Text style={styles.prepareReminderLine}>· Plan return photos for the verification step</Text>
               </View>
             ) : null}
 
             {lifecyclePhase === 'return' ? (
               <View style={[styles.checklistCard, !isTabletMargins && styles.cardPadPhone]}>
-                <Text style={styles.cardSectionTitle}>Return Checklist</Text>
-                <Text style={styles.checklistRoleLine}>
-                  {viewerRole === 'owner' ? 'As owner' : 'As renter'}
-                </Text>
+                <View style={styles.verificationTitleRow}>
+                  <Text style={styles.verificationSectionTitle}>Return Verification</Text>
+                  <Text style={styles.inlineRoleLabel}>
+                    {viewerRole === 'owner' ? 'As owner' : 'As renter'}
+                  </Text>
+                </View>
+                <VerificationPhotosSubsection
+                  photos={returnEvidenceDisplay}
+                  uploading={uploadingEvidence}
+                  onAddPress={() => openEvidenceCamera('return')}
+                />
+                <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Your responsibilities</Text>
                 {checklistTwoColumns ? (
                   <View style={styles.checklistTwoColWrap}>
                     <View style={styles.checklistCol}>
@@ -681,6 +1152,30 @@ export default function RentalScreen() {
                     />
                   ))
                 )}
+                <SharedNotesSubsection
+                  value={returnSharedNotes}
+                  onChangeText={setReturnSharedNotes}
+                  placeholder="e.g. condition at return, missing items, damage notes, special handling…"
+                />
+              </View>
+            ) : null}
+
+            {lifecyclePhase === 'completed' ? (
+              <View style={[styles.checklistCard, styles.verificationCollapsedCard, !isTabletMargins && styles.cardPadPhone]}>
+                <View style={styles.verificationCollapsedHeader}>
+                  <Text style={[styles.cardSectionTitle, styles.verificationCollapsedTitle]}>Return Verification</Text>
+                  <Text style={styles.verificationCollapsedBadge}>✓ Completed</Text>
+                </View>
+                <Text style={styles.verificationCollapsedLine}>✓ Return verified</Text>
+                <Text style={styles.verificationCollapsedMeta}>
+                  {returnEvidenceDisplay.length > 0
+                    ? `· ${returnEvidenceDisplay.length} photo${returnEvidenceDisplay.length === 1 ? '' : 's'} documented`
+                    : '· No photos uploaded yet'}
+                </Text>
+                <Text style={styles.verificationCollapsedMeta}>
+                  {returnSharedNotes.trim() ? '· Shared notes recorded' : '· No shared notes added'}
+                </Text>
+                <Text style={styles.verificationCollapsedMeta}>· Both parties confirmed</Text>
               </View>
             ) : null}
 
@@ -702,7 +1197,7 @@ export default function RentalScreen() {
               ) : agreementStatus === 'confirmed' && lifecyclePhase === 'pickup' ? (
                 <>
                   <Text style={styles.nextStepsBody}>
-                    Complete your pickup checklist, then confirm when both parties are ready.
+                    Complete your verification steps, then confirm to record your side of pickup.
                   </Text>
                   <Pressable
                     pressOpacityFeedback={false}
@@ -715,7 +1210,9 @@ export default function RentalScreen() {
                       pressed && allPickupItemsDone && styles.startButtonPressed,
                     ]}
                   >
-                    <Text style={styles.startButtonText}>Confirm Pickup</Text>
+                    <Text style={styles.startButtonText}>
+                      {viewerRole === 'owner' ? 'Confirm Handoff' : 'Confirm Item Received'}
+                    </Text>
                   </Pressable>
                   <PartyAckFeedback ack={pickupAck} viewerRole={viewerRole} />
                 </>
@@ -726,7 +1223,7 @@ export default function RentalScreen() {
                     pressOpacityFeedback={false}
                     haptic
                     style={({ pressed }) => [styles.startButton, pressed && styles.startButtonPressed]}
-                    onPress={onStartReturn}
+                    onPress={() => void onStartReturn()}
                   >
                     <Text style={styles.startButtonText}>Start Return</Text>
                   </Pressable>
@@ -734,7 +1231,7 @@ export default function RentalScreen() {
               ) : agreementStatus === 'confirmed' && lifecyclePhase === 'return' ? (
                 <>
                   <Text style={styles.nextStepsBody}>
-                    Complete your return checklist, then confirm when both parties are done.
+                    Complete your verification steps, then confirm to record your side of return.
                   </Text>
                   <Pressable
                     pressOpacityFeedback={false}
@@ -747,7 +1244,9 @@ export default function RentalScreen() {
                       pressed && allReturnItemsDone && styles.startButtonPressed,
                     ]}
                   >
-                    <Text style={styles.startButtonText}>Confirm Return</Text>
+                    <Text style={styles.startButtonText}>
+                      {viewerRole === 'owner' ? 'Confirm item returned' : 'Confirm returned'}
+                    </Text>
                   </Pressable>
                   <PartyAckFeedback ack={returnAck} viewerRole={viewerRole} />
                 </>
@@ -934,6 +1433,28 @@ const styles = StyleSheet.create({
     letterSpacing: -0.12,
     marginBottom: 10,
   },
+  verificationTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 6,
+  },
+  verificationSectionTitle: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 14,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    letterSpacing: -0.12,
+  },
+  inlineRoleLabel: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: ui.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.35,
+  },
   cardPadPhone: {
     paddingHorizontal: 10,
     paddingVertical: 10,
@@ -1085,14 +1606,179 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
-  checklistRoleLine: {
+  verificationSubsection: {
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  verificationSubhead: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    letterSpacing: 0.35,
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  verificationSubheadSpaced: {
+    marginTop: 4,
+  },
+  verificationSubtext: {
+    fontSize: 10,
+    fontWeight: '500',
+    color: ui.textMuted,
+    lineHeight: 14,
+    marginBottom: 8,
+  },
+  photoTileRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    alignItems: 'center',
+  },
+  /** Matches `app/camera.tsx` strip / make-offer thumbs (60 × 60, 8 radius). */
+  photoThumb: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(26,43,74,0.14)',
+    backgroundColor: '#1F2937',
+  },
+  photoTilePlaceholder: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(26,43,74,0.14)',
+    backgroundColor: ui.surfaceInput,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoTilePlaceholderGlyph: {
+    fontSize: 16,
+    color: ui.textMuted,
+    opacity: 0.45,
+  },
+  photoTileAdd: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: 'rgba(11,31,58,0.28)',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoTileAddText: {
+    fontSize: 22,
+    fontWeight: '300',
+    color: ui.primary,
+    lineHeight: 24,
+    marginTop: -2,
+  },
+  photoTileAddLabel: {
     fontSize: 9,
+    fontWeight: '700',
+    color: ui.primary,
+    letterSpacing: 0.2,
+    marginTop: -1,
+  },
+  photoExtraCount: {
+    fontSize: 10,
+    fontWeight: '500',
+    color: ui.textMuted,
+    marginTop: 4,
+  },
+  sharedNotesInput: {
+    minHeight: 96,
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: ui.border,
+    backgroundColor: ui.surfaceInput,
+    fontSize: 14,
+    lineHeight: 20,
+    color: ui.textPrimary,
+  },
+  verificationCollapsedCard: {
+    paddingVertical: 10,
+  },
+  verificationCollapsedHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginBottom: 6,
+  },
+  verificationCollapsedTitle: {
+    flex: 1,
+    marginBottom: 0,
+    minWidth: 0,
+  },
+  verificationCollapsedBadge: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#25633F',
+    letterSpacing: 0.2,
+    marginTop: 2,
+  },
+  verificationCollapsedLine: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    lineHeight: 18,
+    marginTop: 4,
+  },
+  verificationCollapsedMeta: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: ui.textMuted,
+    lineHeight: 17,
+    marginTop: 3,
+  },
+  prepareForReturnCard: {
+    width: '100%',
+    backgroundColor: '#FAFBFC',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    borderWidth: 1,
+    borderColor: 'rgba(11,31,58,0.06)',
+    ...shadowCard,
+    elevation: 1,
+  },
+  prepareForReturnTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    letterSpacing: -0.1,
+    marginBottom: 8,
+  },
+  prepareForReturnRow: {
+    marginBottom: 8,
+    gap: 2,
+  },
+  prepareForReturnValue: {
+    fontSize: 14,
     fontWeight: '600',
+    color: ui.textPrimary,
+    lineHeight: 19,
+  },
+  prepareForReturnRemindersHead: {
+    marginTop: 4,
+    marginBottom: 2,
+    fontSize: 10,
+    fontWeight: '700',
     color: ui.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.35,
-    marginTop: -4,
-    marginBottom: 4,
+  },
+  prepareReminderLine: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: ui.textMuted,
+    lineHeight: 17,
+    marginTop: 3,
   },
   checklistRow: {
     flexDirection: 'row',

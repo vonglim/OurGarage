@@ -199,7 +199,8 @@ export default function RentOutScreen() {
       document.getElementById('fileInput')?.click();
       return;
     }
-  
+
+    useCameraSessionStore.getState().setRentalEvidenceSession(null);
     router.push('/camera');
   }, [router]);
 

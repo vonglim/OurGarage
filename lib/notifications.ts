@@ -58,12 +58,26 @@ export async function registerForPushNotificationsAsync(): Promise<string | unde
   const projectId =
     Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
 
-  const token = (
-    await Notifications.getExpoPushTokenAsync({
-      projectId,
-    })
-  ).data;
-  return token;
+  if (!projectId) {
+    if (__DEV__) {
+      console.warn(
+        '[notifications] skipping Expo push token: no EAS projectId (Expo Go / dev client without extra.eas)'
+      );
+    }
+    return undefined;
+  }
+
+  try {
+    const token = (
+      await Notifications.getExpoPushTokenAsync({
+        projectId,
+      })
+    ).data;
+    return token;
+  } catch (e) {
+    console.warn('[notifications] getExpoPushTokenAsync failed', e);
+    return undefined;
+  }
 }
 
 /** Registers for push (if on a physical device + permission granted) and saves the Expo token locally. */
