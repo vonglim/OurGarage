@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Animated,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -34,6 +35,7 @@ import {
   persistConfirmation,
   signedUrlForEvidencePath,
   type PartyRole,
+  type RentalVerificationRow,
   type VerificationPhase,
 } from '@/lib/rentalVerification';
 import {
@@ -74,6 +76,22 @@ type RentalRow = {
   proposal_updated_at?: string | null;
   confirmed_by_owner?: boolean | null;
   confirmed_by_renter?: boolean | null;
+  owner_pickup_ready?: boolean | null;
+  renter_pickup_ready?: boolean | null;
+  owner_return_ready?: boolean | null;
+  renter_return_ready?: boolean | null;
+  handoff_approved_by_owner?: boolean | null;
+  handoff_approved_by_renter?: boolean | null;
+  handoff_approval_started_at?: string | null;
+  signed_at?: string | null;
+  signed_name?: string | null;
+  agreement_version?: number | null;
+  preauth_status?: 'not_started' | 'pending' | 'authorized' | 'failed' | 'released' | string | null;
+  preauth_amount?: number | null;
+  preauth_authorized_at?: string | null;
+  daily_late_fee?: number | null;
+  grace_period_hours?: number | null;
+  replacement_value?: number | null;
 };
 
 function firstParam(v: string | string[] | undefined): string | undefined {
@@ -105,9 +123,9 @@ const OWNER_PICKUP_ITEMS = [
 ] as const;
 
 const RENTER_PICKUP_ITEMS = [
-  { id: 'rp-photo-condition', label: 'Photograph item condition' },
-  { id: 'rp-photo-accessories', label: 'Photograph included accessories' },
-  { id: 'rp-notes', label: 'Add pickup notes' },
+  { id: 'rp-review-photos', label: 'Review owner photos' },
+  { id: 'rp-verify-condition', label: 'Verify item condition' },
+  { id: 'rp-review-notes', label: 'Review owner notes' },
 ] as const;
 
 const OWNER_RETURN_ITEMS = [
@@ -116,12 +134,21 @@ const OWNER_RETURN_ITEMS = [
 ] as const;
 
 const RENTER_RETURN_ITEMS = [
-  { id: 'rr-photo-return', label: 'Photograph return condition' },
-  { id: 'rr-return-notes', label: 'Add return notes' },
+  { id: 'rr-upload-photos', label: 'Upload return photos' },
+  { id: 'rr-document-wear', label: 'Document issues/wear' },
+  { id: 'rr-confirm-accessories', label: 'Confirm accessories included' },
 ] as const;
 
 type ChecklistMaps = { owner: Record<string, boolean>; renter: Record<string, boolean> };
 type ChecklistItemDef = { id: string; label: string };
+type PhotoDisplay = {
+  id: string;
+  uri: string;
+  role?: PartyRole;
+  phase?: VerificationPhase;
+  userId?: string;
+  createdAt?: string;
+};
 
 function emptyChecklistMaps(
   ownerItems: readonly { id: string }[],
@@ -155,6 +182,26 @@ function splitForTwoColumns<T>(items: readonly T[]): [T[], T[]] {
 
 const LAYOUT_TABLET_MIN = 600;
 const CHECKLIST_TWO_COL_MIN = 768;
+const REQUIRED_PICKUP_PHOTOS = 3;
+const REQUIRED_RETURN_PHOTOS = 3;
+
+function normalizeRole(raw: unknown): PartyRole | undefined {
+  const val = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  if (val === 'owner' || val === 'lender' || val === 'host') return 'owner';
+  if (val === 'renter' || val === 'borrower' || val === 'guest') return 'renter';
+  return undefined;
+}
+
+function normalizePhase(raw: unknown): VerificationPhase | undefined {
+  const val = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  if (val === 'pickup' || val === 'pickup_handoff' || val === 'handoff') return 'pickup';
+  if (val === 'return' || val === 'dropoff' || val === 'drop_off') return 'return';
+  return undefined;
+}
 
 function ChecklistRow({
   label,
@@ -226,10 +273,12 @@ function VerificationPhotosSubsection({
   photos,
   uploading,
   onAddPress,
+  onPhotoPress,
 }: {
-  photos: { id: string; uri: string }[];
+  photos: { id: string; uri: string; role?: PartyRole; createdAt?: string }[];
   uploading: boolean;
   onAddPress: () => void;
+  onPhotoPress: (index: number) => void;
 }) {
   const slots = [0, 1, 2] as const;
   const extra = Math.max(0, photos.length - 3);
@@ -241,7 +290,9 @@ function VerificationPhotosSubsection({
         {slots.map((i) => {
           const p = photos[i];
           return p ? (
-            <Image key={p.id} source={{ uri: p.uri }} style={styles.photoThumb} contentFit="cover" />
+            <Pressable key={p.id} pressOpacityFeedback={false} onPress={() => onPhotoPress(i)}>
+              <Image source={{ uri: p.uri }} style={styles.photoThumb} contentFit="cover" />
+            </Pressable>
           ) : (
             <View key={`ph-${i}`} style={styles.photoTilePlaceholder}>
               <Text style={styles.photoTilePlaceholderGlyph}>◇</Text>
@@ -369,17 +420,25 @@ export default function RentalScreen() {
   /** Local simulation of two-party pickup/return confirmations */
   const [pickupAck, setPickupAck] = useState({ owner: false, renter: false });
   const [returnAck, setReturnAck] = useState({ owner: false, renter: false });
-  const [pickupEvidenceDisplay, setPickupEvidenceDisplay] = useState<{ id: string; uri: string }[]>([]);
-  const [returnEvidenceDisplay, setReturnEvidenceDisplay] = useState<{ id: string; uri: string }[]>([]);
+  const [pickupEvidenceDisplay, setPickupEvidenceDisplay] = useState<PhotoDisplay[]>([]);
+  const [returnEvidenceDisplay, setReturnEvidenceDisplay] = useState<PhotoDisplay[]>([]);
+  const [verificationRows, setVerificationRows] = useState<RentalVerificationRow[]>([]);
   const [uploadingEvidence, setUploadingEvidence] = useState(false);
   const [pickupExpanded, setPickupExpanded] = useState(true);
   const [returnExpanded, setReturnExpanded] = useState(false);
+  const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
+  const [photoViewerPhase, setPhotoViewerPhase] = useState<VerificationPhase>('pickup');
+  const [photoViewerIndex, setPhotoViewerIndex] = useState(0);
+  const [agreementModalVisible, setAgreementModalVisible] = useState(false);
+  const [signatureName, setSignatureName] = useState('');
   const [rentalNotes, setRentalNotes] = useState<RentalNoteRow[]>([]);
   const [ownerNoteDraft, setOwnerNoteDraft] = useState('');
   const [renterNoteDraft, setRenterNoteDraft] = useState('');
   const [addingOwnerNote, setAddingOwnerNote] = useState(false);
   const [addingRenterNote, setAddingRenterNote] = useState(false);
   const unreadByOfferId = useMessageUnreadStore((s) => s.unreadByOfferId);
+  const refreshInFlightRef = useRef<Promise<void> | null>(null);
+  const refreshQueuedRef = useRef(false);
 
   useEffect(() => {
     setPickupEvidenceDisplay([]);
@@ -421,97 +480,176 @@ export default function RentalScreen() {
         return;
       }
 
-      console.log('REQUEST FETCH SUCCESS', data);
-
       setRequest(data);
     };
 
     void fetchRequest();
   }, [rental?.request_id, supabase]);
 
-  useEffect(() => {
-    if (!rental?.id || !rental.owner_user_id || !rental.renter_user_id || !me) return;
-    let cancelled = false;
+  const refreshVerificationState = useCallback(async () => {
+    if (refreshInFlightRef.current) {
+      refreshQueuedRef.current = true;
+      return refreshInFlightRef.current;
+    }
+    const run = async () => {
+      if (__DEV__) console.log('[verification refresh] start');
+      if (!rentalId || !me) return;
+      const { data: rentalData } = await supabase.from('rentals').select('*').eq('id', rentalId).single();
+      if (!rentalData) return;
+      const freshRental = { ...(rentalData as RentalRow) };
+      setRental(freshRental);
 
-    const ownerConfirmedRow =
-      typeof rental.owner_confirmed === 'boolean'
-        ? rental.owner_confirmed
-        : typeof rental.confirmed_by_owner === 'boolean'
-          ? rental.confirmed_by_owner
-          : false;
-    const renterConfirmedRow =
-      typeof rental.renter_confirmed === 'boolean'
-        ? rental.renter_confirmed
-        : typeof rental.confirmed_by_renter === 'boolean'
-          ? rental.confirmed_by_renter
-          : false;
-    const agr =
-      rental.agreement_status === 'confirmed'
-        ? true
-        : rental.agreement_status === 'pending'
-          ? false
-          : ownerConfirmedRow && renterConfirmedRow;
+      const ownerConfirmedRow =
+        typeof freshRental.owner_confirmed === 'boolean'
+          ? freshRental.owner_confirmed
+          : typeof freshRental.confirmed_by_owner === 'boolean'
+            ? freshRental.confirmed_by_owner
+            : false;
+      const renterConfirmedRow =
+        typeof freshRental.renter_confirmed === 'boolean'
+          ? freshRental.renter_confirmed
+          : typeof freshRental.confirmed_by_renter === 'boolean'
+            ? freshRental.confirmed_by_renter
+            : false;
+      const agr =
+        freshRental.agreement_status === 'confirmed'
+          ? true
+          : freshRental.agreement_status === 'pending'
+            ? false
+            : ownerConfirmedRow && renterConfirmedRow;
 
-    if (!agr) return;
+      const freshRowsRaw = agr ? await fetchVerificationRows(supabase, rentalId) : [];
+      const freshRows = freshRowsRaw.map((row) => ({
+        ...row,
+        checklist_state:
+          row.checklist_state && typeof row.checklist_state === 'object'
+            ? { ...(row.checklist_state as Record<string, boolean>) }
+            : {},
+      }));
+      setVerificationRows([...freshRows]);
 
-    void (async () => {
-      await ensureVerificationRows(
-        supabase,
-        rental.id,
-        rental.owner_user_id,
-        rental.renter_user_id,
-        'pickup'
-      );
-      const rows = await fetchVerificationRows(supabase, rental.id);
-      if (cancelled) return;
-
-      const mergedP = mergeChecklistMapsFromRows(rows, 'pickup');
+      const mergedP = mergeChecklistMapsFromRows(freshRows, 'pickup');
       setPickupChecklist({
         owner: fillDefaults(OWNER_PICKUP_ITEMS, mergedP.owner),
         renter: fillDefaults(RENTER_PICKUP_ITEMS, mergedP.renter),
       });
-      const mergedR = mergeChecklistMapsFromRows(rows, 'return');
+      const mergedR = mergeChecklistMapsFromRows(freshRows, 'return');
       setReturnChecklist({
         owner: fillDefaults(OWNER_RETURN_ITEMS, mergedR.owner),
         renter: fillDefaults(RENTER_RETURN_ITEMS, mergedR.renter),
       });
-
-      const pAck = deriveDualConfirmation(rows, 'pickup');
-      const rAck = deriveDualConfirmation(rows, 'return');
-      setPickupAck(pAck);
-      setReturnAck(rAck);
-
-      const hasReturnRows = rows.some((r) => r.phase === 'return');
+      const pAck = deriveDualConfirmation(freshRows, 'pickup');
+      const rAck = deriveDualConfirmation(freshRows, 'return');
+      setPickupAck({ ...pAck });
+      setReturnAck({ ...rAck });
+      const hasReturnRows = freshRows.some((r) => r.phase === 'return');
       if (rAck.owner && rAck.renter) setLifecyclePhase('completed');
       else if (hasReturnRows) setLifecyclePhase('return');
       else if (pAck.owner && pAck.renter) setLifecyclePhase('active');
       else setLifecyclePhase('pickup');
 
-      const [pPhotos, rPhotos] = await Promise.all([
-        fetchVerificationPhotos(supabase, rental.id, 'pickup'),
-        fetchVerificationPhotos(supabase, rental.id, 'return'),
+      const [pickupPhotosRaw, returnPhotosRaw] = await Promise.all([
+        fetchVerificationPhotos(supabase, rentalId, 'pickup'),
+        fetchVerificationPhotos(supabase, rentalId, 'return'),
       ]);
-      if (cancelled) return;
-
       const signList = async (list: Awaited<ReturnType<typeof fetchVerificationPhotos>>) => {
-        const out: { id: string; uri: string }[] = [];
+        const out: PhotoDisplay[] = [];
         for (const row of list) {
           const uri = await signedUrlForEvidencePath(supabase, row.storage_path);
-          if (uri) out.push({ id: row.id, uri });
+          const role = normalizeRole(row.role);
+          const phase = normalizePhase(row.phase);
+          if (uri) {
+            out.push({
+              id: row.id,
+              uri,
+              role,
+              phase,
+              userId: row.uploaded_by,
+              createdAt: row.created_at,
+            });
+          }
         }
         return out;
       };
+      const [pickupPhotos, returnPhotos] = await Promise.all([signList(pickupPhotosRaw), signList(returnPhotosRaw)]);
+      setPickupEvidenceDisplay([...pickupPhotos]);
+      setReturnEvidenceDisplay([...returnPhotos]);
+      if (__DEV__) {
+        console.log('[verification refresh applied]', freshRows.length, pickupPhotos.length + returnPhotos.length, Date.now());
+      }
+      if (__DEV__) console.log('[verification refresh] end');
+    };
+    const task = run().finally(async () => {
+      refreshInFlightRef.current = null;
+      if (refreshQueuedRef.current) {
+        refreshQueuedRef.current = false;
+        await refreshVerificationState();
+      }
+    });
+    refreshInFlightRef.current = task;
+    return task;
+  }, [me, rentalId, supabase]);
 
-      const [pSigned, rSigned] = await Promise.all([signList(pPhotos), signList(rPhotos)]);
-      if (cancelled) return;
-      setPickupEvidenceDisplay(pSigned);
-      setReturnEvidenceDisplay(rSigned);
+  useEffect(() => {
+    if (!rental?.id || !me) return;
+    const currentRentalId = rental.id;
+
+    void (async () => {
+      await refreshVerificationState();
     })();
 
+    const channelId =
+      typeof globalThis.crypto?.randomUUID === 'function'
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+    const channel = supabase
+      .channel(`rental-verification-live:${currentRentalId}:${channelId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'rental_verifications', filter: `rental_id=eq.${currentRentalId}` },
+        async (payload) => {
+          if (__DEV__) {
+            console.log('[verification realtime]', 'rental_verifications', payload.eventType, payload.new);
+          }
+          await refreshVerificationState();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'rental_verification_photos',
+          filter: `rental_id=eq.${currentRentalId}`,
+        },
+        async (payload) => {
+          if (__DEV__) {
+            console.log('[verification realtime]', 'rental_verification_photos', payload.eventType, payload.new);
+          }
+          await refreshVerificationState();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'rentals', filter: `id=eq.${currentRentalId}` },
+        async (payload) => {
+          if (__DEV__) {
+            console.log('[verification realtime]', 'rentals', payload.eventType, payload.new);
+          }
+          await refreshVerificationState();
+        }
+      )
+      .subscribe();
+
     return () => {
-      cancelled = true;
+      void supabase.removeChannel(channel);
     };
-  }, [rental, me, supabase]);
+  }, [
+    refreshVerificationState,
+    rental?.id,
+    me,
+    supabase,
+  ]);
 
   useEffect(() => {
     if (!rental?.id) return;
@@ -606,6 +744,7 @@ export default function RentalScreen() {
         );
         try {
           const failures: { index: number; detail: string; code?: string }[] = [];
+          let successCount = 0;
           let photoIndex = 0;
           for (const uri of uris) {
             photoIndex += 1;
@@ -626,6 +765,7 @@ export default function RentalScreen() {
               });
               continue;
             }
+            successCount += 1;
             let signed = await signedUrlForEvidencePath(supabase, res.storagePath);
             if (!signed) {
               signed = await signedUrlForEvidencePath(supabase, res.storagePath);
@@ -637,7 +777,14 @@ export default function RentalScreen() {
                 detail: 'saved to cloud; preview link failed — try leaving and reopening this rental',
               });
             }
-            const entry = { id: res.dbRowId, uri: displayUri };
+            const entry: PhotoDisplay = {
+              id: res.dbRowId,
+              uri: displayUri,
+              role: normalizeRole(role),
+              phase: normalizePhase(phase),
+              userId: me,
+              createdAt: new Date().toISOString(),
+            };
             if (phase === 'pickup') {
               setPickupEvidenceDisplay((prev) => [...prev, entry]);
             } else {
@@ -654,22 +801,27 @@ export default function RentalScreen() {
               Alert.alert('Some photos could not be saved', body);
             }
           }
+          if (__DEV__) {
+            if (failures.length > 0) {
+              console.warn('[verification mutation] photo upload partial failure', {
+                rentalId: rental.id,
+                phase,
+                successCount,
+                failureCount: failures.length,
+              });
+            } else {
+              console.log('[verification mutation] photo upload ok', { rentalId: rental.id, phase, successCount });
+            }
+          }
+          await refreshVerificationState();
+        } catch (error) {
+          if (__DEV__) console.warn('[verification mutation] photo upload failed', { rentalId: rental.id, phase, error });
         } finally {
           setUploadingEvidence(false);
         }
       })();
-    }, [rental, me, supabase])
+    }, [me, refreshVerificationState, rental, supabase])
   );
-
-  useEffect(() => {
-    if (!rental) return;
-    console.log('[DETAILS PAGE] rental agreement fields', {
-      agreement_status: rental.agreement_status ?? null,
-      owner_confirmed: rental.owner_confirmed ?? null,
-      renter_confirmed: rental.renter_confirmed ?? null,
-      confirmed_at: rental.confirmed_at ?? null,
-    });
-  }, [rental]);
 
   const requestTimestamp = useMemo(() => {
     const n = Number(request?.timestamp);
@@ -765,6 +917,68 @@ export default function RentalScreen() {
   const renterInputDisabled = viewerRole !== 'renter' || !renterNotesEnabled || renterNotesLocked;
   const ownerNotes = rentalNotes.filter((n) => n.author_role === 'owner');
   const renterNotes = rentalNotes.filter((n) => n.author_role === 'renter');
+  const ownerPickupChecklistDone = allItemsDone(
+    OWNER_PICKUP_ITEMS,
+    fillDefaults(
+      OWNER_PICKUP_ITEMS,
+      verificationRows.find((r) => r.phase === 'pickup' && r.role === 'owner')?.checklist_state ?? {}
+    )
+  );
+  const renterPickupChecklistDone = allItemsDone(
+    RENTER_PICKUP_ITEMS,
+    fillDefaults(
+      RENTER_PICKUP_ITEMS,
+      verificationRows.find((r) => r.phase === 'pickup' && r.role === 'renter')?.checklist_state ?? {}
+    )
+  );
+  const ownerReturnChecklistDone = allItemsDone(
+    OWNER_RETURN_ITEMS,
+    fillDefaults(
+      OWNER_RETURN_ITEMS,
+      verificationRows.find((r) => r.phase === 'return' && r.role === 'owner')?.checklist_state ?? {}
+    )
+  );
+  const renterReturnChecklistDone = allItemsDone(
+    RENTER_RETURN_ITEMS,
+    fillDefaults(
+      RENTER_RETURN_ITEMS,
+      verificationRows.find((r) => r.phase === 'return' && r.role === 'renter')?.checklist_state ?? {}
+    )
+  );
+  const ownerPickupPhotos = pickupEvidenceDisplay.filter(
+    (p) => normalizePhase(p.phase) === 'pickup' && normalizeRole(p.role) === 'owner'
+  );
+  const renterPickupPhotos = pickupEvidenceDisplay.filter(
+    (p) => normalizePhase(p.phase) === 'pickup' && normalizeRole(p.role) === 'renter'
+  );
+  const renterReturnPhotos = returnEvidenceDisplay.filter(
+    (p) => normalizePhase(p.phase) === 'return' && normalizeRole(p.role) === 'renter'
+  );
+  const ownerPickupPhotoRequirementMet = ownerPickupPhotos.length >= REQUIRED_PICKUP_PHOTOS;
+  const renterReturnPhotoRequirementMet = renterReturnPhotos.length >= REQUIRED_RETURN_PHOTOS;
+  const bilateralPickupReady = ownerPickupChecklistDone && ownerPickupPhotoRequirementMet && renterPickupChecklistDone;
+  const returnReady = renterReturnChecklistDone && renterReturnPhotoRequirementMet && ownerReturnChecklistDone;
+  const handoffApprovalStarted = Boolean(rental.handoff_approval_started_at || rental.handoff_approved_by_owner);
+  const handoffApprovedByRenter = Boolean(rental.handoff_approved_by_renter);
+  const canBeginHandoff =
+    viewerRole === 'owner' &&
+    bilateralPickupReady &&
+    lifecyclePhase === 'pickup' &&
+    !handoffApprovalStarted;
+  const canRenterFinalizeHandoff =
+    viewerRole === 'renter' &&
+    lifecyclePhase === 'pickup' &&
+    handoffApprovalStarted &&
+    !handoffApprovedByRenter &&
+    bilateralPickupReady;
+
+  const openPhotoViewer = (phase: VerificationPhase, index: number) => {
+    setPhotoViewerPhase(phase);
+    setPhotoViewerIndex(index);
+    setPhotoViewerVisible(true);
+  };
+  const viewerPhotos = photoViewerPhase === 'pickup' ? pickupEvidenceDisplay : returnEvidenceDisplay;
+  const viewerPhoto = viewerPhotos[photoViewerIndex] ?? null;
 
   const addNote = async (role: RentalNoteRole, note: string) => {
     if (!me || !rental?.id) return;
@@ -789,11 +1003,18 @@ export default function RentalScreen() {
       note,
     });
     if (error) {
+        if (__DEV__) {
+          console.warn('[verification mutation] note insert failed', { rentalId: rental.id, role, phase, error });
+        }
       Alert.alert('Could not add note', error);
       return;
     }
+    if (__DEV__) {
+      console.log('[verification mutation] note insert ok', { rentalId: rental.id, role, phase });
+    }
     const rows = await fetchRentalNotes(supabase, rental.id);
     setRentalNotes(rows);
+    await refreshVerificationState();
   };
 
   const onAddOwnerNote = async () => {
@@ -819,23 +1040,48 @@ export default function RentalScreen() {
   };
 
   const togglePickupItem = (id: string) => {
-    setPickupChecklist((prev) => {
-      const nextMap = { ...prev[viewerRole], [id]: !prev[viewerRole][id] };
-      if (me) {
-        void persistChecklistState(supabase, rental.id, 'pickup', me, nextMap);
+    if (!me) return;
+    const nextMap = { ...pickupChecklist[viewerRole], [id]: !pickupChecklist[viewerRole][id] };
+    void (async () => {
+      try {
+        await persistChecklistState(supabase, rental.id, 'pickup', me, nextMap);
+        if (__DEV__) console.log('[verification mutation] pickup checklist update ok', { rentalId: rental.id, itemId: id });
+        await refreshVerificationState();
+      } catch (error) {
+        if (__DEV__) console.warn('[verification mutation] pickup checklist update failed', { rentalId: rental.id, itemId: id, error });
       }
-      return { ...prev, [viewerRole]: nextMap };
-    });
+    })();
   };
 
   const toggleReturnItem = (id: string) => {
-    setReturnChecklist((prev) => {
-      const nextMap = { ...prev[viewerRole], [id]: !prev[viewerRole][id] };
-      if (me) {
-        void persistChecklistState(supabase, rental.id, 'return', me, nextMap);
+    if (!me) return;
+    const nextMap = { ...returnChecklist[viewerRole], [id]: !returnChecklist[viewerRole][id] };
+    void (async () => {
+      try {
+        await persistChecklistState(supabase, rental.id, 'return', me, nextMap);
+        if (__DEV__) console.log('[verification mutation] return checklist update ok', { rentalId: rental.id, itemId: id });
+        await refreshVerificationState();
+      } catch (error) {
+        if (__DEV__) console.warn('[verification mutation] return checklist update failed', { rentalId: rental.id, itemId: id, error });
       }
-      return { ...prev, [viewerRole]: nextMap };
-    });
+    })();
+  };
+
+  const persistReadinessFlags = async (overrides?: Partial<RentalRow>) => {
+    const payload: Partial<RentalRow> = {
+      owner_pickup_ready: ownerPickupChecklistDone && ownerPickupPhotoRequirementMet,
+      renter_pickup_ready: renterPickupChecklistDone,
+      owner_return_ready: ownerReturnChecklistDone,
+      renter_return_ready: renterReturnChecklistDone && renterReturnPhotoRequirementMet,
+      ...(overrides ?? {}),
+    };
+    const { data, error } = await supabase.from('rentals').update(payload).eq('id', rental.id).select('*').single();
+    if (__DEV__) {
+      if (error) console.warn('[verification mutation] readiness/status update failed', { rentalId: rental.id, payload, error });
+      else console.log('[verification mutation] readiness/status update ok', { rentalId: rental.id, payload });
+    }
+    if (data) setRental(data as RentalRow);
+    await refreshVerificationState();
   };
 
   const onReportIssue = () => {
@@ -861,9 +1107,11 @@ export default function RentalScreen() {
             );
             const ok = await persistConfirmation(supabase, rental.id, 'pickup', me, true);
             if (!ok) {
+              if (__DEV__) console.warn('[verification mutation] pickup confirmation failed', { rentalId: rental.id });
               Alert.alert('Could not save', 'Check your connection and try again.');
               return;
             }
+            if (__DEV__) console.log('[verification mutation] pickup confirmation ok', { rentalId: rental.id });
             const rows = await fetchVerificationRows(supabase, rental.id);
             const ack = deriveDualConfirmation(rows, 'pickup');
             setPickupAck(ack);
@@ -874,16 +1122,50 @@ export default function RentalScreen() {
                 .eq('id', rental.id)
                 .select('*')
                 .single();
+              if (__DEV__) console.log('[verification mutation] rental status update ok', { rentalId: rental.id, status: 'handed_off' });
               if (updatedRental) setRental(updatedRental as RentalRow);
               setLifecyclePhase('active');
             }
             if (ack.owner && ack.renter) {
               setLifecyclePhase('active');
             }
+            await refreshVerificationState();
           },
         },
       ]
     );
+  };
+
+  const onBeginHandoffApproval = async () => {
+    if (!me || viewerRole !== 'owner' || !canBeginHandoff) return;
+    const replacementValue = typeof rental.replacement_value === 'number' ? rental.replacement_value : Math.max(finalPrice * 3, 150);
+    const preauthAmount = Math.round(replacementValue * 0.5 * 100) / 100;
+    await persistReadinessFlags({
+      handoff_approved_by_owner: true,
+      handoff_approval_started_at: new Date().toISOString(),
+      replacement_value: replacementValue,
+      preauth_amount: preauthAmount,
+      preauth_status: 'pending',
+      daily_late_fee: rental.daily_late_fee ?? Math.max(10, Math.round(finalPrice * 0.1)),
+      grace_period_hours: rental.grace_period_hours ?? 2,
+    });
+  };
+
+  const onRenterSignAndAuthorize = async () => {
+    const signed = signatureName.trim();
+    if (!signed || !me || viewerRole !== 'renter' || !canRenterFinalizeHandoff) return;
+    await persistReadinessFlags({
+      handoff_approved_by_renter: true,
+      signed_name: signed,
+      signed_at: new Date().toISOString(),
+      agreement_version: Math.max(1, Number(rental.agreement_version ?? 1)),
+      preauth_status: 'authorized',
+      preauth_authorized_at: new Date().toISOString(),
+      status: 'handed_off',
+    });
+    setAgreementModalVisible(false);
+    setSignatureName('');
+    setLifecyclePhase('active');
   };
 
   const onStartReturn = async () => {
@@ -901,12 +1183,14 @@ export default function RentalScreen() {
       .eq('id', rental.id)
       .select('*')
       .single();
+    if (__DEV__) console.log('[verification mutation] rental status update ok', { rentalId: rental.id, status: 'return_pending' });
     if (updatedRental) setRental(updatedRental as RentalRow);
     setLifecyclePhase('return');
+    await refreshVerificationState();
   };
 
   const onConfirmReturn = () => {
-    if (!allReturnItemsDone || !me) return;
+    if (!returnReady || !me || viewerRole !== 'owner') return;
     Alert.alert(
       'Record return confirmation',
       'This records your side of return. The rental completes once both parties have confirmed.',
@@ -924,9 +1208,11 @@ export default function RentalScreen() {
             );
             const ok = await persistConfirmation(supabase, rental.id, 'return', me, true);
             if (!ok) {
+              if (__DEV__) console.warn('[verification mutation] return confirmation failed', { rentalId: rental.id });
               Alert.alert('Could not save', 'Check your connection and try again.');
               return;
             }
+            if (__DEV__) console.log('[verification mutation] return confirmation ok', { rentalId: rental.id });
             const rows = await fetchVerificationRows(supabase, rental.id);
             const ack = deriveDualConfirmation(rows, 'return');
             setReturnAck(ack);
@@ -937,12 +1223,14 @@ export default function RentalScreen() {
                 .eq('id', rental.id)
                 .select('*')
                 .single();
+              if (__DEV__) console.log('[verification mutation] rental status update ok', { rentalId: rental.id, status: 'returned' });
               if (updatedRental) setRental(updatedRental as RentalRow);
               setLifecyclePhase('completed');
             }
             if (ack.owner && ack.renter) {
               setLifecyclePhase('completed');
             }
+            await refreshVerificationState();
           },
         },
       ]
@@ -1194,8 +1482,30 @@ export default function RentalScreen() {
                       photos={pickupEvidenceDisplay}
                       uploading={uploadingEvidence}
                       onAddPress={() => openEvidenceCamera('pickup')}
+                      onPhotoPress={(idx) => openPhotoViewer('pickup', idx)}
                     />
-                    <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Owner responsibilities</Text>
+                    <View style={styles.verificationSubheadRow}>
+                      <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Your responsibilities</Text>
+                      <Pressable
+                        pressOpacityFeedback={false}
+                        disabled={handoffCompleted}
+                        onPress={() => {
+                          const allTrue = Object.fromEntries(pickupItems.map((item) => [item.id, true]));
+                          if (!me) return;
+                          void (async () => {
+                            try {
+                              await persistChecklistState(supabase, rental.id, 'pickup', me, allTrue);
+                              if (__DEV__) console.log('[verification mutation] pickup mark-all ok', { rentalId: rental.id });
+                              await refreshVerificationState();
+                            } catch (error) {
+                              if (__DEV__) console.warn('[verification mutation] pickup mark-all failed', { rentalId: rental.id, error });
+                            }
+                          })();
+                        }}
+                      >
+                        <Text style={[styles.markAllText, handoffCompleted && styles.markAllTextDisabled]}>Mark All Complete</Text>
+                      </Pressable>
+                    </View>
                     {checklistTwoColumns ? (
                       <View style={styles.checklistTwoColWrap}>
                         <View style={styles.checklistCol}>
@@ -1205,7 +1515,7 @@ export default function RentalScreen() {
                               label={item.label}
                               checked={Boolean(pickupDoneForRole[item.id])}
                               onToggle={() => togglePickupItem(item.id)}
-                              disabled={viewerRole !== 'owner' || handoffCompleted}
+                              disabled={handoffCompleted}
                             />
                           ))}
                         </View>
@@ -1216,7 +1526,7 @@ export default function RentalScreen() {
                               label={item.label}
                               checked={Boolean(pickupDoneForRole[item.id])}
                               onToggle={() => togglePickupItem(item.id)}
-                              disabled={viewerRole !== 'owner' || handoffCompleted}
+                              disabled={handoffCompleted}
                             />
                           ))}
                         </View>
@@ -1228,7 +1538,7 @@ export default function RentalScreen() {
                           label={item.label}
                           checked={Boolean(pickupDoneForRole[item.id])}
                           onToggle={() => togglePickupItem(item.id)}
-                          disabled={viewerRole !== 'owner' || handoffCompleted}
+                          disabled={handoffCompleted}
                         />
                       ))
                     )}
@@ -1313,8 +1623,32 @@ export default function RentalScreen() {
                     photos={returnEvidenceDisplay}
                     uploading={uploadingEvidence}
                     onAddPress={() => openEvidenceCamera('return')}
+                    onPhotoPress={(idx) => openPhotoViewer('return', idx)}
                   />
-                  <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Renter responsibilities</Text>
+                  <View style={styles.verificationSubheadRow}>
+                    <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Your responsibilities</Text>
+                    <Pressable
+                      pressOpacityFeedback={false}
+                      disabled={!returnWorkflowEnabled || returnCompleted}
+                      onPress={() => {
+                        const allTrue = Object.fromEntries(returnItems.map((item) => [item.id, true]));
+                        if (!me) return;
+                        void (async () => {
+                          try {
+                            await persistChecklistState(supabase, rental.id, 'return', me, allTrue);
+                            if (__DEV__) console.log('[verification mutation] return mark-all ok', { rentalId: rental.id });
+                            await refreshVerificationState();
+                          } catch (error) {
+                            if (__DEV__) console.warn('[verification mutation] return mark-all failed', { rentalId: rental.id, error });
+                          }
+                        })();
+                      }}
+                    >
+                      <Text style={[styles.markAllText, (!returnWorkflowEnabled || returnCompleted) && styles.markAllTextDisabled]}>
+                        Mark All Complete
+                      </Text>
+                    </Pressable>
+                  </View>
                   {checklistTwoColumns ? (
                     <View style={styles.checklistTwoColWrap}>
                       <View style={styles.checklistCol}>
@@ -1324,7 +1658,7 @@ export default function RentalScreen() {
                             label={item.label}
                             checked={Boolean(returnDoneForRole[item.id])}
                             onToggle={() => toggleReturnItem(item.id)}
-                            disabled={viewerRole !== 'renter' || returnCompleted}
+                            disabled={!returnWorkflowEnabled || returnCompleted}
                           />
                         ))}
                       </View>
@@ -1335,7 +1669,7 @@ export default function RentalScreen() {
                             label={item.label}
                             checked={Boolean(returnDoneForRole[item.id])}
                             onToggle={() => toggleReturnItem(item.id)}
-                            disabled={viewerRole !== 'renter' || returnCompleted}
+                            disabled={!returnWorkflowEnabled || returnCompleted}
                           />
                         ))}
                       </View>
@@ -1347,7 +1681,7 @@ export default function RentalScreen() {
                         label={item.label}
                         checked={Boolean(returnDoneForRole[item.id])}
                         onToggle={() => toggleReturnItem(item.id)}
-                        disabled={viewerRole !== 'renter' || returnCompleted}
+                        disabled={!returnWorkflowEnabled || returnCompleted}
                       />
                     ))
                   )}
@@ -1386,23 +1720,59 @@ export default function RentalScreen() {
               ) : agreementStatus === 'confirmed' && lifecyclePhase === 'pickup' ? (
                 <>
                   <Text style={styles.nextStepsBody}>
-                    Complete your verification steps, then confirm to record your side of pickup.
+                    Both sides must complete pickup checklist + required photos before handoff approval.
                   </Text>
-                  <Pressable
-                    pressOpacityFeedback={false}
-                    haptic
-                    disabled={!allPickupItemsDone}
-                    onPress={onConfirmPickup}
-                    style={({ pressed }) => [
-                      styles.startButton,
-                      !allPickupItemsDone && styles.startButtonDisabled,
-                      pressed && allPickupItemsDone && styles.startButtonPressed,
-                    ]}
-                  >
-                    <Text style={styles.startButtonText}>
-                      {viewerRole === 'owner' ? 'Confirm Handoff' : 'Confirm Item Received'}
+                  <Text style={styles.verificationCollapsedMeta}>
+                    {bilateralPickupReady
+                      ? 'Both sides ready for handoff.'
+                      : ownerPickupChecklistDone && ownerPickupPhotoRequirementMet
+                        ? 'Waiting for renter to finish verification steps.'
+                        : renterPickupChecklistDone
+                          ? 'Waiting for owner verification.'
+                          : 'Both sides still need to complete verification.'}
+                  </Text>
+                  {__DEV__ ? (
+                    <View style={styles.devReadinessBlock}>
+                      <Text style={styles.devReadinessLine}>{`Owner checklist: ${ownerPickupChecklistDone ? '✅' : '❌'}`}</Text>
+                      <Text style={styles.devReadinessLine}>{`Owner photos: ${ownerPickupPhotoRequirementMet ? '✅' : `❌ (${ownerPickupPhotos.length}/${REQUIRED_PICKUP_PHOTOS})`}`}</Text>
+                      <Text style={styles.devReadinessLine}>{`Renter checklist: ${renterPickupChecklistDone ? '✅' : '❌'}`}</Text>
+                      <Text style={styles.devReadinessLine}>{`Renter review complete: ${renterPickupChecklistDone ? '✅' : '❌'}`}</Text>
+                      <Text style={styles.devReadinessLine}>{`Can begin handoff CTA: ${canBeginHandoff ? '✅' : '❌'}`}</Text>
+                    </View>
+                  ) : null}
+                  {viewerRole === 'owner' ? (
+                    <Pressable
+                      pressOpacityFeedback={false}
+                      haptic
+                      disabled={!canBeginHandoff}
+                      onPress={onBeginHandoffApproval}
+                      style={({ pressed }) => [
+                        styles.startButton,
+                        !canBeginHandoff && styles.startButtonDisabled,
+                        pressed && canBeginHandoff && styles.startButtonPressed,
+                      ]}
+                    >
+                      <Text style={styles.startButtonText}>Begin Handoff Approval</Text>
+                    </Pressable>
+                  ) : handoffApprovalStarted && !handoffApprovedByRenter ? (
+                    <Pressable
+                      pressOpacityFeedback={false}
+                      haptic
+                      disabled={!canRenterFinalizeHandoff}
+                      onPress={() => setAgreementModalVisible(true)}
+                      style={({ pressed }) => [
+                        styles.startButton,
+                        !canRenterFinalizeHandoff && styles.startButtonDisabled,
+                        pressed && canRenterFinalizeHandoff && styles.startButtonPressed,
+                      ]}
+                    >
+                      <Text style={styles.startButtonText}>Review & Sign Agreement</Text>
+                    </Pressable>
+                  ) : (
+                    <Text style={styles.verificationCollapsedMeta}>
+                      {handoffApprovedByRenter ? 'Agreement signed and pre-authorization completed.' : 'Waiting for owner to begin handoff approval.'}
                     </Text>
-                  </Pressable>
+                  )}
                   <PartyAckFeedback ack={pickupAck} viewerRole={viewerRole} />
                 </>
               ) : agreementStatus === 'confirmed' && lifecyclePhase === 'active' ? (
@@ -1420,23 +1790,30 @@ export default function RentalScreen() {
               ) : agreementStatus === 'confirmed' && lifecyclePhase === 'return' ? (
                 <>
                   <Text style={styles.nextStepsBody}>
-                    Complete your verification steps, then confirm to record your side of return.
+                    Both sides must complete return checklist + required photos before owner confirms return.
                   </Text>
                   <Pressable
                     pressOpacityFeedback={false}
                     haptic
-                    disabled={!allReturnItemsDone}
+                    disabled={!returnReady || viewerRole !== 'owner'}
                     onPress={onConfirmReturn}
                     style={({ pressed }) => [
                       styles.startButton,
-                      !allReturnItemsDone && styles.startButtonDisabled,
-                      pressed && allReturnItemsDone && styles.startButtonPressed,
+                      (!returnReady || viewerRole !== 'owner') && styles.startButtonDisabled,
+                      pressed && returnReady && viewerRole === 'owner' && styles.startButtonPressed,
                     ]}
                   >
-                    <Text style={styles.startButtonText}>
-                      {viewerRole === 'owner' ? 'Returned' : 'Confirm returned'}
-                    </Text>
+                    <Text style={styles.startButtonText}>{viewerRole === 'owner' ? 'Confirm Return' : 'Waiting for owner confirmation'}</Text>
                   </Pressable>
+                  <Text style={styles.verificationCollapsedMeta}>
+                    {returnReady
+                      ? 'Both sides ready for return confirmation.'
+                      : ownerReturnChecklistDone
+                        ? 'Waiting for renter return verification.'
+                        : renterReturnChecklistDone && renterReturnPhotoRequirementMet
+                          ? 'Waiting for owner return verification.'
+                          : 'Both sides still need return verification.'}
+                  </Text>
                   <PartyAckFeedback ack={returnAck} viewerRole={viewerRole} />
                 </>
               ) : (
@@ -1464,6 +1841,86 @@ export default function RentalScreen() {
             </View>
           </View>
         </ScrollView>
+
+        <Modal visible={photoViewerVisible} transparent animationType="fade" onRequestClose={() => setPhotoViewerVisible(false)}>
+          <View style={styles.viewerBackdrop}>
+            <View style={styles.viewerHeader}>
+              <Pressable pressOpacityFeedback={false} onPress={() => setPhotoViewerVisible(false)}>
+                <Text style={styles.viewerCloseText}>Close</Text>
+              </Pressable>
+            </View>
+            <View style={styles.viewerBody}>
+              <Pressable
+                pressOpacityFeedback={false}
+                disabled={photoViewerIndex <= 0}
+                onPress={() => setPhotoViewerIndex((i) => Math.max(0, i - 1))}
+              >
+                <Text style={[styles.viewerNavText, photoViewerIndex <= 0 && styles.viewerNavTextDisabled]}>‹</Text>
+              </Pressable>
+              {viewerPhoto ? <Image source={{ uri: viewerPhoto.uri }} style={styles.viewerImage} contentFit="contain" /> : null}
+              <Pressable
+                pressOpacityFeedback={false}
+                disabled={photoViewerIndex >= viewerPhotos.length - 1}
+                onPress={() => setPhotoViewerIndex((i) => Math.min(viewerPhotos.length - 1, i + 1))}
+              >
+                <Text
+                  style={[styles.viewerNavText, photoViewerIndex >= viewerPhotos.length - 1 && styles.viewerNavTextDisabled]}
+                >
+                  ›
+                </Text>
+              </Pressable>
+            </View>
+            {viewerPhoto ? (
+              <Text style={styles.viewerMetaText}>
+                {`${viewerPhoto.role === 'owner' ? 'Owner' : 'Renter'} · ${formatCompactDateTime(viewerPhoto.createdAt ?? null)}`}
+              </Text>
+            ) : null}
+          </View>
+        </Modal>
+
+        <Modal visible={agreementModalVisible} transparent animationType="slide" onRequestClose={() => setAgreementModalVisible(false)}>
+          <View style={styles.agreementModalBackdrop}>
+            <View style={styles.agreementModalCard}>
+              <Text style={styles.cardSectionTitle}>Rental Agreement</Text>
+              <Text style={styles.verificationCollapsedMeta}>
+                {`Replacement value: ${formatUsd(Number(rental.replacement_value ?? Math.max(finalPrice * 3, 150)))}`}
+              </Text>
+              <Text style={styles.verificationCollapsedMeta}>
+                {`Pre-authorization hold: ${formatUsd(Number(rental.preauth_amount ?? Math.round(Math.max(finalPrice * 3, 150) * 0.5 * 100) / 100))}`}
+              </Text>
+              <Text style={styles.verificationCollapsedMeta}>
+                {`Daily late fee: ${formatUsd(Number(rental.daily_late_fee ?? Math.max(10, Math.round(finalPrice * 0.1))))}`}
+              </Text>
+              <Text style={styles.verificationCollapsedMeta}>
+                {`Grace period: ${Number(rental.grace_period_hours ?? 2)}h`}
+              </Text>
+              <TextInput
+                style={styles.noteInputInline}
+                value={signatureName}
+                onChangeText={setSignatureName}
+                placeholder="Type your full name to sign"
+                placeholderTextColor={ui.textMuted}
+              />
+              <View style={styles.agreementModalActions}>
+                <Pressable pressOpacityFeedback={false} onPress={() => setAgreementModalVisible(false)}>
+                  <Text style={styles.reportTextBtn}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  pressOpacityFeedback={false}
+                  onPress={() => void onRenterSignAndAuthorize()}
+                  disabled={signatureName.trim().length === 0}
+                  style={({ pressed }) => [
+                    styles.startButton,
+                    signatureName.trim().length === 0 && styles.startButtonDisabled,
+                    pressed && signatureName.trim().length > 0 && styles.startButtonPressed,
+                  ]}
+                >
+                  <Text style={styles.startButtonText}>Sign & Authorize</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </ScreenEntrance>
     </View>
   );
@@ -1807,6 +2264,19 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: 4,
   },
+  verificationSubheadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  markAllText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: ui.primary,
+  },
+  markAllTextDisabled: {
+    color: ui.textMuted,
+  },
   verificationSubheadSpaced: {
     marginTop: 4,
   },
@@ -1989,6 +2459,83 @@ const styles = StyleSheet.create({
     backgroundColor: ui.surfaceInput,
     borderWidth: 1,
     borderColor: ui.border,
+  },
+  viewerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    paddingTop: 40,
+    paddingHorizontal: 12,
+    paddingBottom: 26,
+    justifyContent: 'center',
+  },
+  viewerHeader: {
+    position: 'absolute',
+    top: 40,
+    right: 16,
+    zIndex: 10,
+  },
+  viewerCloseText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  viewerBody: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  viewerImage: {
+    flex: 1,
+    height: 380,
+    borderRadius: 8,
+    backgroundColor: '#000000',
+  },
+  viewerNavText: {
+    color: '#FFFFFF',
+    fontSize: 28,
+    fontWeight: '700',
+    width: 24,
+    textAlign: 'center',
+  },
+  viewerNavTextDisabled: {
+    opacity: 0.35,
+  },
+  viewerMetaText: {
+    marginTop: 10,
+    color: '#D7DDEA',
+    fontSize: 12,
+    textAlign: 'center',
+  },
+  agreementModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.38)',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  agreementModalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 14,
+    gap: 8,
+  },
+  agreementModalActions: {
+    marginTop: 6,
+    gap: 8,
+  },
+  devReadinessBlock: {
+    marginTop: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#EEF3FB',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#C9D7EE',
+  },
+  devReadinessLine: {
+    fontSize: 11,
+    color: ui.textSecondary,
+    lineHeight: 15,
   },
   verificationCollapsedCard: {
     paddingVertical: 10,
