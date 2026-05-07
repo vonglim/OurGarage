@@ -32,13 +32,21 @@ import {
   mergeChecklistMapsFromRows,
   persistChecklistState,
   persistConfirmation,
-  sharedNotesFromRows,
   signedUrlForEvidencePath,
-  syncSharedNotes,
   type PartyRole,
   type VerificationPhase,
 } from '@/lib/rentalVerification';
+import {
+  debugRentalNoteInsertEligibility,
+  fetchRentalNotes,
+  insertRentalNote,
+  logRentalNotesTableHealthInDev,
+  subscribeRentalNotes,
+  type RentalNoteRole,
+  type RentalNoteRow,
+} from '@/lib/rentalNotes';
 import { getSupabase } from '@/lib/supabase';
+import { getSupabaseProjectUrl } from '@/lib/supabase';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
 import { useMessageUnreadStore } from '@/store/messageUnreadStore';
 import { primarySolidPressed, shadowCard, shadowKey, ui } from '@/constants/appUi';
@@ -152,10 +160,12 @@ function ChecklistRow({
   label,
   checked,
   onToggle,
+  disabled = false,
 }: {
   label: string;
   checked: boolean;
   onToggle: () => void;
+  disabled?: boolean;
 }) {
   const scale = useRef(new Animated.Value(1)).current;
   const pulse = () => {
@@ -167,11 +177,13 @@ function ChecklistRow({
   return (
     <Pressable
       pressOpacityFeedback={false}
+      disabled={disabled}
       onPress={() => {
+        if (disabled) return;
         onToggle();
         pulse();
       }}
-      style={({ pressed }) => [styles.checklistRow, pressed && { opacity: 0.92 }]}
+      style={({ pressed }) => [styles.checklistRow, disabled && styles.checklistRowDisabled, pressed && { opacity: 0.92 }]}
     >
       <Animated.View style={[styles.checklistBox, checked && styles.checklistBoxChecked, { transform: [{ scale }] }]}>
         {checked ? <Text style={styles.checklistBoxMark}>✓</Text> : null}
@@ -257,30 +269,78 @@ function VerificationPhotosSubsection({
   );
 }
 
-function SharedNotesSubsection({
+function NoteItem({ note }: { note: RentalNoteRow }) {
+  return (
+    <View style={styles.noteItemRow}>
+      <Text style={styles.noteBullet}>•</Text>
+      <View style={styles.noteItemBody}>
+        <Text style={styles.noteItemText}>{note.note}</Text>
+        <Text style={styles.noteItemMeta}>
+          {`${note.author_role === 'owner' ? 'Owner' : 'Renter'} · ${formatCompactDateTime(note.created_at)}`}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function NoteList({ notes }: { notes: RentalNoteRow[] }) {
+  if (notes.length === 0) {
+    return <Text style={styles.notesEmptyText}>No notes yet.</Text>;
+  }
+  return (
+    <View style={styles.noteList}>
+      {notes.map((note) => (
+        <NoteItem key={note.id} note={note} />
+      ))}
+    </View>
+  );
+}
+
+function AddNoteInput({
   value,
   onChangeText,
+  onAdd,
+  disabled,
+  disabledLabel,
+  loading,
   placeholder,
 }: {
   value: string;
-  onChangeText: (t: string) => void;
+  onChangeText: (text: string) => void;
+  onAdd: () => void;
+  disabled: boolean;
+  disabledLabel: string;
+  loading: boolean;
   placeholder: string;
 }) {
   return (
-    <View style={styles.verificationSubsection}>
-      <Text style={styles.verificationSubhead}>Shared Notes</Text>
-      <Text style={styles.verificationSubtext}>
-        Visible to both parties — saved to your rental verification record.
-      </Text>
-      <TextInput
-        style={styles.sharedNotesInput}
-        value={value}
-        onChangeText={onChangeText}
-        placeholder={placeholder}
-        placeholderTextColor={ui.textMuted}
-        multiline
-        textAlignVertical="top"
-      />
+    <View style={styles.noteInputWrap}>
+      <View style={styles.noteInputRow}>
+        <TextInput
+          style={[styles.noteInputInline, disabled && styles.noteInputDisabled]}
+          value={value}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          placeholderTextColor={ui.textMuted}
+          multiline={false}
+          editable={!disabled}
+          returnKeyType="done"
+        />
+        <Pressable
+          pressOpacityFeedback={false}
+          haptic
+          onPress={onAdd}
+          disabled={disabled || loading || value.trim().length === 0}
+          style={({ pressed }) => [
+            styles.addNoteBtnInline,
+            (disabled || loading || value.trim().length === 0) && styles.addNoteBtnDisabled,
+            pressed && !disabled && value.trim().length > 0 && styles.startButtonPressed,
+          ]}
+        >
+          <Text style={styles.addNoteBtnText}>{loading ? '…' : 'Add'}</Text>
+        </Pressable>
+      </View>
+      {disabled ? <Text style={styles.noteLockLabel}>{disabledLabel}</Text> : null}
     </View>
   );
 }
@@ -309,11 +369,16 @@ export default function RentalScreen() {
   /** Local simulation of two-party pickup/return confirmations */
   const [pickupAck, setPickupAck] = useState({ owner: false, renter: false });
   const [returnAck, setReturnAck] = useState({ owner: false, renter: false });
-  const [pickupSharedNotes, setPickupSharedNotes] = useState('');
-  const [returnSharedNotes, setReturnSharedNotes] = useState('');
   const [pickupEvidenceDisplay, setPickupEvidenceDisplay] = useState<{ id: string; uri: string }[]>([]);
   const [returnEvidenceDisplay, setReturnEvidenceDisplay] = useState<{ id: string; uri: string }[]>([]);
   const [uploadingEvidence, setUploadingEvidence] = useState(false);
+  const [pickupExpanded, setPickupExpanded] = useState(true);
+  const [returnExpanded, setReturnExpanded] = useState(false);
+  const [rentalNotes, setRentalNotes] = useState<RentalNoteRow[]>([]);
+  const [ownerNoteDraft, setOwnerNoteDraft] = useState('');
+  const [renterNoteDraft, setRenterNoteDraft] = useState('');
+  const [addingOwnerNote, setAddingOwnerNote] = useState(false);
+  const [addingRenterNote, setAddingRenterNote] = useState(false);
   const unreadByOfferId = useMessageUnreadStore((s) => s.unreadByOfferId);
 
   useEffect(() => {
@@ -411,9 +476,6 @@ export default function RentalScreen() {
         renter: fillDefaults(RENTER_RETURN_ITEMS, mergedR.renter),
       });
 
-      setPickupSharedNotes(sharedNotesFromRows(rows, 'pickup'));
-      setReturnSharedNotes(sharedNotesFromRows(rows, 'return'));
-
       const pAck = deriveDualConfirmation(rows, 'pickup');
       const rAck = deriveDualConfirmation(rows, 'return');
       setPickupAck(pAck);
@@ -452,60 +514,56 @@ export default function RentalScreen() {
   }, [rental, me, supabase]);
 
   useEffect(() => {
-    if (!rental?.id || !me) return;
-    const ownerConfirmedRow =
-      typeof rental.owner_confirmed === 'boolean'
-        ? rental.owner_confirmed
-        : typeof rental.confirmed_by_owner === 'boolean'
-          ? rental.confirmed_by_owner
-          : false;
-    const renterConfirmedRow =
-      typeof rental.renter_confirmed === 'boolean'
-        ? rental.renter_confirmed
-        : typeof rental.confirmed_by_renter === 'boolean'
-          ? rental.confirmed_by_renter
-          : false;
-    const agr =
-      rental.agreement_status === 'confirmed'
-        ? true
-        : rental.agreement_status === 'pending'
-          ? false
-          : ownerConfirmedRow && renterConfirmedRow;
-    if (!agr) return;
-    if (lifecyclePhase !== 'pickup') return;
-    const t = setTimeout(() => {
-      void syncSharedNotes(supabase, rental.id, 'pickup', pickupSharedNotes);
-    }, 550);
-    return () => clearTimeout(t);
-  }, [pickupSharedNotes, rental, me, lifecyclePhase, supabase]);
+    if (!rental?.id) return;
+    let warnedMissingTable = false;
+    let cancelled = false;
+    const loadNotes = async () => {
+      try {
+        const rows = await fetchRentalNotes(supabase, rental.id);
+        if (!cancelled) setRentalNotes(rows);
+      } catch (e) {
+        if (__DEV__ && !warnedMissingTable) {
+          warnedMissingTable = true;
+          const message = e instanceof Error ? e.message : String(e ?? 'unknown error');
+          Alert.alert(
+            'Rental notes backend missing',
+            `rental_notes is not available in this Supabase project. Apply migration 031 and refresh schema cache.\n\nDetails: ${message}`
+          );
+        }
+      }
+    };
+    void loadNotes();
+    const unsubscribe = subscribeRentalNotes(supabase, rental.id, () => {
+      void loadNotes();
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [rental?.id, supabase]);
 
   useEffect(() => {
-    if (!rental?.id || !me) return;
-    const ownerConfirmedRow =
-      typeof rental.owner_confirmed === 'boolean'
-        ? rental.owner_confirmed
-        : typeof rental.confirmed_by_owner === 'boolean'
-          ? rental.confirmed_by_owner
-          : false;
-    const renterConfirmedRow =
-      typeof rental.renter_confirmed === 'boolean'
-        ? rental.renter_confirmed
-        : typeof rental.confirmed_by_renter === 'boolean'
-          ? rental.confirmed_by_renter
-          : false;
-    const agr =
-      rental.agreement_status === 'confirmed'
-        ? true
-        : rental.agreement_status === 'pending'
-          ? false
-          : ownerConfirmedRow && renterConfirmedRow;
-    if (!agr) return;
-    if (lifecyclePhase !== 'return') return;
-    const t = setTimeout(() => {
-      void syncSharedNotes(supabase, rental.id, 'return', returnSharedNotes);
-    }, 550);
-    return () => clearTimeout(t);
-  }, [returnSharedNotes, rental, me, lifecyclePhase, supabase]);
+    void logRentalNotesTableHealthInDev(supabase);
+  }, [supabase]);
+
+  useEffect(() => {
+    if (!__DEV__) return;
+    const expected = 'https://sbipcsxlldfjbfdykict.supabase.co';
+    const active = getSupabaseProjectUrl();
+    if (active !== expected) {
+      console.warn('[rentalNotes] active Supabase project mismatch', { expected, active });
+    }
+  }, []);
+
+  useEffect(() => {
+    const status = String(rental?.status ?? 'pending').trim().toLowerCase();
+    const isAfterHandoff = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
+      status
+    );
+    const isAfterReturn = ['returned', 'completed', 'cancelled'].includes(status);
+    setPickupExpanded(!isAfterHandoff);
+    setReturnExpanded(isAfterHandoff && !isAfterReturn);
+  }, [rental?.status]);
 
   /** Same as listing / offers: multi-capture `/camera` session, then upload each frame to rental evidence. */
   useFocusEffect(
@@ -692,6 +750,73 @@ export default function RentalScreen() {
     typeof rental.offer_id === 'string' && rental.offer_id.trim() !== ''
       ? (unreadByOfferId[rental.offer_id.trim()] ?? 0)
       : 0;
+  const rentalStatus = String(rental.status ?? 'pending').trim().toLowerCase();
+  const handoffCompleted = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
+    rentalStatus
+  );
+  const returnWorkflowEnabled = handoffCompleted;
+  const returnCompleted = ['returned', 'completed', 'cancelled'].includes(rentalStatus);
+  const ownerNotesLocked = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
+    rentalStatus
+  );
+  const renterNotesEnabled = ['handed_off', 'active', 'return_pending'].includes(rentalStatus);
+  const renterNotesLocked = ['returned', 'completed', 'cancelled'].includes(rentalStatus);
+  const ownerInputDisabled = viewerRole !== 'owner' || ownerNotesLocked;
+  const renterInputDisabled = viewerRole !== 'renter' || !renterNotesEnabled || renterNotesLocked;
+  const ownerNotes = rentalNotes.filter((n) => n.author_role === 'owner');
+  const renterNotes = rentalNotes.filter((n) => n.author_role === 'renter');
+
+  const addNote = async (role: RentalNoteRole, note: string) => {
+    if (!me || !rental?.id) return;
+    const phase = role === 'owner' ? 'pre_handoff' : 'active_rental';
+    if (__DEV__) {
+      const debugEval = await debugRentalNoteInsertEligibility(supabase, {
+        rentalId: rental.id,
+        authorId: me,
+        authorRole: role,
+        phase,
+      });
+      console.log('[rentalNotes] insert eligibility evaluation', {
+        input: { rentalId: rental.id, authorId: me, authorRole: role, phase },
+        debugEval,
+      });
+    }
+    const { error } = await insertRentalNote(supabase, {
+      rentalId: rental.id,
+      authorId: me,
+      authorRole: role,
+      phase,
+      note,
+    });
+    if (error) {
+      Alert.alert('Could not add note', error);
+      return;
+    }
+    const rows = await fetchRentalNotes(supabase, rental.id);
+    setRentalNotes(rows);
+  };
+
+  const onAddOwnerNote = async () => {
+    if (ownerInputDisabled || ownerNoteDraft.trim() === '') return;
+    setAddingOwnerNote(true);
+    try {
+      await addNote('owner', ownerNoteDraft);
+      setOwnerNoteDraft('');
+    } finally {
+      setAddingOwnerNote(false);
+    }
+  };
+
+  const onAddRenterNote = async () => {
+    if (renterInputDisabled || renterNoteDraft.trim() === '') return;
+    setAddingRenterNote(true);
+    try {
+      await addNote('renter', renterNoteDraft);
+      setRenterNoteDraft('');
+    } finally {
+      setAddingRenterNote(false);
+    }
+  };
 
   const togglePickupItem = (id: string) => {
     setPickupChecklist((prev) => {
@@ -742,6 +867,16 @@ export default function RentalScreen() {
             const rows = await fetchVerificationRows(supabase, rental.id);
             const ack = deriveDualConfirmation(rows, 'pickup');
             setPickupAck(ack);
+            if (viewerRole === 'owner') {
+              const { data: updatedRental } = await supabase
+                .from('rentals')
+                .update({ status: 'handed_off' })
+                .eq('id', rental.id)
+                .select('*')
+                .single();
+              if (updatedRental) setRental(updatedRental as RentalRow);
+              setLifecyclePhase('active');
+            }
             if (ack.owner && ack.renter) {
               setLifecyclePhase('active');
             }
@@ -760,6 +895,13 @@ export default function RentalScreen() {
       rental.renter_user_id,
       'return'
     );
+    const { data: updatedRental } = await supabase
+      .from('rentals')
+      .update({ status: 'return_pending' })
+      .eq('id', rental.id)
+      .select('*')
+      .single();
+    if (updatedRental) setRental(updatedRental as RentalRow);
     setLifecyclePhase('return');
   };
 
@@ -788,6 +930,16 @@ export default function RentalScreen() {
             const rows = await fetchVerificationRows(supabase, rental.id);
             const ack = deriveDualConfirmation(rows, 'return');
             setReturnAck(ack);
+            if (viewerRole === 'owner') {
+              const { data: updatedRental } = await supabase
+                .from('rentals')
+                .update({ status: 'returned' })
+                .eq('id', rental.id)
+                .select('*')
+                .single();
+              if (updatedRental) setRental(updatedRental as RentalRow);
+              setLifecyclePhase('completed');
+            }
             if (ack.owner && ack.renter) {
               setLifecyclePhase('completed');
             }
@@ -1016,80 +1168,85 @@ export default function RentalScreen() {
               </View>
             </View>
 
-            {agreementStatus === 'confirmed' && lifecyclePhase === 'pickup' ? (
+            {agreementStatus === 'confirmed' ? (
               <View style={[styles.checklistCard, !isTabletMargins && styles.cardPadPhone]}>
-                <View style={styles.verificationTitleRow}>
-                  <Text style={styles.verificationSectionTitle}>Pickup / Drop-off Verification</Text>
-                  <Text style={styles.inlineRoleLabel}>
-                    {viewerRole === 'owner' ? 'As owner' : 'As renter'}
-                  </Text>
-                </View>
-                <VerificationPhotosSubsection
-                  photos={pickupEvidenceDisplay}
-                  uploading={uploadingEvidence}
-                  onAddPress={() => openEvidenceCamera('pickup')}
-                />
-                <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Your responsibilities</Text>
-                {checklistTwoColumns ? (
-                  <View style={styles.checklistTwoColWrap}>
-                    <View style={styles.checklistCol}>
-                      {pickupChecklistLeft.map((item) => (
-                        <ChecklistRow
-                          key={item.id}
-                          label={item.label}
-                          checked={Boolean(pickupDoneForRole[item.id])}
-                          onToggle={() => togglePickupItem(item.id)}
-                        />
-                      ))}
-                    </View>
-                    <View style={styles.checklistCol}>
-                      {pickupChecklistRight.map((item) => (
-                        <ChecklistRow
-                          key={item.id}
-                          label={item.label}
-                          checked={Boolean(pickupDoneForRole[item.id])}
-                          onToggle={() => togglePickupItem(item.id)}
-                        />
-                      ))}
-                    </View>
-                  </View>
+                <Pressable
+                  pressOpacityFeedback={false}
+                  onPress={() => setPickupExpanded((v) => !v)}
+                  style={({ pressed }) => [styles.verificationTitleRow, pressed && { opacity: 0.9 }]}
+                >
+                  <Text style={styles.verificationSectionTitle}>Pickup / Handoff Details</Text>
+                  <Text style={styles.inlineRoleLabel}>{pickupExpanded ? 'Collapse' : 'View'}</Text>
+                </Pressable>
+                {!pickupExpanded ? (
+                  <>
+                    <Text style={styles.verificationCollapsedLine}>✓ Pickup workflow complete</Text>
+                    <Text style={styles.verificationCollapsedMeta}>
+                      {pickupEvidenceDisplay.length > 0
+                        ? `· ${pickupEvidenceDisplay.length} photo${pickupEvidenceDisplay.length === 1 ? '' : 's'} documented`
+                        : '· No photos uploaded yet'}
+                    </Text>
+                    <Text style={styles.verificationCollapsedMeta}>· Owner notes locked</Text>
+                  </>
                 ) : (
-                  pickupItems.map((item) => (
-                    <ChecklistRow
-                      key={item.id}
-                      label={item.label}
-                      checked={Boolean(pickupDoneForRole[item.id])}
-                      onToggle={() => togglePickupItem(item.id)}
+                  <>
+                    <VerificationPhotosSubsection
+                      photos={pickupEvidenceDisplay}
+                      uploading={uploadingEvidence}
+                      onAddPress={() => openEvidenceCamera('pickup')}
                     />
-                  ))
+                    <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Owner responsibilities</Text>
+                    {checklistTwoColumns ? (
+                      <View style={styles.checklistTwoColWrap}>
+                        <View style={styles.checklistCol}>
+                          {pickupChecklistLeft.map((item) => (
+                            <ChecklistRow
+                              key={item.id}
+                              label={item.label}
+                              checked={Boolean(pickupDoneForRole[item.id])}
+                              onToggle={() => togglePickupItem(item.id)}
+                              disabled={viewerRole !== 'owner' || handoffCompleted}
+                            />
+                          ))}
+                        </View>
+                        <View style={styles.checklistCol}>
+                          {pickupChecklistRight.map((item) => (
+                            <ChecklistRow
+                              key={item.id}
+                              label={item.label}
+                              checked={Boolean(pickupDoneForRole[item.id])}
+                              onToggle={() => togglePickupItem(item.id)}
+                              disabled={viewerRole !== 'owner' || handoffCompleted}
+                            />
+                          ))}
+                        </View>
+                      </View>
+                    ) : (
+                      pickupItems.map((item) => (
+                        <ChecklistRow
+                          key={item.id}
+                          label={item.label}
+                          checked={Boolean(pickupDoneForRole[item.id])}
+                          onToggle={() => togglePickupItem(item.id)}
+                          disabled={viewerRole !== 'owner' || handoffCompleted}
+                        />
+                      ))
+                    )}
+                    <View style={styles.notesGroup}>
+                      <Text style={styles.notesGroupTitle}>Owner Notes</Text>
+                      <NoteList notes={ownerNotes} />
+                      <AddNoteInput
+                        value={ownerNoteDraft}
+                        onChangeText={setOwnerNoteDraft}
+                        onAdd={onAddOwnerNote}
+                        disabled={ownerInputDisabled}
+                        disabledLabel="Owner Notes Locked 🔒"
+                        loading={addingOwnerNote}
+                        placeholder="Add owner note before handoff…"
+                      />
+                    </View>
+                  </>
                 )}
-                <SharedNotesSubsection
-                  value={pickupSharedNotes}
-                  onChangeText={setPickupSharedNotes}
-                  placeholder="e.g. fuel level, existing scratches, accessories, battery health, usage expectations…"
-                />
-              </View>
-            ) : null}
-
-            {agreementStatus === 'confirmed' &&
-            (lifecyclePhase === 'active' || lifecyclePhase === 'return' || lifecyclePhase === 'completed') ? (
-              <View style={[styles.checklistCard, styles.verificationCollapsedCard, !isTabletMargins && styles.cardPadPhone]}>
-                <View style={styles.verificationCollapsedHeader}>
-                  <Text style={[styles.cardSectionTitle, styles.verificationCollapsedTitle]}>
-                    Pickup / Drop-off Verification
-                  </Text>
-                  <Text style={styles.verificationCollapsedBadge}>✓ Completed</Text>
-                </View>
-                <Text style={styles.verificationCollapsedLine}>✓ Pickup verified</Text>
-                <Text style={styles.verificationCollapsedMeta}>
-                  {pickupEvidenceDisplay.length > 0
-                    ? `· ${pickupEvidenceDisplay.length} photo${pickupEvidenceDisplay.length === 1 ? '' : 's'} documented`
-                    : '· No photos uploaded yet'}
-                </Text>
-                <Text style={styles.verificationCollapsedMeta}>
-                  {pickupSharedNotes.trim() ? '· Shared notes recorded' : '· No shared notes added'}
-                </Text>
-                <Text style={styles.verificationCollapsedMeta}>· Both parties confirmed</Text>
               </View>
             ) : null}
 
@@ -1116,79 +1273,100 @@ export default function RentalScreen() {
               </View>
             ) : null}
 
-            {lifecyclePhase === 'return' ? (
-              <View style={[styles.checklistCard, !isTabletMargins && styles.cardPadPhone]}>
-                <View style={styles.verificationTitleRow}>
-                  <Text style={styles.verificationSectionTitle}>Return Verification</Text>
-                  <Text style={styles.inlineRoleLabel}>
-                    {viewerRole === 'owner' ? 'As owner' : 'As renter'}
+            <View
+              style={[
+                styles.checklistCard,
+                !isTabletMargins && styles.cardPadPhone,
+                !returnWorkflowEnabled && styles.phaseCardDisabled,
+              ]}
+            >
+              <Pressable
+                pressOpacityFeedback={false}
+                disabled={!returnWorkflowEnabled}
+                onPress={() => setReturnExpanded((v) => !v)}
+                style={({ pressed }) => [styles.verificationTitleRow, pressed && { opacity: 0.9 }]}
+              >
+                <Text style={styles.verificationSectionTitle}>Return / Drop-off Details</Text>
+                <Text style={styles.inlineRoleLabel}>
+                  {!returnWorkflowEnabled ? 'Locked' : returnExpanded ? 'Collapse' : 'View'}
+                </Text>
+              </Pressable>
+              {!returnWorkflowEnabled ? (
+                <Text style={styles.verificationCollapsedMeta}>Available after handoff is confirmed.</Text>
+              ) : !returnExpanded ? (
+                <>
+                  <Text style={styles.verificationCollapsedLine}>
+                    {returnCompleted ? '✓ Return workflow complete' : 'Return workflow in progress'}
                   </Text>
-                </View>
-                <VerificationPhotosSubsection
-                  photos={returnEvidenceDisplay}
-                  uploading={uploadingEvidence}
-                  onAddPress={() => openEvidenceCamera('return')}
-                />
-                <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Your responsibilities</Text>
-                {checklistTwoColumns ? (
-                  <View style={styles.checklistTwoColWrap}>
-                    <View style={styles.checklistCol}>
-                      {returnChecklistLeft.map((item) => (
-                        <ChecklistRow
-                          key={item.id}
-                          label={item.label}
-                          checked={Boolean(returnDoneForRole[item.id])}
-                          onToggle={() => toggleReturnItem(item.id)}
-                        />
-                      ))}
+                  <Text style={styles.verificationCollapsedMeta}>
+                    {returnEvidenceDisplay.length > 0
+                      ? `· ${returnEvidenceDisplay.length} photo${returnEvidenceDisplay.length === 1 ? '' : 's'} documented`
+                      : '· No return photos uploaded yet'}
+                  </Text>
+                  <Text style={styles.verificationCollapsedMeta}>
+                    {returnCompleted ? '· Renter notes locked' : '· Renter notes active'}
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <VerificationPhotosSubsection
+                    photos={returnEvidenceDisplay}
+                    uploading={uploadingEvidence}
+                    onAddPress={() => openEvidenceCamera('return')}
+                  />
+                  <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Renter responsibilities</Text>
+                  {checklistTwoColumns ? (
+                    <View style={styles.checklistTwoColWrap}>
+                      <View style={styles.checklistCol}>
+                        {returnChecklistLeft.map((item) => (
+                          <ChecklistRow
+                            key={item.id}
+                            label={item.label}
+                            checked={Boolean(returnDoneForRole[item.id])}
+                            onToggle={() => toggleReturnItem(item.id)}
+                            disabled={viewerRole !== 'renter' || returnCompleted}
+                          />
+                        ))}
+                      </View>
+                      <View style={styles.checklistCol}>
+                        {returnChecklistRight.map((item) => (
+                          <ChecklistRow
+                            key={item.id}
+                            label={item.label}
+                            checked={Boolean(returnDoneForRole[item.id])}
+                            onToggle={() => toggleReturnItem(item.id)}
+                            disabled={viewerRole !== 'renter' || returnCompleted}
+                          />
+                        ))}
+                      </View>
                     </View>
-                    <View style={styles.checklistCol}>
-                      {returnChecklistRight.map((item) => (
-                        <ChecklistRow
-                          key={item.id}
-                          label={item.label}
-                          checked={Boolean(returnDoneForRole[item.id])}
-                          onToggle={() => toggleReturnItem(item.id)}
-                        />
-                      ))}
-                    </View>
-                  </View>
-                ) : (
-                  returnItems.map((item) => (
-                    <ChecklistRow
-                      key={item.id}
-                      label={item.label}
-                      checked={Boolean(returnDoneForRole[item.id])}
-                      onToggle={() => toggleReturnItem(item.id)}
+                  ) : (
+                    returnItems.map((item) => (
+                      <ChecklistRow
+                        key={item.id}
+                        label={item.label}
+                        checked={Boolean(returnDoneForRole[item.id])}
+                        onToggle={() => toggleReturnItem(item.id)}
+                        disabled={viewerRole !== 'renter' || returnCompleted}
+                      />
+                    ))
+                  )}
+                  <View style={styles.notesGroup}>
+                    <Text style={styles.notesGroupTitle}>Renter Notes</Text>
+                    <NoteList notes={renterNotes} />
+                    <AddNoteInput
+                      value={renterNoteDraft}
+                      onChangeText={setRenterNoteDraft}
+                      onAdd={onAddRenterNote}
+                      disabled={renterInputDisabled}
+                      disabledLabel="Renter Notes Locked 🔒"
+                      loading={addingRenterNote}
+                      placeholder="Add renter note during active rental…"
                     />
-                  ))
-                )}
-                <SharedNotesSubsection
-                  value={returnSharedNotes}
-                  onChangeText={setReturnSharedNotes}
-                  placeholder="e.g. condition at return, missing items, damage notes, special handling…"
-                />
-              </View>
-            ) : null}
-
-            {lifecyclePhase === 'completed' ? (
-              <View style={[styles.checklistCard, styles.verificationCollapsedCard, !isTabletMargins && styles.cardPadPhone]}>
-                <View style={styles.verificationCollapsedHeader}>
-                  <Text style={[styles.cardSectionTitle, styles.verificationCollapsedTitle]}>Return Verification</Text>
-                  <Text style={styles.verificationCollapsedBadge}>✓ Completed</Text>
-                </View>
-                <Text style={styles.verificationCollapsedLine}>✓ Return verified</Text>
-                <Text style={styles.verificationCollapsedMeta}>
-                  {returnEvidenceDisplay.length > 0
-                    ? `· ${returnEvidenceDisplay.length} photo${returnEvidenceDisplay.length === 1 ? '' : 's'} documented`
-                    : '· No photos uploaded yet'}
-                </Text>
-                <Text style={styles.verificationCollapsedMeta}>
-                  {returnSharedNotes.trim() ? '· Shared notes recorded' : '· No shared notes added'}
-                </Text>
-                <Text style={styles.verificationCollapsedMeta}>· Both parties confirmed</Text>
-              </View>
-            ) : null}
+                  </View>
+                </>
+              )}
+            </View>
 
             <View style={[styles.actionsCard, !isTabletMargins && styles.cardPadPhone]}>
               {lifecyclePhase === 'completed' ? (
@@ -1256,7 +1434,7 @@ export default function RentalScreen() {
                     ]}
                   >
                     <Text style={styles.startButtonText}>
-                      {viewerRole === 'owner' ? 'Confirm item returned' : 'Confirm returned'}
+                      {viewerRole === 'owner' ? 'Returned' : 'Confirm returned'}
                     </Text>
                   </Pressable>
                   <PartyAckFeedback ack={returnAck} viewerRole={viewerRole} />
@@ -1711,6 +1889,107 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: ui.textPrimary,
   },
+  notesCard: {
+    width: '100%',
+    backgroundColor: '#FBFCFE',
+    borderRadius: 12,
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    ...shadowCard,
+    elevation: 2,
+  },
+  notesGroup: {
+    marginTop: 8,
+  },
+  notesGroupTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    marginBottom: 5,
+  },
+  noteList: {
+    gap: 4,
+  },
+  notesEmptyText: {
+    fontSize: 12,
+    color: ui.textMuted,
+    marginBottom: 4,
+  },
+  noteItemRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+  },
+  noteBullet: {
+    fontSize: 13,
+    color: ui.textPrimary,
+    marginTop: 1,
+  },
+  noteItemBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  noteItemText: {
+    fontSize: 13,
+    color: ui.textPrimary,
+    lineHeight: 17,
+  },
+  noteItemMeta: {
+    fontSize: 10,
+    color: ui.textMuted,
+    marginTop: 1,
+  },
+  noteInputWrap: {
+    marginTop: 6,
+  },
+  noteInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  noteInputInline: {
+    flex: 1,
+    minHeight: 38,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: ui.border,
+    backgroundColor: ui.surfaceInput,
+    fontSize: 13,
+    lineHeight: 16,
+    color: ui.textPrimary,
+  },
+  noteInputDisabled: {
+    opacity: 0.7,
+  },
+  noteLockLabel: {
+    marginTop: 5,
+    fontSize: 11,
+    color: ui.textMuted,
+    fontWeight: '600',
+  },
+  addNoteBtnInline: {
+    backgroundColor: ui.primary,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    minWidth: 50,
+    alignItems: 'center',
+  },
+  addNoteBtnDisabled: {
+    opacity: 0.45,
+  },
+  addNoteBtnText: {
+    color: ui.primaryOn,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  phaseCardDisabled: {
+    backgroundColor: ui.surfaceInput,
+    borderWidth: 1,
+    borderColor: ui.border,
+  },
   verificationCollapsedCard: {
     paddingVertical: 10,
   },
@@ -1798,6 +2077,9 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     marginBottom: 1,
   },
+  checklistRowDisabled: {
+    opacity: 0.55,
+  },
   checklistBox: {
     width: 19,
     height: 19,
@@ -1826,7 +2108,6 @@ const styles = StyleSheet.create({
   },
   checklistLabelChecked: {
     color: ui.textMuted,
-    textDecorationLine: 'line-through',
   },
   meetupCompletedLine: {
     fontSize: 12,
