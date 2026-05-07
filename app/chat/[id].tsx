@@ -31,6 +31,7 @@ import { markMessageNotificationsForOfferAsRead, markOfferThreadRead } from '@/l
 import { sendOfferThreadUserMessage } from '@/lib/sendOfferThreadMessage';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
+import { useMessageUnreadStore } from '@/store/messageUnreadStore';
 
 type OfferMessageRow = {
   id: string;
@@ -351,8 +352,39 @@ export default function ChatDetailScreen() {
             return [...prev, msg];
           });
           if (meId && authorId && authorId !== meId) {
-            void markOfferThreadRead(threadOfferId);
-            void markMessageNotificationsForOfferAsRead(threadOfferId);
+            void (async () => {
+              if (__DEV__) {
+                console.log('[messageUnread] incoming message mark-read sequence start', {
+                  threadOfferId,
+                  meId,
+                  authorId,
+                });
+              }
+              if (__DEV__) {
+                console.log('[messageUnread] calling markOfferThreadRead (incoming message)', {
+                  threadOfferId,
+                });
+              }
+              await markOfferThreadRead(threadOfferId);
+              if (__DEV__) {
+                console.log('[messageUnread] completed markOfferThreadRead (incoming message)', {
+                  threadOfferId,
+                });
+                console.log('[messageUnread] calling markMessageNotificationsForOfferAsRead (incoming message)', {
+                  threadOfferId,
+                });
+              }
+              await markMessageNotificationsForOfferAsRead(threadOfferId);
+              if (__DEV__) {
+                console.log('[messageUnread] completed markMessageNotificationsForOfferAsRead (incoming message)', {
+                  threadOfferId,
+                });
+                console.log('[messageUnread] post-mark refresh (incoming message)', {
+                  offerId: threadOfferId,
+                });
+              }
+              await useMessageUnreadStore.getState().refresh();
+            })();
           }
         }
       )
@@ -409,9 +441,46 @@ export default function ChatDetailScreen() {
   }, [threadOfferId, loadMessages, meId]);
 
   useEffect(() => {
-    if (!threadOfferId || !meId) return;
-    void markOfferThreadRead(threadOfferId);
-    void markMessageNotificationsForOfferAsRead(threadOfferId);
+    if (!threadOfferId || !meId) {
+      if (__DEV__) {
+        console.warn('[messageUnread] thread-open effect early exit', {
+          threadOfferId,
+          meId,
+          reason: !threadOfferId ? 'missing_thread_offer_id' : 'missing_me_id',
+        });
+      }
+      return;
+    }
+    void (async () => {
+      if (__DEV__) {
+        console.log('[messageUnread] thread-open mark-read sequence start', {
+          threadOfferId,
+          meId,
+        });
+        console.log('[messageUnread] calling markOfferThreadRead (thread open)', {
+          threadOfferId,
+        });
+      }
+      await markOfferThreadRead(threadOfferId);
+      if (__DEV__) {
+        console.log('[messageUnread] completed markOfferThreadRead (thread open)', {
+          threadOfferId,
+        });
+        console.log('[messageUnread] calling markMessageNotificationsForOfferAsRead (thread open)', {
+          threadOfferId,
+        });
+      }
+      await markMessageNotificationsForOfferAsRead(threadOfferId);
+      if (__DEV__) {
+        console.log('[messageUnread] completed markMessageNotificationsForOfferAsRead (thread open)', {
+          threadOfferId,
+        });
+        console.log('[messageUnread] post-mark refresh (thread open)', {
+          offerId: threadOfferId,
+        });
+      }
+      await useMessageUnreadStore.getState().refresh();
+    })();
   }, [threadOfferId, meId]);
 
   const onSend = async () => {

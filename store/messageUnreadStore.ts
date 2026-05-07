@@ -43,11 +43,17 @@ export const useMessageUnreadStore = create<MessageUnreadState>((set) => ({
     if (__DEV__) console.log('[messageUnreadStore] hydrate start');
     const local = await loadUnread();
     if (__DEV__) console.log('[messageUnreadStore] hydrate local', local);
-    set({ unreadByOfferId: local });
     const next = await fetchUnreadMessageCountsByOffer();
-    if (__DEV__) console.log('[messageUnreadStore] setUnreadTotals (hydrate)', next);
-    set({ unreadByOfferId: next });
-    void persistUnread(next);
+    if (Object.keys(next).length > 0 || Object.keys(local).length === 0) {
+      if (__DEV__) console.log('[messageUnreadStore] setUnreadTotals (hydrate:backend)', next);
+      set({ unreadByOfferId: next });
+      void persistUnread(next);
+      return;
+    }
+    if (__DEV__) {
+      console.log('[messageUnreadStore] setUnreadTotals (hydrate:local-fallback)', local);
+    }
+    set({ unreadByOfferId: local });
   },
   refresh: async () => {
     if (__DEV__) console.log('[messageUnreadStore] refresh start');

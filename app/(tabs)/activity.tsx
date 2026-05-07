@@ -50,6 +50,7 @@ import {
   useRequestsStore,
 } from '@/store/requestsStore';
 import { useFocusEffect } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -159,6 +160,56 @@ function outgoingOfferStatusLabel(s: OutgoingOfferStatus): string {
     default:
       return s;
   }
+}
+
+function rentalStatusVisual(
+  row: UnifiedRentalRow,
+  role: RentalsSubView
+): { label: string } {
+  const nowMs = Date.now();
+  const pickupMs = row.pickup_datetime ? new Date(row.pickup_datetime).getTime() : null;
+  const returnMs = row.return_datetime ? new Date(row.return_datetime).getTime() : null;
+  const status = String(row.status ?? '')
+    .trim()
+    .toLowerCase();
+  const agreementStatus = String(row.agreement_status ?? '')
+    .trim()
+    .toLowerCase();
+  const allConfirmed = row.owner_confirmed === true && row.renter_confirmed === true;
+
+  if (status === 'completed' || status === 'returned') {
+    return { label: 'Completed' };
+  }
+  if (status === 'cancelled' || status === 'canceled') {
+    return { label: 'Awaiting confirmation' };
+  }
+  if (agreementStatus === 'pending' || !allConfirmed) {
+    return { label: 'Awaiting confirmation' };
+  }
+  if (status === 'active') {
+    if (returnMs != null) {
+      const dayMs = 24 * 60 * 60 * 1000;
+      const diff = returnMs - nowMs;
+      if (diff > 0 && diff <= dayMs) {
+        return { label: 'Return scheduled' };
+      }
+      if (diff <= 0) {
+        return { label: 'Awaiting return' };
+      }
+    }
+    return { label: 'Rental active' };
+  }
+  if (pickupMs != null) {
+    const withinMeetupWindow = Math.abs(pickupMs - nowMs) <= 6 * 60 * 60 * 1000;
+    if (withinMeetupWindow || nowMs > pickupMs) {
+      return { label: 'Meetup scheduled' };
+    }
+    return { label: 'Ready for pickup' };
+  }
+
+  return {
+    label: role === 'listing' ? 'Meetup scheduled' : 'Ready for pickup',
+  };
 }
 
 export default function ActivityScreen() {
@@ -554,6 +605,78 @@ export default function ActivityScreen() {
     );
   }
 
+  function renderRentalOperationalRow(row: UnifiedRentalRow, role: RentalsSubView) {
+    const title = unifiedRentalTitle(row);
+    const priceNum = Number(row.price);
+    const priceLabel = Number.isFinite(priceNum) ? formatUsd(priceNum) : '—';
+    const messageUnread =
+      typeof row.offer_id === 'string' && row.offer_id.trim() !== ''
+        ? (unreadByOfferId[row.offer_id.trim()] ?? 0)
+        : 0;
+    const status = rentalStatusVisual(row, role);
+
+    return (
+      <View key={row.id} style={styles.rentalRowCard}>
+        <View style={styles.rentalRowMain}>
+          <View style={styles.rentalRowTop}>
+            <Text style={styles.rentalRowTitle} numberOfLines={1}>
+              {title}
+            </Text>
+            <View style={styles.rentalRowActions}>
+              <Pressable
+                pressOpacityFeedback={false}
+                haptic
+                onPress={() => {
+                  if (!row.id) {
+                    console.warn('Missing rental id');
+                    return;
+                  }
+                  router.push({
+                    pathname: '/chat/[id]',
+                    params: { id: row.id },
+                  });
+                }}
+                style={({ pressed }) => [styles.rentalIconBtn, pressed && styles.rentalIconBtnPressed]}
+                accessibilityRole="button"
+                accessibilityLabel="Message"
+              >
+                <Ionicons name="chatbubble-ellipses-outline" size={18} color={ui.textSecondary} />
+                {messageUnread > 0 ? (
+                  <View style={styles.rentalIconBadge}>
+                    <Text style={styles.rentalIconBadgeText}>{formatSectionCount(messageUnread)}</Text>
+                  </View>
+                ) : null}
+              </Pressable>
+              <Pressable
+                pressOpacityFeedback={false}
+                haptic
+                onPress={() => {
+                  router.push({
+                    pathname: '/rental/[id]',
+                    params: { id: row.id },
+                  });
+                }}
+                style={({ pressed }) => [styles.rentalIconBtn, pressed && styles.rentalIconBtnPressed]}
+                accessibilityRole="button"
+                accessibilityLabel="View details"
+              >
+                <Ionicons name="document-text-outline" size={18} color={ui.textSecondary} />
+              </Pressable>
+            </View>
+          </View>
+          <View style={styles.rentalStatusRow}>
+            <View style={styles.rentalStatusChip}>
+              <Text style={styles.rentalStatusChipText}>{`Status: ${status.label}`}</Text>
+            </View>
+          </View>
+          <Text style={styles.rentalRowMeta} numberOfLines={1}>
+            {priceLabel}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <ScreenWrapper style={styles.screenWrap}>
       <View style={styles.screen}>
@@ -568,7 +691,7 @@ export default function ActivityScreen() {
             <View style={[styles.header, { paddingTop: 12 }]}>
               <View style={styles.headerTitleRow}>
                 <Text style={styles.screenTitle} numberOfLines={1}>
-                  My Activity
+                  Activity
                 </Text>
                 <Pressable
                   pressOpacityFeedback={false}
@@ -905,88 +1028,7 @@ export default function ActivityScreen() {
                     ) : (
                       <>
                         <Text style={styles.activePastHeading}>You are renting</Text>
-                        {approvedAsRenter.map((row) => {
-                          const title = unifiedRentalTitle(row);
-                          const priceNum = Number(row.price);
-                          const priceLabel = Number.isFinite(priceNum) ? formatUsd(priceNum) : '—';
-                          const rid =
-                            typeof row.request_id === 'string' && row.request_id.trim() !== ''
-                              ? row.request_id.trim()
-                              : null;
-                          const lid =
-                            typeof row.listing_id === 'string' && row.listing_id.trim() !== ''
-                              ? row.listing_id.trim()
-                              : null;
-                          const messageUnread =
-                            typeof row.offer_id === 'string' && row.offer_id.trim() !== ''
-                              ? (unreadByOfferId[row.offer_id.trim()] ?? 0)
-                              : 0;
-                          return (
-                            <View key={row.id} style={styles.matchedRentalCard}>
-                              <Text style={styles.matchedRentalTitle} numberOfLines={2}>
-                                {title}
-                              </Text>
-                              <Text style={styles.matchedRentalHint}>{priceLabel}</Text>
-                              <View style={styles.activeBlockSpacer} />
-                              <View style={styles.activeStatusRow}>
-                                <View style={styles.activeStatusDot} />
-                                <Text style={styles.activeStatusLabel}>You are renting</Text>
-                              </View>
-                              <View style={styles.activeBtnStackGap} />
-                              <View style={{ flexDirection: 'row', gap: 10 }}>
-                                <Pressable
-                                  pressOpacityFeedback={false}
-                                  haptic
-                                  style={({ pressed }) => [
-                                    styles.activeBtnPrimaryLarge,
-                                    { flex: 1 },
-                                    pressed && styles.activeBtnPressed,
-                                  ]}
-                                  onPress={() => {
-                                    if (!row.id) {
-                                      console.warn('Missing rental id');
-                                      return;
-                                    }
-                                    router.push({
-                                      pathname: '/chat/[id]',
-                                      params: { id: row.id },
-                                    });
-                                  }}
-                                  accessibilityRole="button"
-                                  accessibilityLabel="Message"
-                                >
-                                  <Text style={styles.activeBtnPrimaryLargeText}>Message</Text>
-                                  {messageUnread > 0 ? (
-                                    <View style={styles.threadMessageBtnBadge}>
-                                      <Text style={styles.threadMessageBtnBadgeText}>
-                                        {formatSectionCount(messageUnread)}
-                                      </Text>
-                                    </View>
-                                  ) : null}
-                                </Pressable>
-                                <Pressable
-                                  pressOpacityFeedback={false}
-                                  haptic
-                                  style={({ pressed }) => [
-                                    styles.activeBtnPrimaryLarge,
-                                    { flex: 1 },
-                                    pressed && styles.activeBtnPressed,
-                                  ]}
-                                  onPress={() => {
-                                    router.push({
-                                      pathname: '/rental/[id]',
-                                      params: { id: row.id },
-                                    });
-                                  }}
-                                  accessibilityRole="button"
-                                  accessibilityLabel="View details"
-                                >
-                                  <Text style={styles.activeBtnPrimaryLargeText}>View Details</Text>
-                                </Pressable>
-                              </View>
-                            </View>
-                          );
-                        })}
+                        {approvedAsRenter.map((row) => renderRentalOperationalRow(row, 'renting'))}
                       </>
                     )
                   ) : approvedAsOwner.length === 0 ? (
@@ -999,80 +1041,7 @@ export default function ActivityScreen() {
                   ) : (
                     <>
                       <Text style={styles.activePastHeading}>You are renting out</Text>
-                      {approvedAsOwner.map((row) => {
-                        const title = unifiedRentalTitle(row);
-                        const priceNum = Number(row.price);
-                        const priceLabel = Number.isFinite(priceNum) ? formatUsd(priceNum) : '—';
-                        const messageUnread =
-                          typeof row.offer_id === 'string' && row.offer_id.trim() !== ''
-                            ? (unreadByOfferId[row.offer_id.trim()] ?? 0)
-                            : 0;
-                        return (
-                          <View key={row.id} style={styles.matchedRentalCard}>
-                            <Text style={styles.matchedRentalTitle} numberOfLines={2}>
-                              {title}
-                            </Text>
-                            <Text style={styles.matchedRentalHint}>{priceLabel}</Text>
-                            <View style={styles.activeBlockSpacer} />
-                            <View style={styles.activeStatusRow}>
-                              <View style={styles.activeStatusDot} />
-                              <Text style={styles.activeStatusLabel}>Rented out</Text>
-                            </View>
-                            <View style={styles.activeBtnStackGap} />
-                            <View style={{ flexDirection: 'row', gap: 10 }}>
-                              <Pressable
-                                pressOpacityFeedback={false}
-                                haptic
-                                style={({ pressed }) => [
-                                  styles.activeBtnPrimaryLarge,
-                                  { flex: 1 },
-                                  pressed && styles.activeBtnPressed,
-                                ]}
-                                onPress={() => {
-                                  if (!row.id) {
-                                    console.warn('Missing rental id');
-                                    return;
-                                  }
-                                  router.push({
-                                    pathname: '/chat/[id]',
-                                    params: { id: row.id },
-                                  });
-                                }}
-                                accessibilityRole="button"
-                                accessibilityLabel="Message"
-                              >
-                                <Text style={styles.activeBtnPrimaryLargeText}>Message</Text>
-                                {messageUnread > 0 ? (
-                                  <View style={styles.threadMessageBtnBadge}>
-                                    <Text style={styles.threadMessageBtnBadgeText}>
-                                      {formatSectionCount(messageUnread)}
-                                    </Text>
-                                  </View>
-                                ) : null}
-                              </Pressable>
-                              <Pressable
-                                pressOpacityFeedback={false}
-                                haptic
-                                style={({ pressed }) => [
-                                  styles.activeBtnPrimaryLarge,
-                                  { flex: 1 },
-                                  pressed && styles.activeBtnPressed,
-                                ]}
-                                onPress={() => {
-                                  router.push({
-                                    pathname: '/rental/[id]',
-                                    params: { id: row.id },
-                                  });
-                                }}
-                                accessibilityRole="button"
-                                accessibilityLabel="View details"
-                              >
-                                <Text style={styles.activeBtnPrimaryLargeText}>View Details</Text>
-                              </Pressable>
-                            </View>
-                          </View>
-                        );
-                      })}
+                      {approvedAsOwner.map((row) => renderRentalOperationalRow(row, 'listing'))}
                     </>
                   )}
                 </>
@@ -1394,6 +1363,88 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: 10,
     marginTop: 2,
+  },
+  rentalRowCard: {
+    ...cardChrome,
+    marginBottom: 7,
+    paddingVertical: 9,
+    paddingHorizontal: ui.padCard,
+  },
+  rentalRowMain: {
+    width: '100%',
+  },
+  rentalRowTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  rentalRowTitle: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 15,
+    fontWeight: '700',
+    color: ui.textPrimary,
+  },
+  rentalRowMeta: {
+    marginTop: 3,
+    fontSize: 12,
+    color: ui.textSecondary,
+  },
+  rentalStatusRow: {
+    marginTop: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  rentalStatusChip: {
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 1,
+    backgroundColor: '#0B1F3A',
+  },
+  rentalStatusChipText: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.05,
+    color: '#FFFFFF',
+  },
+  rentalRowActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  rentalIconBtn: {
+    position: 'relative',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F3F7FD',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D6E0F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rentalIconBtnPressed: {
+    opacity: 0.86,
+  },
+  rentalIconBadge: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#D7263D',
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+  },
+  rentalIconBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#FFFFFF',
   },
   pastRentalCard: {
     opacity: 0.92,
