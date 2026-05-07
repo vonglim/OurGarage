@@ -6,10 +6,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   Animated,
+  ActivityIndicator,
   Modal,
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   useWindowDimensions,
@@ -21,11 +23,14 @@ import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useAuthUserId } from '@/lib/authUser';
 import { formatUsd } from '@/lib/money';
+import { insertRentalAgreementSnapshot } from '@/lib/rentalAgreement';
 import {
   RENTAL_EVIDENCE_BUCKET_MISSING_MESSAGE,
   uploadRentalEvidencePhoto,
 } from '@/lib/rentalEvidenceUpload';
+import { isPhotoUploadWindowOpen } from '@/lib/rentalPhotoWindow';
 import {
+  deleteVerificationPhotoById,
   deriveDualConfirmation,
   ensureVerificationRows,
   fetchVerificationPhotos,
@@ -39,7 +44,6 @@ import {
   type VerificationPhase,
 } from '@/lib/rentalVerification';
 import {
-  debugRentalNoteInsertEligibility,
   fetchRentalNotes,
   insertRentalNote,
   logRentalNotesTableHealthInDev,
@@ -48,7 +52,6 @@ import {
   type RentalNoteRow,
 } from '@/lib/rentalNotes';
 import { getSupabase } from '@/lib/supabase';
-import { getSupabaseProjectUrl } from '@/lib/supabase';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
 import { useMessageUnreadStore } from '@/store/messageUnreadStore';
 import { primarySolidPressed, shadowCard, shadowKey, ui } from '@/constants/appUi';
@@ -143,7 +146,8 @@ type ChecklistMaps = { owner: Record<string, boolean>; renter: Record<string, bo
 type ChecklistItemDef = { id: string; label: string };
 type PhotoDisplay = {
   id: string;
-  uri: string;
+  path?: string;
+  signedUrl?: string;
   role?: PartyRole;
   phase?: VerificationPhase;
   userId?: string;
@@ -178,6 +182,17 @@ function fillDefaults(
 function splitForTwoColumns<T>(items: readonly T[]): [T[], T[]] {
   const mid = Math.ceil(items.length / 2);
   return [items.slice(0, mid), items.slice(mid)];
+}
+
+function toBulletMultiline(text: string): string {
+  if (text.trim().length === 0) return '';
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const normalized = lines.map((line, idx) => {
+    const trimmed = line.replace(/^\s*[•\-]\s*/, '').trimStart();
+    if (trimmed.length === 0) return idx === 0 ? '• ' : '• ';
+    return `• ${trimmed}`;
+  });
+  return normalized.join('\n');
 }
 
 const LAYOUT_TABLET_MIN = 600;
@@ -274,11 +289,19 @@ function VerificationPhotosSubsection({
   uploading,
   onAddPress,
   onPhotoPress,
+  onDeletePhoto,
+  canDeletePhoto,
+  addDisabled,
+  addDisabledReason,
 }: {
-  photos: { id: string; uri: string; role?: PartyRole; createdAt?: string }[];
+  photos: { id: string; signedUrl?: string; role?: PartyRole; phase?: VerificationPhase; createdAt?: string }[];
   uploading: boolean;
   onAddPress: () => void;
   onPhotoPress: (index: number) => void;
+  onDeletePhoto: (photoId: string) => void;
+  canDeletePhoto: (photo: { id: string; role?: PartyRole; phase?: VerificationPhase }) => boolean;
+  addDisabled?: boolean;
+  addDisabledReason?: string | null;
 }) {
   const slots = [0, 1, 2] as const;
   const extra = Math.max(0, photos.length - 3);
@@ -290,9 +313,20 @@ function VerificationPhotosSubsection({
         {slots.map((i) => {
           const p = photos[i];
           return p ? (
-            <Pressable key={p.id} pressOpacityFeedback={false} onPress={() => onPhotoPress(i)}>
-              <Image source={{ uri: p.uri }} style={styles.photoThumb} contentFit="cover" />
-            </Pressable>
+            <View key={p.id} style={styles.photoThumbWrap}>
+              <Pressable pressOpacityFeedback={false} onPress={() => onPhotoPress(i)}>
+                <Image source={{ uri: p.signedUrl }} style={styles.photoThumb} contentFit="cover" />
+              </Pressable>
+              {canDeletePhoto(p) ? (
+                <Pressable
+                  pressOpacityFeedback={false}
+                  style={({ pressed }) => [styles.photoDeleteBtn, pressed && { opacity: 0.86 }]}
+                  onPress={() => onDeletePhoto(p.id)}
+                >
+                  <Text style={styles.photoDeleteBtnText}>✕</Text>
+                </Pressable>
+              ) : null}
+            </View>
           ) : (
             <View key={`ph-${i}`} style={styles.photoTilePlaceholder}>
               <Text style={styles.photoTilePlaceholderGlyph}>◇</Text>
@@ -301,11 +335,11 @@ function VerificationPhotosSubsection({
         })}
         <Pressable
           pressOpacityFeedback={false}
-          disabled={uploading}
+          disabled={uploading || Boolean(addDisabled)}
           style={({ pressed }) => [
             styles.photoTileAdd,
             (pressed || uploading) && { opacity: 0.85 },
-            uploading && { opacity: 0.6 },
+            (uploading || addDisabled) && { opacity: 0.6 },
           ]}
           onPress={onAddPress}
         >
@@ -316,6 +350,7 @@ function VerificationPhotosSubsection({
       {extra > 0 ? (
         <Text style={styles.photoExtraCount}>+{extra} more in this handoff</Text>
       ) : null}
+      {addDisabledReason ? <Text style={styles.photoWindowHelper}>{addDisabledReason}</Text> : null}
     </View>
   );
 }
@@ -370,12 +405,13 @@ function AddNoteInput({
         <TextInput
           style={[styles.noteInputInline, disabled && styles.noteInputDisabled]}
           value={value}
-          onChangeText={onChangeText}
+          onChangeText={(text) => onChangeText(toBulletMultiline(text))}
           placeholder={placeholder}
           placeholderTextColor={ui.textMuted}
-          multiline={false}
+          multiline
           editable={!disabled}
-          returnKeyType="done"
+          textAlignVertical="top"
+          returnKeyType="default"
         />
         <Pressable
           pressOpacityFeedback={false}
@@ -429,8 +465,12 @@ export default function RentalScreen() {
   const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
   const [photoViewerPhase, setPhotoViewerPhase] = useState<VerificationPhase>('pickup');
   const [photoViewerIndex, setPhotoViewerIndex] = useState(0);
+  const [viewerImageLoading, setViewerImageLoading] = useState(false);
+  const [viewerImageError, setViewerImageError] = useState<string | null>(null);
+  const [viewerImageRetryKey, setViewerImageRetryKey] = useState(0);
   const [agreementModalVisible, setAgreementModalVisible] = useState(false);
   const [signatureName, setSignatureName] = useState('');
+  const [agreementConsent, setAgreementConsent] = useState(false);
   const [rentalNotes, setRentalNotes] = useState<RentalNoteRow[]>([]);
   const [ownerNoteDraft, setOwnerNoteDraft] = useState('');
   const [renterNoteDraft, setRenterNoteDraft] = useState('');
@@ -561,7 +601,8 @@ export default function RentalScreen() {
           if (uri) {
             out.push({
               id: row.id,
-              uri,
+              path: row.storage_path,
+              signedUrl: uri,
               role,
               phase,
               userId: row.uploaded_by,
@@ -685,15 +726,6 @@ export default function RentalScreen() {
   }, [supabase]);
 
   useEffect(() => {
-    if (!__DEV__) return;
-    const expected = 'https://sbipcsxlldfjbfdykict.supabase.co';
-    const active = getSupabaseProjectUrl();
-    if (active !== expected) {
-      console.warn('[rentalNotes] active Supabase project mismatch', { expected, active });
-    }
-  }, []);
-
-  useEffect(() => {
     const status = String(rental?.status ?? 'pending').trim().toLowerCase();
     const isAfterHandoff = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
       status
@@ -777,19 +809,7 @@ export default function RentalScreen() {
                 detail: 'saved to cloud; preview link failed — try leaving and reopening this rental',
               });
             }
-            const entry: PhotoDisplay = {
-              id: res.dbRowId,
-              uri: displayUri,
-              role: normalizeRole(role),
-              phase: normalizePhase(phase),
-              userId: me,
-              createdAt: new Date().toISOString(),
-            };
-            if (phase === 'pickup') {
-              setPickupEvidenceDisplay((prev) => [...prev, entry]);
-            } else {
-              setReturnEvidenceDisplay((prev) => [...prev, entry]);
-            }
+            void displayUri;
           }
           if (failures.length > 0) {
             const allBucketMissing = failures.every((f) => f.code === 'bucket_missing');
@@ -822,6 +842,28 @@ export default function RentalScreen() {
       })();
     }, [me, refreshVerificationState, rental, supabase])
   );
+
+  const viewerPhotos = photoViewerPhase === 'pickup' ? pickupEvidenceDisplay : returnEvidenceDisplay;
+  const viewerPhoto = viewerPhotos[photoViewerIndex] ?? null;
+  const viewerSourceUri = viewerPhoto?.signedUrl ?? null;
+  useEffect(() => {
+    if (!photoViewerVisible) return;
+    setViewerImageError(null);
+    setViewerImageLoading(Boolean(viewerSourceUri));
+  }, [photoViewerVisible, photoViewerIndex, viewerSourceUri]);
+  useEffect(() => {
+    if (!__DEV__ || !photoViewerVisible || !viewerPhoto) return;
+    void (async () => {
+      const debugSigned = viewerPhoto.path ? await signedUrlForEvidencePath(supabase, viewerPhoto.path) : null;
+      console.log('[verification viewer signed-url check]', {
+        selectedPhotoId: viewerPhoto.id,
+        storagePath: viewerPhoto.path ?? null,
+        thumbnailUri: viewerPhoto.signedUrl ?? null,
+        fullscreenUri: viewerSourceUri,
+        signedUrlGenerationResult: debugSigned,
+      });
+    })();
+  }, [photoViewerVisible, viewerPhoto, viewerSourceUri, supabase]);
 
   const requestTimestamp = useMemo(() => {
     const n = Number(request?.timestamp);
@@ -971,30 +1013,77 @@ export default function RentalScreen() {
     handoffApprovalStarted &&
     !handoffApprovedByRenter &&
     bilateralPickupReady;
+  const pickupWindow = isPhotoUploadWindowOpen('pickup', rental.pickup_datetime, rental.return_datetime);
+  const returnWindow = isPhotoUploadWindowOpen('return', rental.pickup_datetime, rental.return_datetime);
+  const canUploadPickup = viewerRole === 'owner' && !handoffCompleted && pickupWindow.allowed;
+  const canUploadReturn = viewerRole === 'renter' && returnWorkflowEnabled && !returnCompleted && returnWindow.allowed;
+  const replacementValue = Number(rental.replacement_value ?? Math.max(finalPrice * 3, 150));
+  const preauthAmount = Number(rental.preauth_amount ?? Math.round(replacementValue * 0.5 * 100) / 100);
+  const lateFee = Number(rental.daily_late_fee ?? Math.max(10, Math.round(finalPrice * 0.1)));
+  const graceHours = Number(rental.grace_period_hours ?? 2);
+  const agreementVersion = Math.max(1, Number(rental.agreement_version ?? 1));
+  const agreementText = [
+    '1. Renter is responsible for returning the item in the same condition received, excluding normal wear.',
+    '2. Late fees apply after the grace period shown in this agreement.',
+    '3. Damage, loss, or non-return may result in additional charges up to replacement value.',
+    '4. Verification photos and rental notes are treated as shared evidence for dispute review.',
+    '5. Failure to return the item may trigger additional marketplace recovery action.',
+    '6. Both parties agree evidence and status transitions are tied to this rental lifecycle.',
+  ].join('\n');
 
   const openPhotoViewer = (phase: VerificationPhase, index: number) => {
+    const selected = (phase === 'pickup' ? pickupEvidenceDisplay : returnEvidenceDisplay)[index] ?? null;
+    if (__DEV__) {
+      console.log('[verification viewer open]', {
+        selectedPhotoId: selected?.id ?? null,
+        storagePath: selected?.path ?? null,
+        thumbnailUri: selected?.signedUrl ?? null,
+        fullscreenUri: selected?.signedUrl ?? null,
+      });
+    }
+    setViewerImageError(null);
+    setViewerImageRetryKey(0);
     setPhotoViewerPhase(phase);
     setPhotoViewerIndex(index);
     setPhotoViewerVisible(true);
   };
-  const viewerPhotos = photoViewerPhase === 'pickup' ? pickupEvidenceDisplay : returnEvidenceDisplay;
-  const viewerPhoto = viewerPhotos[photoViewerIndex] ?? null;
+  const canDeletePhoto = (photo: { role?: PartyRole; phase?: VerificationPhase }): boolean => {
+    const role = normalizeRole(photo.role);
+    const phase = normalizePhase(photo.phase);
+    if (!role || !phase) return false;
+    if (phase === 'pickup') return viewerRole === 'owner' && role === 'owner' && !handoffCompleted;
+    return viewerRole === 'renter' && role === 'renter' && !returnCompleted;
+  };
+  const onDeletePhoto = async (photo: PhotoDisplay) => {
+    if (!canDeletePhoto(photo)) return;
+    Alert.alert('Delete photo', 'This evidence photo will be removed permanently.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          const dbResult = await deleteVerificationPhotoById(supabase, photo.id);
+          if (!dbResult.ok) {
+            if (__DEV__) console.warn('[verification mutation] photo delete failed', { photoId: photo.id, error: dbResult.error });
+            Alert.alert('Could not delete photo', dbResult.error ?? 'Please try again.');
+            return;
+          }
+          if (photo.path) {
+            const { error } = await supabase.storage.from('rental-evidence').remove([photo.path]);
+            if (__DEV__ && error) {
+              console.warn('[verification mutation] photo storage delete failed', { photoId: photo.id, error });
+            }
+          }
+          if (__DEV__) console.log('[verification mutation] photo delete ok', { photoId: photo.id });
+          await refreshVerificationState();
+        },
+      },
+    ]);
+  };
 
   const addNote = async (role: RentalNoteRole, note: string) => {
     if (!me || !rental?.id) return;
     const phase = role === 'owner' ? 'pre_handoff' : 'active_rental';
-    if (__DEV__) {
-      const debugEval = await debugRentalNoteInsertEligibility(supabase, {
-        rentalId: rental.id,
-        authorId: me,
-        authorRole: role,
-        phase,
-      });
-      console.log('[rentalNotes] insert eligibility evaluation', {
-        input: { rentalId: rental.id, authorId: me, authorRole: role, phase },
-        debugEval,
-      });
-    }
     const { error } = await insertRentalNote(supabase, {
       rentalId: rental.id,
       authorId: me,
@@ -1138,13 +1227,14 @@ export default function RentalScreen() {
 
   const onBeginHandoffApproval = async () => {
     if (!me || viewerRole !== 'owner' || !canBeginHandoff) return;
-    const replacementValue = typeof rental.replacement_value === 'number' ? rental.replacement_value : Math.max(finalPrice * 3, 150);
-    const preauthAmount = Math.round(replacementValue * 0.5 * 100) / 100;
+    const holdReplacementValue =
+      typeof rental.replacement_value === 'number' ? rental.replacement_value : Math.max(finalPrice * 3, 150);
+    const holdPreauthAmount = Math.round(holdReplacementValue * 0.5 * 100) / 100;
     await persistReadinessFlags({
       handoff_approved_by_owner: true,
       handoff_approval_started_at: new Date().toISOString(),
-      replacement_value: replacementValue,
-      preauth_amount: preauthAmount,
+      replacement_value: holdReplacementValue,
+      preauth_amount: holdPreauthAmount,
       preauth_status: 'pending',
       daily_late_fee: rental.daily_late_fee ?? Math.max(10, Math.round(finalPrice * 0.1)),
       grace_period_hours: rental.grace_period_hours ?? 2,
@@ -1153,18 +1243,42 @@ export default function RentalScreen() {
 
   const onRenterSignAndAuthorize = async () => {
     const signed = signatureName.trim();
-    if (!signed || !me || viewerRole !== 'renter' || !canRenterFinalizeHandoff) return;
+    if (!signed || !agreementConsent || !me || viewerRole !== 'renter' || !canRenterFinalizeHandoff) return;
+    const signedAt = new Date().toISOString();
+    const normalizedSignedName = signed.toUpperCase();
+    const snapshot = await insertRentalAgreementSnapshot(supabase, {
+      rentalId: rental.id,
+      agreementVersion,
+      agreementText,
+      rentalSummaryJson: {
+        rental_price: finalPrice,
+        pickup_datetime: rental.pickup_datetime ?? null,
+        return_datetime: rental.return_datetime ?? null,
+        meetup_location: rental.meetup_location ?? null,
+        replacement_value: replacementValue,
+        preauthorization_amount: preauthAmount,
+        daily_late_fee: lateFee,
+        grace_period_hours: graceHours,
+      },
+      signedName: normalizedSignedName,
+      signedAt,
+    });
+    if (!snapshot.ok) {
+      Alert.alert('Could not finalize agreement', snapshot.error ?? 'Please try again.');
+      return;
+    }
     await persistReadinessFlags({
       handoff_approved_by_renter: true,
-      signed_name: signed,
-      signed_at: new Date().toISOString(),
-      agreement_version: Math.max(1, Number(rental.agreement_version ?? 1)),
+      signed_name: normalizedSignedName,
+      signed_at: signedAt,
+      agreement_version: agreementVersion,
       preauth_status: 'authorized',
-      preauth_authorized_at: new Date().toISOString(),
+      preauth_authorized_at: signedAt,
       status: 'handed_off',
     });
     setAgreementModalVisible(false);
     setSignatureName('');
+    setAgreementConsent(false);
     setLifecyclePhase('active');
   };
 
@@ -1239,6 +1353,14 @@ export default function RentalScreen() {
 
   const openEvidenceCamera = (phase: VerificationPhase) => {
     if (!me) return;
+    if (phase === 'pickup' && !canUploadPickup) {
+      Alert.alert('Pickup photos locked', pickupWindow.helperText ?? 'Pickup photo upload is not available yet.');
+      return;
+    }
+    if (phase === 'return' && !canUploadReturn) {
+      Alert.alert('Return photos locked', returnWindow.helperText ?? 'Return photo upload is not available yet.');
+      return;
+    }
     if (Platform.OS === 'web') {
       Alert.alert(
         'Camera',
@@ -1483,6 +1605,13 @@ export default function RentalScreen() {
                       uploading={uploadingEvidence}
                       onAddPress={() => openEvidenceCamera('pickup')}
                       onPhotoPress={(idx) => openPhotoViewer('pickup', idx)}
+                      onDeletePhoto={(photoId) => {
+                        const photo = pickupEvidenceDisplay.find((p) => p.id === photoId);
+                        if (photo) void onDeletePhoto(photo);
+                      }}
+                      canDeletePhoto={(photo) => canDeletePhoto(photo)}
+                      addDisabled={!canUploadPickup}
+                      addDisabledReason={!canUploadPickup ? pickupWindow.helperText : null}
                     />
                     <View style={styles.verificationSubheadRow}>
                       <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Your responsibilities</Text>
@@ -1503,7 +1632,7 @@ export default function RentalScreen() {
                           })();
                         }}
                       >
-                        <Text style={[styles.markAllText, handoffCompleted && styles.markAllTextDisabled]}>Mark All Complete</Text>
+                        <Text style={[styles.markAllText, handoffCompleted && styles.markAllTextDisabled]}>Check All</Text>
                       </Pressable>
                     </View>
                     {checklistTwoColumns ? (
@@ -1624,6 +1753,13 @@ export default function RentalScreen() {
                     uploading={uploadingEvidence}
                     onAddPress={() => openEvidenceCamera('return')}
                     onPhotoPress={(idx) => openPhotoViewer('return', idx)}
+                    onDeletePhoto={(photoId) => {
+                      const photo = returnEvidenceDisplay.find((p) => p.id === photoId);
+                      if (photo) void onDeletePhoto(photo);
+                    }}
+                    canDeletePhoto={(photo) => canDeletePhoto(photo)}
+                    addDisabled={!canUploadReturn}
+                    addDisabledReason={!canUploadReturn ? returnWindow.helperText : null}
                   />
                   <View style={styles.verificationSubheadRow}>
                     <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Your responsibilities</Text>
@@ -1645,7 +1781,7 @@ export default function RentalScreen() {
                       }}
                     >
                       <Text style={[styles.markAllText, (!returnWorkflowEnabled || returnCompleted) && styles.markAllTextDisabled]}>
-                        Mark All Complete
+                        Check All
                       </Text>
                     </Pressable>
                   </View>
@@ -1759,7 +1895,10 @@ export default function RentalScreen() {
                       pressOpacityFeedback={false}
                       haptic
                       disabled={!canRenterFinalizeHandoff}
-                      onPress={() => setAgreementModalVisible(true)}
+                      onPress={() => {
+                        setAgreementConsent(false);
+                        setAgreementModalVisible(true);
+                      }}
                       style={({ pressed }) => [
                         styles.startButton,
                         !canRenterFinalizeHandoff && styles.startButtonDisabled,
@@ -1857,7 +1996,68 @@ export default function RentalScreen() {
               >
                 <Text style={[styles.viewerNavText, photoViewerIndex <= 0 && styles.viewerNavTextDisabled]}>‹</Text>
               </Pressable>
-              {viewerPhoto ? <Image source={{ uri: viewerPhoto.uri }} style={styles.viewerImage} contentFit="contain" /> : null}
+              {viewerPhoto ? (
+                <ScrollView
+                  style={styles.viewerImageZoomWrap}
+                  contentContainerStyle={styles.viewerImageZoomContent}
+                  maximumZoomScale={3}
+                  minimumZoomScale={1}
+                  bouncesZoom
+                  centerContent
+                >
+                  {viewerSourceUri ? (
+                    <Image
+                      key={`${viewerPhoto.id}:${viewerImageRetryKey}`}
+                      source={{ uri: viewerSourceUri }}
+                      style={styles.viewerImage}
+                      contentFit="contain"
+                      onLoadStart={() => {
+                        setViewerImageLoading(true);
+                        setViewerImageError(null);
+                      }}
+                      onLoad={() => {
+                        setViewerImageLoading(false);
+                      }}
+                      onError={(event) => {
+                        setViewerImageLoading(false);
+                        setViewerImageError(event.error ?? 'Could not load image');
+                        if (__DEV__) {
+                          console.warn('[verification viewer image error]', {
+                            photoId: viewerPhoto.id,
+                            uri: viewerSourceUri,
+                            error: event.error ?? 'unknown',
+                          });
+                        }
+                      }}
+                    />
+                  ) : (
+                    <View style={styles.viewerFallbackBox}>
+                      <Text style={styles.viewerFallbackText}>Image unavailable for this photo.</Text>
+                    </View>
+                  )}
+                  {viewerImageLoading ? (
+                    <View style={styles.viewerLoadingOverlay}>
+                      <ActivityIndicator color="#FFFFFF" />
+                    </View>
+                  ) : null}
+                  {viewerImageError ? (
+                    <View style={styles.viewerErrorOverlay}>
+                      <Text style={styles.viewerErrorText}>{viewerImageError}</Text>
+                      <Pressable
+                        pressOpacityFeedback={false}
+                        style={({ pressed }) => [styles.viewerRetryBtn, pressed && { opacity: 0.85 }]}
+                        onPress={() => {
+                          setViewerImageError(null);
+                          setViewerImageLoading(true);
+                          setViewerImageRetryKey((k) => k + 1);
+                        }}
+                      >
+                        <Text style={styles.viewerRetryBtnText}>Retry</Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
+                </ScrollView>
+              ) : null}
               <Pressable
                 pressOpacityFeedback={false}
                 disabled={photoViewerIndex >= viewerPhotos.length - 1}
@@ -1872,7 +2072,9 @@ export default function RentalScreen() {
             </View>
             {viewerPhoto ? (
               <Text style={styles.viewerMetaText}>
-                {`${viewerPhoto.role === 'owner' ? 'Owner' : 'Renter'} · ${formatCompactDateTime(viewerPhoto.createdAt ?? null)}`}
+                {`${viewerPhoto.role === 'owner' ? 'Owner' : 'Renter'} · ${viewerPhoto.phase === 'return' ? 'Return' : 'Pickup'} · ${formatCompactDateTime(
+                  viewerPhoto.createdAt ?? null
+                )}`}
               </Text>
             ) : null}
           </View>
@@ -1881,38 +2083,108 @@ export default function RentalScreen() {
         <Modal visible={agreementModalVisible} transparent animationType="slide" onRequestClose={() => setAgreementModalVisible(false)}>
           <View style={styles.agreementModalBackdrop}>
             <View style={styles.agreementModalCard}>
-              <Text style={styles.cardSectionTitle}>Rental Agreement</Text>
-              <Text style={styles.verificationCollapsedMeta}>
-                {`Replacement value: ${formatUsd(Number(rental.replacement_value ?? Math.max(finalPrice * 3, 150)))}`}
-              </Text>
-              <Text style={styles.verificationCollapsedMeta}>
-                {`Pre-authorization hold: ${formatUsd(Number(rental.preauth_amount ?? Math.round(Math.max(finalPrice * 3, 150) * 0.5 * 100) / 100))}`}
-              </Text>
-              <Text style={styles.verificationCollapsedMeta}>
-                {`Daily late fee: ${formatUsd(Number(rental.daily_late_fee ?? Math.max(10, Math.round(finalPrice * 0.1))))}`}
-              </Text>
-              <Text style={styles.verificationCollapsedMeta}>
-                {`Grace period: ${Number(rental.grace_period_hours ?? 2)}h`}
-              </Text>
-              <TextInput
-                style={styles.noteInputInline}
-                value={signatureName}
-                onChangeText={setSignatureName}
-                placeholder="Type your full name to sign"
-                placeholderTextColor={ui.textMuted}
-              />
+              <ScrollView style={styles.agreementScroll} showsVerticalScrollIndicator={false}>
+                <Text style={styles.cardSectionTitle}>Rental Agreement</Text>
+                <Text style={styles.agreementVersionMeta}>{`Version ${agreementVersion}`}</Text>
+
+                <View style={styles.agreementSectionCard}>
+                  <Text style={styles.agreementSectionTitle}>Rental Summary</Text>
+                  <View style={styles.agreementSummaryRow}>
+                    <Text style={styles.agreementSummaryLabel}>Rental Price</Text>
+                    <Text style={styles.agreementSummaryValue}>{formatUsd(finalPrice)}</Text>
+                  </View>
+                  <View style={styles.agreementSummaryRow}>
+                    <Text style={styles.agreementSummaryLabel}>Pickup Date/Time</Text>
+                    <Text style={styles.agreementSummaryValue}>{formatDateTime(rental.pickup_datetime)}</Text>
+                  </View>
+                  <View style={styles.agreementSummaryRow}>
+                    <Text style={styles.agreementSummaryLabel}>Return Date/Time</Text>
+                    <Text style={styles.agreementSummaryValue}>{formatDateTime(rental.return_datetime)}</Text>
+                  </View>
+                  <View style={styles.agreementSummaryRow}>
+                    <Text style={styles.agreementSummaryLabel}>Meetup Location</Text>
+                    <Text style={styles.agreementSummaryValue}>{rental.meetup_location || 'Not set'}</Text>
+                  </View>
+                  <View style={styles.agreementSummaryRow}>
+                    <Text style={styles.agreementSummaryLabel}>Replacement Value</Text>
+                    <Text style={styles.agreementSummaryValue}>{formatUsd(replacementValue)}</Text>
+                  </View>
+                  <View style={styles.agreementSummaryRow}>
+                    <Text style={styles.agreementSummaryLabel}>Preauthorization Amount</Text>
+                    <Text style={styles.agreementSummaryValue}>{formatUsd(preauthAmount)}</Text>
+                  </View>
+                  <View style={styles.agreementSummaryRow}>
+                    <Text style={styles.agreementSummaryLabel}>Daily Late Fee</Text>
+                    <Text style={styles.agreementSummaryValue}>{formatUsd(lateFee)}</Text>
+                  </View>
+                  <View style={styles.agreementSummaryRow}>
+                    <Text style={styles.agreementSummaryLabel}>Grace Period</Text>
+                    <Text style={styles.agreementSummaryValue}>{`${graceHours} hours`}</Text>
+                  </View>
+                </View>
+
+                <View style={styles.agreementSectionCard}>
+                  <Text style={styles.agreementSectionTitle}>Renter Responsibilities</Text>
+                  {agreementText.split('\n').map((line) => (
+                    <Text key={line} style={styles.agreementParagraph}>
+                      {line}
+                    </Text>
+                  ))}
+                </View>
+
+                <View style={styles.agreementSectionCard}>
+                  <Text style={styles.agreementSectionTitle}>Authorization Hold</Text>
+                  <Text style={styles.agreementHoldAmount}>{`Preauthorization Hold: ${formatUsd(preauthAmount)}`}</Text>
+                  <Text style={styles.agreementParagraph}>
+                    This is a temporary hold only and not an immediate charge.
+                  </Text>
+                  <Text style={styles.agreementParagraph}>
+                    No funds are charged unless claim conditions are met.
+                  </Text>
+                </View>
+
+                <View style={styles.agreementSectionCard}>
+                  <Text style={styles.agreementSectionTitle}>Electronic Signature Consent</Text>
+                  <Text style={styles.agreementParagraph}>
+                    I acknowledge this electronic signature is legally binding and I agree to the rental terms above.
+                  </Text>
+                  <View style={styles.consentRow}>
+                    <Switch value={agreementConsent} onValueChange={setAgreementConsent} />
+                    <Text style={styles.consentLabel}>I agree to the rental terms</Text>
+                  </View>
+                </View>
+
+                <View style={styles.agreementSectionCard}>
+                  <Text style={styles.agreementSectionTitle}>Signature Input</Text>
+                  <TextInput
+                    style={styles.agreementSignatureInput}
+                    value={signatureName}
+                    onChangeText={setSignatureName}
+                    placeholder="Type your full legal name"
+                    placeholderTextColor={ui.textMuted}
+                    autoCapitalize="words"
+                  />
+                </View>
+              </ScrollView>
+
               <View style={styles.agreementModalActions}>
-                <Pressable pressOpacityFeedback={false} onPress={() => setAgreementModalVisible(false)}>
+                <Pressable
+                  pressOpacityFeedback={false}
+                  onPress={() => {
+                    setAgreementModalVisible(false);
+                    setAgreementConsent(false);
+                  }}
+                >
                   <Text style={styles.reportTextBtn}>Cancel</Text>
                 </Pressable>
                 <Pressable
                   pressOpacityFeedback={false}
                   onPress={() => void onRenterSignAndAuthorize()}
-                  disabled={signatureName.trim().length === 0}
+                  disabled={signatureName.trim().length === 0 || !agreementConsent}
                   style={({ pressed }) => [
                     styles.startButton,
-                    signatureName.trim().length === 0 && styles.startButtonDisabled,
-                    pressed && signatureName.trim().length > 0 && styles.startButtonPressed,
+                    (signatureName.trim().length === 0 || !agreementConsent) && styles.startButtonDisabled,
+                    pressed && signatureName.trim().length > 0 && agreementConsent && styles.startButtonPressed,
                   ]}
                 >
                   <Text style={styles.startButtonText}>Sign & Authorize</Text>
@@ -2302,6 +2574,26 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(26,43,74,0.14)',
     backgroundColor: '#1F2937',
   },
+  photoThumbWrap: {
+    position: 'relative',
+  },
+  photoDeleteBtn: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: 'rgba(12, 19, 33, 0.9)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoDeleteBtnText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 12,
+  },
   photoTilePlaceholder: {
     width: 60,
     height: 60,
@@ -2346,6 +2638,11 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: ui.textMuted,
     marginTop: 4,
+  },
+  photoWindowHelper: {
+    marginTop: 4,
+    fontSize: 10,
+    color: ui.textMuted,
   },
   sharedNotesInput: {
     minHeight: 96,
@@ -2414,12 +2711,12 @@ const styles = StyleSheet.create({
   },
   noteInputRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 8,
   },
   noteInputInline: {
     flex: 1,
-    minHeight: 38,
+    minHeight: 64,
     paddingHorizontal: 10,
     paddingVertical: 7,
     borderRadius: 8,
@@ -2486,10 +2783,69 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   viewerImage: {
-    flex: 1,
+    width: '100%',
     height: 380,
     borderRadius: 8,
     backgroundColor: '#000000',
+  },
+  viewerImageZoomWrap: {
+    flex: 1,
+    height: 380,
+  },
+  viewerImageZoomContent: {
+    flexGrow: 1,
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewerFallbackBox: {
+    width: '100%',
+    height: 380,
+    borderRadius: 8,
+    backgroundColor: '#111827',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  viewerFallbackText: {
+    color: '#D1D5DB',
+    fontSize: 12,
+    textAlign: 'center',
+  },
+  viewerLoadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.28)',
+    borderRadius: 8,
+  },
+  viewerErrorOverlay: {
+    position: 'absolute',
+    left: 8,
+    right: 8,
+    bottom: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: 'rgba(17,24,39,0.85)',
+    alignItems: 'center',
+    gap: 6,
+  },
+  viewerErrorText: {
+    color: '#F3F4F6',
+    fontSize: 11,
+    textAlign: 'center',
+  },
+  viewerRetryBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 7,
+    backgroundColor: '#FFFFFF',
+  },
+  viewerRetryBtnText: {
+    color: '#111827',
+    fontSize: 11,
+    fontWeight: '700',
   },
   viewerNavText: {
     color: '#FFFFFF',
@@ -2518,6 +2874,82 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 14,
     gap: 8,
+    maxHeight: '86%',
+  },
+  agreementScroll: {
+    maxHeight: 520,
+  },
+  agreementVersionMeta: {
+    fontSize: 11,
+    color: ui.textMuted,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  agreementSectionCard: {
+    borderWidth: 1,
+    borderColor: ui.border,
+    backgroundColor: '#F8FAFD',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 6,
+    marginBottom: 8,
+  },
+  agreementSectionTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: ui.textPrimary,
+  },
+  agreementSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  agreementSummaryLabel: {
+    flex: 1,
+    fontSize: 11,
+    color: ui.textMuted,
+    fontWeight: '600',
+  },
+  agreementSummaryValue: {
+    flex: 1,
+    fontSize: 11,
+    color: ui.textPrimary,
+    textAlign: 'right',
+    fontWeight: '700',
+  },
+  agreementParagraph: {
+    fontSize: 11,
+    color: ui.textSecondary,
+    lineHeight: 16,
+  },
+  agreementHoldAmount: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: ui.primary,
+  },
+  consentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  consentLabel: {
+    flex: 1,
+    fontSize: 11,
+    color: ui.textPrimary,
+    fontWeight: '600',
+  },
+  agreementSignatureInput: {
+    minHeight: 42,
+    borderWidth: 1,
+    borderColor: ui.border,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 13,
+    color: ui.textPrimary,
   },
   agreementModalActions: {
     marginTop: 6,

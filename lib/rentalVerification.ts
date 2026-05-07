@@ -123,10 +123,18 @@ export async function signedUrlForEvidencePath(
     console.warn('[rentalVerification] signedUrl failed', storagePath, error?.message ?? error);
     return null;
   }
-  if (typeof __DEV__ !== 'undefined' && __DEV__) {
-    console.log('[rentalVerification] signedUrl ok', storagePath);
-  }
   return data.signedUrl;
+}
+
+export async function deleteVerificationPhotoById(
+  client: SupabaseClient,
+  photoId: string
+): Promise<{ ok: boolean; error?: string }> {
+  const { error } = await client.from('rental_verification_photos').delete().eq('id', photoId);
+  if (error) {
+    return { ok: false, error: error.message };
+  }
+  return { ok: true };
 }
 
 export async function persistChecklistState(
