@@ -16,6 +16,13 @@ import {
 
 import { Pressable } from '@/components/Pressable';
 import { subtleControlPressed, ui } from '@/constants/appUi';
+import {
+  calendarDaysEqualLocal,
+  isReturnDefaultNextCalendarDayAfterPickup,
+  mergeCalendarDayKeepingClock,
+  SCHEDULING_QUARTER_HOUR_INTERVAL,
+  snapDateTimeToQuarterHour,
+} from '@/lib/dateTimeScheduling';
 
 export type RentalMeetupDetails = {
   id: string;
@@ -86,7 +93,7 @@ function mergeDateKeepTime(base: Date, picked: Date): Date {
 function mergeTimeKeepDate(base: Date, picked: Date): Date {
   const out = new Date(base);
   out.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
-  return out;
+  return snapDateTimeToQuarterHour(out);
 }
 
 /** e.g. "Tue, May 5" for pressable date field */
@@ -103,19 +110,17 @@ function formatPickedTime(d: Date): string {
 function initialDraftDate(iso: string | null): Date {
   if (iso) {
     const t = Date.parse(iso);
-    if (Number.isFinite(t)) return new Date(t);
+    if (Number.isFinite(t)) return snapDateTimeToQuarterHour(new Date(t));
   }
-  return new Date();
+  return snapDateTimeToQuarterHour(new Date());
 }
 
 function initialReturnDraft(iso: string | null, pickup: Date): Date {
   if (iso) {
     const t = Date.parse(iso);
-    if (Number.isFinite(t)) return new Date(t);
+    if (Number.isFinite(t)) return snapDateTimeToQuarterHour(new Date(t));
   }
-  const d = new Date(pickup);
-  d.setDate(d.getDate() + 1);
-  return d;
+  return mergeCalendarDayKeepingClock(pickup, 1, pickup);
 }
 
 /** Android uses system dialogs; iOS (and web) use embedded spinners + Done. */
@@ -139,10 +144,13 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
   ref
 ) {
   const [proposeOpen, setProposeOpen] = useState(false);
-  const [meetupDraft, setMeetupDraft] = useState<Date>(() => initialDraftDate(rental.meetup_time));
-  const [returnDraft, setReturnDraft] = useState<Date>(() =>
-    initialReturnDraft(rental.return_time ?? null, initialDraftDate(rental.meetup_time))
+  const [meetupDraft, setMeetupDraft] = useState<Date>(() =>
+    snapDateTimeToQuarterHour(initialDraftDate(rental.meetup_time))
   );
+  const [returnDraft, setReturnDraft] = useState<Date>(() => {
+    const pickup = snapDateTimeToQuarterHour(initialDraftDate(rental.meetup_time));
+    return snapDateTimeToQuarterHour(initialReturnDraft(rental.return_time ?? null, pickup));
+  });
   const [meetupLocation, setMeetupLocation] = useState(
     (rental.meetup_location || rental.return_location || '').trim() || ''
   );
@@ -150,6 +158,8 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
   const [submitting, setSubmitting] = useState(false);
   const [activePicker, setActivePicker] = useState<PickerField | null>(null);
   const pickerTargetRef = useRef<PickerField | null>(null);
+  /** Auto-align return calendar to pickup + 1 day until user edits return date away from default. */
+  const pickupReturnDateLinkedRef = useRef(true);
 
   const isOwnerConfirmed =
     typeof rental.owner_confirmed === 'boolean' ? rental.owner_confirmed : rental.confirmed_by_owner;
@@ -180,9 +190,11 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
         showHeaderEditAction,
       });
     }
-    const pickup = initialDraftDate(rental.meetup_time);
+    const pickup = snapDateTimeToQuarterHour(initialDraftDate(rental.meetup_time));
+    const ret = snapDateTimeToQuarterHour(initialReturnDraft(rental.return_time ?? null, pickup));
+    pickupReturnDateLinkedRef.current = isReturnDefaultNextCalendarDayAfterPickup(pickup, ret);
     setMeetupDraft(pickup);
-    setReturnDraft(initialReturnDraft(rental.return_time ?? null, pickup));
+    setReturnDraft(ret);
     setMeetupLocation((rental?.meetup_location || rental?.return_location || '').trim() || '');
     pickerTargetRef.current = null;
     setActivePicker(null);
@@ -223,13 +235,41 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
     }
   };
 
+  const commitPickupDate = React.useCallback((selected: Date) => {
+    setMeetupDraft((prevPickup) => {
+      const nextPickup = snapDateTimeToQuarterHour(mergeDateKeepTime(prevPickup, selected));
+      setReturnDraft((prevRet) =>
+        pickupReturnDateLinkedRef.current ? mergeCalendarDayKeepingClock(nextPickup, 1, prevRet) : prevRet
+      );
+      return nextPickup;
+    });
+  }, []);
+
+  const commitReturnDate = React.useCallback((selected: Date) => {
+    setReturnDraft((prevRet) => {
+      const merged = snapDateTimeToQuarterHour(mergeDateKeepTime(prevRet, selected));
+      if (!calendarDaysEqualLocal(merged, prevRet)) {
+        pickupReturnDateLinkedRef.current = false;
+      }
+      return merged;
+    });
+  }, []);
+
+  const commitPickupTime = React.useCallback((selected: Date) => {
+    setMeetupDraft((prev) => mergeTimeKeepDate(prev, selected));
+  }, []);
+
+  const commitReturnTime = React.useCallback((selected: Date) => {
+    setReturnDraft((prev) => mergeTimeKeepDate(prev, selected));
+  }, []);
+
   const onAndroidDateChange = (_event: unknown, selected?: Date) => {
     const k = pickerTargetRef.current;
     setActivePicker(null);
     pickerTargetRef.current = null;
     if (!selected || !k) return;
-    if (k === 'pickupDate') setMeetupDraft((prev) => mergeDateKeepTime(prev, selected));
-    if (k === 'returnDate') setReturnDraft((prev) => mergeDateKeepTime(prev, selected));
+    if (k === 'pickupDate') commitPickupDate(selected);
+    if (k === 'returnDate') commitReturnDate(selected);
   };
 
   const onAndroidTimeChange = (_event: unknown, selected?: Date) => {
@@ -237,30 +277,34 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
     setActivePicker(null);
     pickerTargetRef.current = null;
     if (!selected || !k) return;
-    if (k === 'pickupTime') setMeetupDraft((prev) => mergeTimeKeepDate(prev, selected));
-    if (k === 'returnTime') setReturnDraft((prev) => mergeTimeKeepDate(prev, selected));
+    const snapped = snapDateTimeToQuarterHour(selected);
+    if (k === 'pickupTime') commitPickupTime(snapped);
+    if (k === 'returnTime') commitReturnTime(snapped);
   };
 
   const applyEmbeddedDateChange = (d: Date) => {
     const k = pickerTargetRef.current ?? activePicker;
-    if (k === 'pickupDate') setMeetupDraft((prev) => mergeDateKeepTime(prev, d));
-    if (k === 'returnDate') setReturnDraft((prev) => mergeDateKeepTime(prev, d));
+    if (k === 'pickupDate') commitPickupDate(d);
+    if (k === 'returnDate') commitReturnDate(d);
   };
 
   const applyEmbeddedTimeChange = (d: Date) => {
     const k = pickerTargetRef.current ?? activePicker;
-    if (k === 'pickupTime') setMeetupDraft((prev) => mergeTimeKeepDate(prev, d));
-    if (k === 'returnTime') setReturnDraft((prev) => mergeTimeKeepDate(prev, d));
+    const snapped = snapDateTimeToQuarterHour(d);
+    if (k === 'pickupTime') commitPickupTime(snapped);
+    if (k === 'returnTime') commitReturnTime(snapped);
   };
 
   const handleSubmit = async () => {
+    const meetupSnap = snapDateTimeToQuarterHour(meetupDraft);
+    const returnSnap = snapDateTimeToQuarterHour(returnDraft);
     if (__DEV__) {
       console.log('[proposal] submit attempt', {
         rentalId: rental.id,
         offerId: rental.offer_id,
         requestId: rental.request_id,
-        meetupIso: meetupDraft.toISOString(),
-        returnIso: returnDraft.toISOString(),
+        meetupIso: meetupSnap.toISOString(),
+        returnIso: returnSnap.toISOString(),
         meetupLocation: meetupLocation.trim(),
       });
     }
@@ -269,19 +313,19 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
       alert('Enter meetup location');
       return;
     }
-    if (Number.isNaN(meetupDraft.getTime()) || Number.isNaN(returnDraft.getTime())) {
+    if (Number.isNaN(meetupSnap.getTime()) || Number.isNaN(returnSnap.getTime())) {
       alert('Select valid pickup and return times');
       return;
     }
-    if (returnDraft.getTime() <= meetupDraft.getTime()) {
+    if (returnSnap.getTime() <= meetupSnap.getTime()) {
       alert('Return must be after pickup');
       return;
     }
     setSubmitting(true);
     try {
       const ok = await onProposeChange({
-        meetupTimeIso: meetupDraft.toISOString(),
-        returnTimeIso: returnDraft.toISOString(),
+        meetupTimeIso: meetupSnap.toISOString(),
+        returnTimeIso: returnSnap.toISOString(),
         meetupLocation: loc,
       });
       if (!ok) {
@@ -527,6 +571,7 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
                         mode={embeddedPickerIsDate ? 'date' : 'time'}
                         display="spinner"
                         themeVariant="light"
+                        {...(embeddedPickerIsDate ? {} : { minuteInterval: SCHEDULING_QUARTER_HOUR_INTERVAL })}
                         onChange={(_, d) => {
                           if (!d) return;
                           if (embeddedPickerIsDate) applyEmbeddedDateChange(d);
@@ -554,6 +599,7 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
                   mode="time"
                   display="default"
                   is24Hour={false}
+                  minuteInterval={SCHEDULING_QUARTER_HOUR_INTERVAL}
                   onChange={onAndroidTimeChange}
                 />
               ) : null}
@@ -566,6 +612,7 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
                   mode="time"
                   display="default"
                   is24Hour={false}
+                  minuteInterval={SCHEDULING_QUARTER_HOUR_INTERVAL}
                   onChange={onAndroidTimeChange}
                 />
               ) : null}

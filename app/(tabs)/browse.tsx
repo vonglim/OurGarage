@@ -1,4 +1,5 @@
 import { CardPressable } from '@/components/CardPressable';
+import { RootScreenHeader } from '@/components/AppHeaders';
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
 import { Pressable } from '@/components/Pressable';
@@ -104,7 +105,7 @@ export default function Browse() {
         const { data, error } = await supabase
           .from('listings')
           .select(
-            'id, title, description, daily_price, half_day_price, weekly_price, images, created_at'
+            'id, title, description, daily_price, weekly_price, images, replacement_value, daily_late_fee, max_late_fee_cap, created_at'
           )
           .order('created_at', { ascending: false });
   
@@ -118,8 +119,10 @@ export default function Browse() {
           const createdMs =
             createdRaw != null ? Date.parse(String(createdRaw)) : NaN;
           const daily = Number(item.daily_price);
-          const half = Number(item.half_day_price);
           const week = Number(item.weekly_price);
+          const replacementValue = Number(item.replacement_value);
+          const dailyLateFee = Number(item.daily_late_fee);
+          const maxLateFeeCap = Number(item.max_late_fee_cap);
           return {
             id: item.id,
             name: item.title,
@@ -130,8 +133,10 @@ export default function Browse() {
             ownerName: '',
             rating: 0,
             createdAt: Number.isFinite(createdMs) ? createdMs : 0,
-            ...(Number.isFinite(half) ? { halfDayPrice: half } : {}),
             ...(Number.isFinite(week) ? { weeklyPrice: week } : {}),
+            ...(Number.isFinite(replacementValue) ? { replacementValue } : {}),
+            ...(Number.isFinite(dailyLateFee) ? { dailyLateFee } : {}),
+            ...(Number.isFinite(maxLateFeeCap) ? { maxLateFeeCap } : {}),
             images: normalizeListingImages(item.images),
           };
         });
@@ -267,7 +272,7 @@ export default function Browse() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.screenTitle}>Browse</Text>
+          <RootScreenHeader title="Browse" />
 
           <View style={styles.segment}>
             <Pressable

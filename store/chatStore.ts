@@ -8,6 +8,9 @@ import { getProfileNameForUserId } from '@/lib/profileDisplayName';
 import { getPublicProfileForView } from '@/lib/publicProfiles';
 import { getRequestOwnerId, getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import {
+  OFFER_MEETUP_PROPOSAL_KIND,
+} from '@/lib/meetupProposalThreadEvent';
+import {
   fetchRequestChatMessagesFromSupabase,
   OFFER_USER_CHAT_MESSAGE_KIND,
 } from '@/lib/supabaseRequestChatMessages';
@@ -34,8 +37,7 @@ export type ChatMessage = {
   offerId: string;
   text: string;
   /**
-   * Mirrors `offer_messages.kind` from Supabase; only `user_chat` is shown in the DM thread
-   * (system rows like `initial` / `poster_counter` are omitted).
+   * Mirrors `offer_messages.kind`; shown kinds include user DM (`user_chat`) and meetup proposals.
    */
   kind?: string;
   /** From `offer_messages.offer_images` (Supabase). Sync sets `[]` when the column is missing or not an array. */
@@ -72,7 +74,7 @@ function offerMessageRowVisibleInThread(row: Record<string, unknown>): boolean {
   const imgs = parseOfferImageUrls(row);
   const hasContent = b !== '' || imgs.length > 0;
   if (!hasContent) return false;
-  if (k === OFFER_USER_CHAT_MESSAGE_KIND) return true;
+  if (k === OFFER_USER_CHAT_MESSAGE_KIND || k === OFFER_MEETUP_PROPOSAL_KIND) return true;
   return (
     k === 'initial' ||
     k === 'renter_update' ||
@@ -84,7 +86,7 @@ function offerMessageRowVisibleInThread(row: Record<string, unknown>): boolean {
 /** True for post-accept user DMs; also true when `kind` is missing (legacy storage before the field). */
 export function isUserChatMessage(m: ChatMessage): boolean {
   const k = m.kind ?? '';
-  if (k === OFFER_USER_CHAT_MESSAGE_KIND || k === '') return true;
+  if (k === OFFER_USER_CHAT_MESSAGE_KIND || k === OFFER_MEETUP_PROPOSAL_KIND || k === '') return true;
   if (Array.isArray(m.offer_images) && m.offer_images.length > 0) return true;
   if (
     (k === 'initial' || k === 'renter_update' || k === 'poster_counter' || k === 'renter_accepts') &&

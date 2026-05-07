@@ -85,6 +85,9 @@ export const ui = {
   fontBody: 15,
   /** Pressable dim while held (0.7–0.8 range) */
   pressOpacity: 0.78,
+  headerRootTitle: 30,
+  headerInlineTitle: 22,
+  headerInlineHeight: 48,
 } as const;
 
 /** Solid `ui.primary` fill on press — avoids stacking global press opacity on labels. */

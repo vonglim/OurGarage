@@ -117,6 +117,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     ...shadowKey,
     elevation: 6,
+    zIndex: 20,
   },
   fabPressed: {
     backgroundColor: FAB_ACCENT_PRESSED,

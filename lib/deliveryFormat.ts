@@ -1,4 +1,4 @@
-export type HowKey = 'pickup_nearby' | 'delivery_only' | 'delivery_and_pickup';
+export type HowKey = 'pickup_nearby' | 'delivery_only';
 
 export const DELIVERY_OPTIONS: {
   key: HowKey;
@@ -19,19 +19,10 @@ export const DELIVERY_OPTIONS: {
     label: 'Delivery only',
     shortLabel: 'Delivery only',
   },
-  {
-    key: 'delivery_and_pickup',
-    label: 'Delivery and pickup',
-    shortLabel: 'Delivery and pickup',
-  },
 ];
 
 export function isHowKey(v: unknown): v is HowKey {
-  return (
-    v === 'pickup_nearby' ||
-    v === 'delivery_only' ||
-    v === 'delivery_and_pickup'
-  );
+  return v === 'pickup_nearby' || v === 'delivery_only';
 }
 
 export function needsDeliveryFee(how: unknown): boolean {
@@ -55,8 +46,8 @@ export function formatHowDisplay(req: {
       'No delivery needed (within X miles)';
     return template.replace('X', String(miles));
   }
-  if (h === 'delivery_only') return 'Delivery only';
-  if (h === 'delivery_and_pickup') return 'Delivery and pickup';
+  if (h === 'delivery_only') return 'Owner delivery';
+  if (h === 'delivery_and_pickup') return 'Owner delivery';
 
   const legacy = String(h ?? '').trim();
   return legacy === '' ? '—' : legacy;

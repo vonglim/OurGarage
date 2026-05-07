@@ -107,3 +107,22 @@ export async function scheduleLocalNewMessageNotificationForTesting(
     /* ignore */
   }
 }
+
+/** Immediate local banner when the user receives a chat-related server notification while not on that thread. */
+export async function presentLocalChatBanner(title: string, body: string): Promise<void> {
+  if (Platform.OS === 'web') return;
+  const t = String(title ?? '').trim();
+  const b = String(body ?? '').trim();
+  if (!t && !b) return;
+  try {
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: t || 'Message',
+        body: b || '',
+      },
+      trigger: null,
+    });
+  } catch {
+    /* ignore */
+  }
+}

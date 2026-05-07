@@ -26,12 +26,21 @@ import {
   type RentalMeetupDetails,
 } from '@/components/RentalDetailsCard';
 import { subtleControlPressed, ui } from '@/constants/appUi';
+import { setActiveChatOfferThreadId } from '@/lib/activeChatOfferThread';
 import { useAuthUserId } from '@/lib/authUser';
+import { insertServerNotificationToRecipient } from '@/lib/insertServerNotification';
 import { markMessageNotificationsForOfferAsRead, markOfferThreadRead } from '@/lib/messageUnread';
+import {
+  OFFER_MEETUP_PROPOSAL_KIND,
+  insertMeetupProposalOfferMessage,
+} from '@/lib/meetupProposalThreadEvent';
+import { getProfileNameForUserId } from '@/lib/profileDisplayName';
+import { isUuidString } from '@/lib/requestOwnership';
 import { sendOfferThreadUserMessage } from '@/lib/sendOfferThreadMessage';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { useMessageUnreadStore } from '@/store/messageUnreadStore';
+import { useFocusEffect } from '@react-navigation/native';
 
 type OfferMessageRow = {
   id: string;
@@ -110,6 +119,30 @@ function normalizeImages(val: unknown): string[] {
 
 function chatLogPrefix(routeId: string, rentalId: string | null): '[REQUEST CHAT]' | '[RENTAL CHAT]' {
   return rentalId != null && routeId === rentalId ? '[RENTAL CHAT]' : '[REQUEST CHAT]';
+}
+
+function parseMeetupProposalLines(text: string): {
+  pickup: string;
+  returnAt: string;
+  location: string;
+} | null {
+  const t = text.trim();
+  if (!t) return null;
+  const lines = t.split('\n').map((l) => l.trim());
+  const pickup =
+    lines
+      .find((line) => /^Pickup time proposed:/i.test(line))
+      ?.replace(/^Pickup time proposed:\s*/i, '')
+      .trim() ?? '';
+  const returnAt =
+    lines
+      .find((line) => /^Return time proposed:/i.test(line))
+      ?.replace(/^Return time proposed:\s*/i, '')
+      .trim() ?? '';
+  const locLine = lines.find((line) => line.startsWith('📍'));
+  const location = locLine?.replace(/^📍\s*/, '').trim() ?? '';
+  if (!pickup && !returnAt && !location) return null;
+  return { pickup, returnAt, location };
 }
 
 function parseRentalUpdateMessage(text: string): { pickup: string; returnAt: string; location: string } | null {
@@ -298,6 +331,15 @@ export default function ChatDetailScreen() {
   useEffect(() => {
     threadRef.current = { routeId: id, offerId: threadOfferId, rentalId: threadRentalId };
   }, [id, threadOfferId, threadRentalId]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      const oid = threadOfferId.trim();
+      if (oid) setActiveChatOfferThreadId(oid);
+      else setActiveChatOfferThreadId(null);
+      return () => setActiveChatOfferThreadId(null);
+    }, [threadOfferId])
+  );
 
   useEffect(() => {
     if (!threadOfferId || !isSupabaseConfigured()) return;
@@ -578,32 +620,33 @@ export default function ChatDetailScreen() {
     [rental, meId, id, threadOfferId, threadRentalId]
   );
 
-  const insertMeetupSystemMessage = useCallback(
+  const insertMeetupProposalMessage = useCallback(
     async (input: {
       meetupLocation: string;
       meetupTimeIso: string;
       returnTimeIso: string;
     }) => {
       if (!rental || !meId) return null;
-      const pickupLine = new Date(input.meetupTimeIso).toLocaleString();
-      const returnLine = new Date(input.returnTimeIso).toLocaleString();
-      const body = `Rental details updated:\n📅 Pickup: ${pickupLine}\n🔁 Return: ${returnLine}\n📍 ${input.meetupLocation}`;
-      const insertRow: Record<string, unknown> = {
-        offer_id: rental.offer_id,
-        author_id: meId,
-        receiver_id: null,
-        body,
-        price: null,
-        kind: 'system',
-      };
-      if (rental.id) insertRow.rental_id = rental.id;
-      const { data, error } = await getSupabase()
-        .from('offer_messages')
-        .insert(insertRow)
-        .select('id')
-        .single();
-      if (error) return null;
-      return typeof data?.id === 'string' ? data.id : null;
+      const offerId = String(rental.offer_id ?? '').trim();
+      const receiverId =
+        rental.owner_user_id === meId
+          ? String(rental.renter_user_id ?? '').trim()
+          : String(rental.owner_user_id ?? '').trim();
+      if (!offerId || !receiverId || receiverId === meId) return null;
+      const requestRowId =
+        rental.request_id != null && isUuidString(String(rental.request_id))
+          ? String(rental.request_id)
+          : null;
+      return insertMeetupProposalOfferMessage({
+        offerId,
+        requestRowId,
+        rentalId: rental.id,
+        authorId: meId,
+        receiverId,
+        meetupTimeIso: input.meetupTimeIso,
+        returnTimeIso: input.returnTimeIso,
+        meetupLocation: input.meetupLocation,
+      });
     },
     [rental, meId]
   );
@@ -742,11 +785,40 @@ export default function ChatDetailScreen() {
           showFeedbackToast('Could not update rental details.');
           return false;
         }
-        const messageId = await insertMeetupSystemMessage(input);
+        const messageId = await insertMeetupProposalMessage(input);
         if (__DEV__) {
-          console.log('[proposal] insertMeetupSystemMessage result', {
+          console.log('[proposal] insertMeetupProposalMessage result', {
             rentalId: rental.id,
             messageId,
+          });
+        }
+        if (!messageId) {
+          showFeedbackToast('Could not post proposal to chat.');
+          return false;
+        }
+        const receiverId =
+          rental.owner_user_id === meId
+            ? String(rental.renter_user_id ?? '').trim()
+            : String(rental.owner_user_id ?? '').trim();
+        if (receiverId && receiverId !== meId && isUuidString(receiverId)) {
+          const reqUuid =
+            rental.request_id != null && isUuidString(String(rental.request_id))
+              ? String(rental.request_id)
+              : null;
+          const offerUuid =
+            rental.offer_id != null && isUuidString(String(rental.offer_id))
+              ? String(rental.offer_id)
+              : null;
+          insertServerNotificationToRecipient({
+            actorId: meId,
+            recipientUserId: receiverId,
+            type: 'message',
+            title: `${getProfileNameForUserId(meId)} proposed a pickup time`,
+            body: rentalTitle.trim()
+              ? `New meetup proposal for ${rentalTitle.trim()}`
+              : 'New meetup proposal',
+            requestId: reqUuid,
+            offerId: offerUuid,
           });
         }
         if (messageId && hasCol('latest_proposal_message_id')) {
@@ -768,7 +840,7 @@ export default function ChatDetailScreen() {
         setRentalBusy(false);
       }
     },
-    [rental, meId, insertMeetupSystemMessage, id, threadOfferId, threadRentalId]
+    [rental, meId, insertMeetupProposalMessage, id, threadOfferId, threadRentalId, rentalTitle]
   );
 
   if (!id) {
@@ -907,9 +979,12 @@ export default function ChatDetailScreen() {
                       const hasImages = Array.isArray(message.offer_images) && message.offer_images.length > 0;
                       if (!hasText && !hasImages) return null;
                       const isCurrentUser = message.senderId === meId;
-                    const isRentalDetailsSystem =
-                      message.kind === 'system_rental_details' ||
-                      message.text.startsWith('Rental details updated:');
+                      const parsedProposal = parseMeetupProposalLines(message.text);
+                      const parsedLegacy = parseRentalUpdateMessage(message.text);
+                      const isRentalDetailsSystem =
+                        message.kind === OFFER_MEETUP_PROPOSAL_KIND ||
+                        message.kind === 'system_rental_details' ||
+                        message.text.startsWith('Rental details updated:');
                     const iAmRenter = rental?.renter_user_id === meId;
                     const iAmOwner = rental?.owner_user_id === meId;
                     const myConfirmed = iAmRenter
@@ -926,7 +1001,6 @@ export default function ChatDetailScreen() {
                       (myConfirmed || acceptedMessageIds.includes(message.id));
                       const prev = index > 0 ? messages[index - 1] : null;
                       const senderChanged = prev != null && prev.senderId !== message.senderId;
-                      const parsedRentalUpdate = parseRentalUpdateMessage(message.text);
                       return (
                         <View style={styles.messageRow}>
                           <View
@@ -951,17 +1025,31 @@ export default function ChatDetailScreen() {
                             >
                               {isRentalDetailsSystem ? (
                                 <View>
-                                  <Text style={styles.systemTitle}>Rental updated</Text>
-                                  {parsedRentalUpdate?.pickup ? (
-                                    <Text style={styles.systemLine}>{parsedRentalUpdate.pickup}</Text>
+                                  <Text style={styles.systemTitle}>
+                                    {message.kind === OFFER_MEETUP_PROPOSAL_KIND
+                                      ? 'Meetup proposal'
+                                      : 'Rental updated'}
+                                  </Text>
+                                  {parsedProposal?.pickup ? (
+                                    <Text style={styles.systemLine}>
+                                      Pickup time proposed: {parsedProposal.pickup}
+                                    </Text>
+                                  ) : parsedLegacy?.pickup ? (
+                                    <Text style={styles.systemLine}>📅 Pickup: {parsedLegacy.pickup}</Text>
                                   ) : null}
-                                  {parsedRentalUpdate?.returnAt ? (
-                                    <Text style={styles.systemLine}>{parsedRentalUpdate.returnAt}</Text>
+                                  {parsedProposal?.returnAt ? (
+                                    <Text style={styles.systemLine}>
+                                      Return time proposed: {parsedProposal.returnAt}
+                                    </Text>
+                                  ) : parsedLegacy?.returnAt ? (
+                                    <Text style={styles.systemLine}>🔁 Return: {parsedLegacy.returnAt}</Text>
                                   ) : null}
-                                  {parsedRentalUpdate?.location ? (
-                                    <Text style={styles.systemLocation}>📍 {parsedRentalUpdate.location}</Text>
+                                  {parsedProposal?.location || parsedLegacy?.location ? (
+                                    <Text style={styles.systemLocation}>
+                                      📍 {parsedProposal?.location ?? parsedLegacy?.location}
+                                    </Text>
                                   ) : null}
-                                  {!parsedRentalUpdate ? (
+                                  {!parsedProposal && !parsedLegacy ? (
                                     <Text style={styles.systemFallbackText}>{message.text}</Text>
                                   ) : null}
                                 </View>

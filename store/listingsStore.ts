@@ -13,10 +13,11 @@ export type ToolListing = {
   ownerUserId?: string;
   ownerName: string;
   rating: number;
-  /** Supabase `half_day_price`. */
-  halfDayPrice?: number;
   /** Supabase `weekly_price`. */
   weeklyPrice?: number;
+  replacementValue?: number;
+  dailyLateFee?: number;
+  maxLateFeeCap?: number;
   /** Cover / gallery URLs from Supabase `images` when present. */
   images?: string[];
   /** Miles (display). */

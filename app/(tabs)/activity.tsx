@@ -1,3 +1,4 @@
+import { RootScreenHeader } from '@/components/AppHeaders';
 import { CardPressable } from '@/components/CardPressable';
 import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
 import { Pressable } from '@/components/Pressable';
@@ -30,15 +31,18 @@ import {
   unifiedRentalTitle,
   type UnifiedRentalRow,
 } from '@/lib/fetchUnifiedRentalsForUser';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { markAllNonMessageNotificationsAsRead } from '@/lib/markNotificationsRead';
 import { formatUsd, getNumericOfferPrice } from '@/lib/money';
+import { PROFILE_NAME_FALLBACK } from '@/lib/profileConstants';
+import { getPublicProfileForView } from '@/lib/publicProfiles';
 import { formatMilesShort } from '@/lib/requestDistance';
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { getSupabase } from '@/lib/supabase';
 import { refreshActivityScreenFromSupabase } from '@/lib/supabaseActivityRefresh';
 import { updateRentalRequestStatus } from '@/lib/updateRentalRequestStatus';
-import { useMessageUnreadStore, useUnreadMessagesTotal } from '@/store/messageUnreadStore';
 import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
+import { useMessageUnreadStore, useUnreadMessagesTotal } from '@/store/messageUnreadStore';
 import type { AppNotification } from '@/store/notificationsStore';
 import { useNotificationsStore } from '@/store/notificationsStore';
 import type { Offer } from '@/store/offersStore';
@@ -49,11 +53,12 @@ import {
   resolveRequestFromRouteId,
   useRequestsStore,
 } from '@/store/requestsStore';
-import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { LayoutChangeEvent, NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
+import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 
 declare const __DEV__: boolean;
@@ -74,6 +79,65 @@ function formatSectionCount(n: number): string {
 
 function rentalsSubTabBadgeCount(n: number): string {
   return n > 99 ? '99+' : String(Math.max(0, n));
+}
+
+/** Rentals tab: borrower vs equipment-owner segments (`rentals` table). */
+type RentalsSubView = 'renting' | 'listing';
+
+/** Marketplace-style short name (e.g. "Mike R.") for rental counterparty line. */
+function formatShortDisplayName(full: string): string {
+  const t = full.trim();
+  if (!t || t === PROFILE_NAME_FALLBACK || t === '—') return '';
+  const parts = t.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '';
+  if (parts.length === 1) return parts[0]!;
+  const first = parts[0]!;
+  const last = parts[parts.length - 1]!;
+  const initial = last[0]?.toUpperCase() ?? '';
+  if (!initial) return first;
+  return `${first} ${initial}.`;
+}
+
+function formatRatingSegment(ratingNumber: number): string | null {
+  if (!Number.isFinite(ratingNumber) || ratingNumber <= 0) return null;
+  return `★ ${ratingNumber.toFixed(1)}`;
+}
+
+/**
+ * Human-centered counterparty line: "Mike R. • ★ 4.9", "Owner • ★ 4.9", etc.
+ */
+function rentalCounterpartyMetaLine(otherUserId: string, role: RentalsSubView): string {
+  const pub = getPublicProfileForView(String(otherUserId ?? '').trim());
+  const shortName = formatShortDisplayName(pub.name);
+  const ratingSeg = formatRatingSegment(pub.ratingNumber);
+  const roleLabel = role === 'renting' ? 'Owner' : 'Renter';
+
+  if (shortName && ratingSeg) return `${shortName} • ${ratingSeg}`;
+  if (shortName) return shortName;
+  if (ratingSeg) return `${roleLabel} • ${ratingSeg}`;
+  return role === 'renting' ? 'Owner' : 'Renter';
+}
+
+/** Product copy for the compact status pill (no "Status:" prefix). */
+function formatRentalStatusPillLabel(raw: string): string {
+  const key = raw.trim();
+  const map: Record<string, string> = {
+    'Awaiting confirmation': 'Awaiting Confirmation',
+    'Awaiting response': 'Awaiting Response',
+    'Respond to proposal': 'Respond to Proposal',
+    Completed: 'Completed',
+    'Return scheduled': 'Return Due',
+    'Awaiting return': 'Return Due',
+    'Rental active': 'Active',
+    'Meetup scheduled': 'Meetup Scheduled',
+    'Ready for pickup': 'Pickup Pending',
+  };
+  if (map[key]) return map[key]!;
+  if (!key) return '';
+  return key
+    .split(/\s+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
 }
 
 function byTimestampDesc(
@@ -142,8 +206,17 @@ function getOutgoingOfferStatus(o: Offer, req: unknown): OutgoingOfferStatus {
 
 type ActivityTab = 'requests' | 'offers' | 'rentals';
 
-/** Rentals tab: borrower vs equipment-owner segments (`rentals` table). */
-type RentalsSubView = 'renting' | 'listing';
+const ACTIVITY_TABS: ActivityTab[] = ['requests', 'offers', 'rentals'];
+const ACTIVITY_LAST_TAB_STORAGE_KEY = 'activity_last_tab_v1';
+
+function parseStoredActivityTab(raw: string | null): ActivityTab | null {
+  if (raw === 'requests' || raw === 'offers' || raw === 'rentals') return raw;
+  return null;
+}
+
+const RENTAL_ACTION_BTN_WIDTH = 78;
+const RENTAL_ACTIONS_GAP = 6;
+const RENTAL_ACTIONS_TOTAL_WIDTH = RENTAL_ACTION_BTN_WIDTH * 2 + RENTAL_ACTIONS_GAP;
 
 function outgoingOfferStatusLabel(s: OutgoingOfferStatus): string {
   switch (s) {
@@ -164,7 +237,8 @@ function outgoingOfferStatusLabel(s: OutgoingOfferStatus): string {
 
 function rentalStatusVisual(
   row: UnifiedRentalRow,
-  role: RentalsSubView
+  role: RentalsSubView,
+  viewerUserId: string
 ): { label: string } {
   const nowMs = Date.now();
   const pickupMs = row.pickup_datetime ? new Date(row.pickup_datetime).getTime() : null;
@@ -176,6 +250,8 @@ function rentalStatusVisual(
     .trim()
     .toLowerCase();
   const allConfirmed = row.owner_confirmed === true && row.renter_confirmed === true;
+  const me = viewerUserId.trim();
+  const lastProposer = String(row.last_proposed_by ?? '').trim();
 
   if (status === 'completed' || status === 'returned') {
     return { label: 'Completed' };
@@ -184,6 +260,12 @@ function rentalStatusVisual(
     return { label: 'Awaiting confirmation' };
   }
   if (agreementStatus === 'pending' || !allConfirmed) {
+    if (me && lastProposer && lastProposer === me) {
+      return { label: 'Awaiting response' };
+    }
+    if (me && lastProposer && lastProposer !== me) {
+      return { label: 'Respond to proposal' };
+    }
     return { label: 'Awaiting confirmation' };
   }
   if (status === 'active') {
@@ -214,7 +296,15 @@ function rentalStatusVisual(
 
 export default function ActivityScreen() {
   const router = useRouter();
+  const { width: windowWidth } = useWindowDimensions();
   const [tab, setTab] = useState<ActivityTab>('requests');
+  const [activityTabHydrated, setActivityTabHydrated] = useState(false);
+  const activityTabPagerRef = useRef<ScrollView>(null);
+  const didApplyInitialPagerOffsetRef = useRef(false);
+  const [activityPagerViewportW, setActivityPagerViewportW] = useState(0);
+  /** Pager strip width; matches `ScreenWrapper` horizontal inset until layout measures. */
+  const activityPageWidth =
+    activityPagerViewportW > 0 ? activityPagerViewportW : Math.max(0, windowWidth - 32);
   const [rentalsSubView, setRentalsSubView] = useState<RentalsSubView>('renting');
   const me = useAuthUserId();
   const listings = useListingsStore((s) => s.listings);
@@ -365,6 +455,68 @@ export default function ActivityScreen() {
   );
   const swipeRefs = useRef(new Map<number, Swipeable>());
   const fabBottomReserve = useMainTabFabBottomReserve();
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(ACTIVITY_LAST_TAB_STORAGE_KEY);
+        if (cancelled) return;
+        const parsed = parseStoredActivityTab(raw);
+        if (parsed != null) setTab(parsed);
+      } finally {
+        if (!cancelled) setActivityTabHydrated(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!activityTabHydrated || activityPagerViewportW <= 0 || didApplyInitialPagerOffsetRef.current)
+      return;
+    didApplyInitialPagerOffsetRef.current = true;
+    const idx = ACTIVITY_TABS.indexOf(tab);
+    if (idx < 0) return;
+    activityTabPagerRef.current?.scrollTo({
+      x: idx * activityPageWidth,
+      animated: false,
+    });
+  }, [activityTabHydrated, tab, activityPageWidth, activityPagerViewportW]);
+
+  useEffect(() => {
+    if (!activityTabHydrated) return;
+    void AsyncStorage.setItem(ACTIVITY_LAST_TAB_STORAGE_KEY, tab);
+  }, [tab, activityTabHydrated]);
+
+  const goToActivityTab = useCallback(
+    (next: ActivityTab) => {
+      setTab(next);
+      const idx = ACTIVITY_TABS.indexOf(next);
+      if (idx < 0) return;
+      activityTabPagerRef.current?.scrollTo({
+        x: idx * activityPageWidth,
+        animated: true,
+      });
+    },
+    [activityPageWidth]
+  );
+
+  const onActivityPagerScrollEnd = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const w = activityPageWidth > 0 ? activityPageWidth : 1;
+      const idx = Math.round(e.nativeEvent.contentOffset.x / w);
+      const next = ACTIVITY_TABS[idx];
+      if (next != null) setTab(next);
+    },
+    [activityPageWidth]
+  );
+
+  const onActivityPagerViewportLayout = useCallback((e: LayoutChangeEvent) => {
+    const w = e.nativeEvent.layout.width;
+    setActivityPagerViewportW((prev) => (Math.abs(prev - w) < 0.5 ? prev : w));
+  }, []);
 
   const approvedAsRenter = useMemo(
     () => unifiedRentals.filter((r) => r.renter_user_id === me),
@@ -607,20 +759,39 @@ export default function ActivityScreen() {
 
   function renderRentalOperationalRow(row: UnifiedRentalRow, role: RentalsSubView) {
     const title = unifiedRentalTitle(row);
-    const priceNum = Number(row.price);
-    const priceLabel = Number.isFinite(priceNum) ? formatUsd(priceNum) : '—';
     const messageUnread =
       typeof row.offer_id === 'string' && row.offer_id.trim() !== ''
         ? (unreadByOfferId[row.offer_id.trim()] ?? 0)
         : 0;
-    const status = rentalStatusVisual(row, role);
+    const status = rentalStatusVisual(row, role, me);
+    const otherUserId = role === 'renting' ? row.owner_user_id : row.renter_user_id;
+    const counterpartyLine = rentalCounterpartyMetaLine(otherUserId, role);
 
     return (
       <View key={row.id} style={styles.rentalRowCard}>
         <View style={styles.rentalRowMain}>
           <View style={styles.rentalRowTop}>
-            <Text style={styles.rentalRowTitle} numberOfLines={1}>
-              {title}
+            <View style={styles.rentalRowTitleWrap}>
+              <Text style={styles.rentalRowTitle} numberOfLines={1}>
+                {title}
+              </Text>
+            </View>
+            <View style={styles.rentalStatusRow}>
+              <View style={styles.rentalStatusChip}>
+                <Text
+                  style={styles.rentalStatusChipText}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {formatRentalStatusPillLabel(status.label)}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.rentalRowBottom}>
+            <Text style={styles.rentalCounterparty} numberOfLines={1}>
+              {counterpartyLine}
             </Text>
             <View style={styles.rentalRowActions}>
               <Pressable
@@ -638,9 +809,10 @@ export default function ActivityScreen() {
                 }}
                 style={({ pressed }) => [styles.rentalIconBtn, pressed && styles.rentalIconBtnPressed]}
                 accessibilityRole="button"
-                accessibilityLabel="Message"
+                accessibilityLabel="Chat"
               >
-                <Ionicons name="chatbubble-ellipses-outline" size={18} color={ui.textSecondary} />
+                <Ionicons name="chatbubble-ellipses-outline" size={16} color={ui.primary} />
+                <Text style={styles.rentalActionLabelInline}>Chat</Text>
                 {messageUnread > 0 ? (
                   <View style={styles.rentalIconBadge}>
                     <Text style={styles.rentalIconBadgeText}>{formatSectionCount(messageUnread)}</Text>
@@ -658,20 +830,13 @@ export default function ActivityScreen() {
                 }}
                 style={({ pressed }) => [styles.rentalIconBtn, pressed && styles.rentalIconBtnPressed]}
                 accessibilityRole="button"
-                accessibilityLabel="View details"
+                accessibilityLabel="Details"
               >
-                <Ionicons name="document-text-outline" size={18} color={ui.textSecondary} />
+                <Ionicons name="document-text-outline" size={16} color={ui.primary} />
+                <Text style={styles.rentalActionLabelInline}>Details</Text>
               </Pressable>
             </View>
           </View>
-          <View style={styles.rentalStatusRow}>
-            <View style={styles.rentalStatusChip}>
-              <Text style={styles.rentalStatusChipText}>{`Status: ${status.label}`}</Text>
-            </View>
-          </View>
-          <Text style={styles.rentalRowMeta} numberOfLines={1}>
-            {priceLabel}
-          </Text>
         </View>
       </View>
     );
@@ -681,41 +846,32 @@ export default function ActivityScreen() {
     <ScreenWrapper style={styles.screenWrap}>
       <View style={styles.screen}>
         <ScreenEntrance style={styles.screenInner}>
-          <ScrollView
-            style={styles.scroll}
-            contentContainerStyle={[styles.scrollContent, { paddingBottom: fabBottomReserve }]}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            bounces
-          >
-            <View style={[styles.header, { paddingTop: 12 }]}>
-              <View style={styles.headerTitleRow}>
-                <Text style={styles.screenTitle} numberOfLines={1}>
-                  Activity
-                </Text>
-                <Pressable
-                  pressOpacityFeedback={false}
-                  haptic
-                  onPress={goToChats}
-                  style={({ pressed }) => [
-                    styles.messagesPill,
-                    pressed && styles.messagesPillPressed,
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityLabel={hasUnreadMessages ? `Messages, ${unreadCount} unread` : 'Messages'}
-                >
-                  <Text style={styles.messagesPillLabel}>Messages</Text>
-                  {hasUnreadMessages ? (
-                    <View style={styles.messagesPillBadge}>
-                      <Text style={styles.messagesPillBadgeText}>{formatSectionCount(unreadCount)}</Text>
-                    </View>
-                  ) : null}
-                </Pressable>
-              </View>
+          <View style={styles.activityScreenStack}>
+            <View style={styles.header}>
+              <RootScreenHeader
+                title="Activity"
+                rightAccessory={
+                  <Pressable
+                    pressOpacityFeedback={false}
+                    haptic
+                    onPress={goToChats}
+                    style={({ pressed }) => [styles.messagesPill, pressed && styles.messagesPillPressed]}
+                    accessibilityRole="button"
+                    accessibilityLabel={hasUnreadMessages ? `Messages, ${unreadCount} unread` : 'Messages'}
+                  >
+                    <Text style={styles.messagesPillLabel}>Messages</Text>
+                    {hasUnreadMessages ? (
+                      <View style={styles.messagesPillBadge}>
+                        <Text style={styles.messagesPillBadgeText}>{formatSectionCount(unreadCount)}</Text>
+                      </View>
+                    ) : null}
+                  </Pressable>
+                }
+              />
 
               <View style={styles.tabRow}>
                 <Pressable
-                  onPress={() => setTab('requests')}
+                  onPress={() => goToActivityTab('requests')}
                   style={({ pressed }) => [
                     styles.tabCell,
                     tab === 'requests' ? styles.tabCellActive : styles.tabCellInactive,
@@ -734,7 +890,7 @@ export default function ActivityScreen() {
                   ) : null}
                 </Pressable>
                 <Pressable
-                  onPress={() => setTab('offers')}
+                  onPress={() => goToActivityTab('offers')}
                   style={({ pressed }) => [
                     styles.tabCell,
                     tab === 'offers' ? styles.tabCellActive : styles.tabCellInactive,
@@ -753,7 +909,7 @@ export default function ActivityScreen() {
                   ) : null}
                 </Pressable>
                 <Pressable
-                  onPress={() => setTab('rentals')}
+                  onPress={() => goToActivityTab('rentals')}
                   style={({ pressed }) => [
                     styles.tabCell,
                     tab === 'rentals' ? styles.tabCellActive : styles.tabCellInactive,
@@ -776,13 +932,36 @@ export default function ActivityScreen() {
               </View>
             </View>
 
-          {tab === 'requests' ? (
-            <View
-              style={[
-                styles.tabPanel,
-                requestsActivityCount > 0 && styles.tabPanelAttention,
-              ]}
-            >
+            <View style={styles.tabPagerViewport} onLayout={onActivityPagerViewportLayout}>
+              <ScrollView
+                ref={activityTabPagerRef}
+                horizontal
+                pagingEnabled
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={onActivityPagerScrollEnd}
+                style={styles.tabPager}
+                bounces={false}
+              >
+                <View style={{ width: activityPageWidth }}>
+                  <ScrollView
+                    style={styles.scroll}
+                    contentContainerStyle={[
+                      styles.tabPanelScrollContent,
+                      { paddingBottom: fabBottomReserve },
+                    ]}
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator={false}
+                    bounces
+                    nestedScrollEnabled
+                  >
+                    <View
+                      style={[
+                        styles.tabPanel,
+                        requestsActivityCount > 0 && styles.tabPanelAttention,
+                      ]}
+                    >
               <Text style={styles.tabPanelSubline}>
                 Your open and past requests · offers received on each card
               </Text>
@@ -906,15 +1085,27 @@ export default function ActivityScreen() {
                 ))
               )}
             </View>
-          ) : null}
+                  </ScrollView>
+                </View>
 
-          {tab === 'offers' ? (
-            <View
-              style={[
-                styles.tabPanel,
-                offersSectionBadgeCount > 0 && styles.tabPanelAttention,
-              ]}
-            >
+                <View style={{ width: activityPageWidth }}>
+                  <ScrollView
+                    style={styles.scroll}
+                    contentContainerStyle={[
+                      styles.tabPanelScrollContent,
+                      { paddingBottom: fabBottomReserve },
+                    ]}
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator={false}
+                    bounces
+                    nestedScrollEnabled
+                  >
+                    <View
+                      style={[
+                        styles.tabPanel,
+                        offersSectionBadgeCount > 0 && styles.tabPanelAttention,
+                      ]}
+                    >
               <Text style={styles.tabPanelSubline}>
                 Bids you placed · status reflects the poster’s response
               </Text>
@@ -923,16 +1114,28 @@ export default function ActivityScreen() {
               ) : (
                 myLenderOffers.map((o) => renderMyOfferRow(o))
               )}
-            </View>
-          ) : null}
+                    </View>
+                  </ScrollView>
+                </View>
 
-          {tab === 'rentals' ? (
-            <View
-              style={[
-                styles.tabPanel,
-                rentalsActivityCount > 0 && styles.tabPanelAttention,
-              ]}
-            >
+                <View style={{ width: activityPageWidth }}>
+                  <ScrollView
+                    style={styles.scroll}
+                    contentContainerStyle={[
+                      styles.tabPanelScrollContent,
+                      { paddingBottom: fabBottomReserve },
+                    ]}
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator={false}
+                    bounces
+                    nestedScrollEnabled
+                  >
+                    <View
+                      style={[
+                        styles.tabPanel,
+                        rentalsActivityCount > 0 && styles.tabPanelAttention,
+                      ]}
+                    >
               <Text style={styles.tabPanelSubline}>
                 Active agreements from requests and listings (your unified rentals)
               </Text>
@@ -940,7 +1143,7 @@ export default function ActivityScreen() {
                 <View style={styles.emptyBlock}>
                   <Text style={styles.emptyTitle}>No rentals yet</Text>
                   <Text style={styles.emptySubline}>
-                    When an agreement is finalized, it appears here under Currently renting or Renting
+                    When an agreement is finalized, it appears here under RENTING or Renting
                     out.
                   </Text>
                 </View>
@@ -958,7 +1161,7 @@ export default function ActivityScreen() {
                       ]}
                       accessibilityRole="tab"
                       accessibilityState={{ selected: rentalsSubView === 'renting' }}
-                      accessibilityLabel={`Currently renting, ${approvedAsRenter.length} rentals`}
+                      accessibilityLabel={`RENTING, ${approvedAsRenter.length} rentals`}
                     >
                       <Text
                         style={[
@@ -967,7 +1170,7 @@ export default function ActivityScreen() {
                         ]}
                         numberOfLines={2}
                       >
-                        Currently renting
+                        RENTING
                       </Text>
                       <View style={rentalsSubView === 'renting' ? styles.tabBadge : styles.tabBadgeMuted}>
                         <Text
@@ -992,7 +1195,7 @@ export default function ActivityScreen() {
                       ]}
                       accessibilityRole="tab"
                       accessibilityState={{ selected: rentalsSubView === 'listing' }}
-                      accessibilityLabel={`Renting out, ${approvedAsOwner.length} matches`}
+                      accessibilityLabel={`EQUIPMENT OWNER, ${approvedAsOwner.length} matches`}
                     >
                       <Text
                         style={[
@@ -1001,7 +1204,7 @@ export default function ActivityScreen() {
                         ]}
                         numberOfLines={2}
                       >
-                        Renting out
+                        EQUIPMENT OWNER
                       </Text>
                       <View style={rentalsSubView === 'listing' ? styles.tabBadge : styles.tabBadgeMuted}>
                         <Text
@@ -1022,12 +1225,14 @@ export default function ActivityScreen() {
                       <View style={styles.emptyBlock}>
                         <Text style={styles.emptyTitle}>Nothing here yet</Text>
                         <Text style={styles.emptySubline}>
-                          Rentals where you're the borrower appear here (requests or listings).
+                          {
+                            "Rentals where you're the borrower appear here (requests or listings)."
+                          }
                         </Text>
                       </View>
                     ) : (
                       <>
-                        <Text style={styles.activePastHeading}>You are renting</Text>
+                        <Text style={styles.activePastHeading}>RENTING</Text>
                         {approvedAsRenter.map((row) => renderRentalOperationalRow(row, 'renting'))}
                       </>
                     )
@@ -1035,20 +1240,23 @@ export default function ActivityScreen() {
                     <View style={styles.emptyBlock}>
                       <Text style={styles.emptyTitle}>Nothing here yet</Text>
                       <Text style={styles.emptySubline}>
-                        Rentals where you're lending equipment appear here.
+                        {"Rentals where you're lending equipment appear here."}
                       </Text>
                     </View>
                   ) : (
                     <>
-                      <Text style={styles.activePastHeading}>You are renting out</Text>
+                      <Text style={styles.activePastHeading}>EQUIPMENT OWNER</Text>
                       {approvedAsOwner.map((row) => renderRentalOperationalRow(row, 'listing'))}
                     </>
                   )}
                 </>
               )}
+                    </View>
+                  </ScrollView>
+                </View>
+              </ScrollView>
             </View>
-          ) : null}
-          </ScrollView>
+          </View>
 
           <MainTabFab />
         </ScreenEntrance>
@@ -1068,8 +1276,13 @@ const styles = StyleSheet.create({
   screenInner: {
     flex: 1,
   },
+  activityScreenStack: {
+    flex: 1,
+    minHeight: 0,
+  },
   header: {
     paddingHorizontal: 0,
+    paddingTop: ui.padScreenH,
     paddingBottom: ui.spaceMd,
     backgroundColor: ui.surfaceGrouped,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -1136,21 +1349,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'stretch',
     gap: 8,
-    marginBottom: ui.spaceMd,
+    marginBottom: 12,
   },
   rentalsSubTabCell: {
     flex: 1,
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
+    gap: 5,
+    paddingVertical: 8,
     paddingHorizontal: 6,
     borderRadius: 12,
-    minHeight: 56,
+    minHeight: 48,
   },
   rentalsSubTabLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
     color: ui.textSecondary,
     letterSpacing: -0.1,
@@ -1361,14 +1574,14 @@ const styles = StyleSheet.create({
     color: ui.textPrimary,
     letterSpacing: 0.5,
     textTransform: 'uppercase',
-    marginBottom: 10,
+    marginBottom: 9,
     marginTop: 2,
   },
   rentalRowCard: {
     ...cardChrome,
-    marginBottom: 7,
-    paddingVertical: 9,
-    paddingHorizontal: ui.padCard,
+    marginBottom: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
   },
   rentalRowMain: {
     width: '100%',
@@ -1377,55 +1590,86 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
+    gap: 8,
+    minHeight: 26,
   },
-  rentalRowTitle: {
+  rentalRowTitleWrap: {
     flex: 1,
     minWidth: 0,
-    fontSize: 15,
-    fontWeight: '700',
-    color: ui.textPrimary,
+    marginRight: 6,
   },
-  rentalRowMeta: {
-    marginTop: 3,
-    fontSize: 12,
-    color: ui.textSecondary,
+  rentalRowTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: ui.textPrimary,
+    lineHeight: 20,
   },
   rentalStatusRow: {
-    marginTop: 5,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexShrink: 0,
   },
   rentalStatusChip: {
-    borderRadius: 6,
-    paddingHorizontal: 7,
-    paddingVertical: 1,
+    maxWidth: 128,
+    borderRadius: 999,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
     backgroundColor: '#0B1F3A',
-  },
-  rentalStatusChipText: {
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.05,
-    color: '#FFFFFF',
-  },
-  rentalRowActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  rentalIconBtn: {
-    position: 'relative',
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#F3F7FD',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#D6E0F0',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  rentalStatusChipText: {
+    fontSize: 10,
+    fontWeight: '600',
+    letterSpacing: 0.15,
+    color: '#FFFFFF',
+    flexShrink: 1,
+  },
+  rentalRowBottom: {
+    marginTop: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  rentalCounterparty: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 12,
+    fontWeight: '500',
+    color: ui.textSecondary,
+    letterSpacing: -0.1,
+  },
+  rentalRowActions: {
+    width: RENTAL_ACTIONS_TOTAL_WIDTH,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: RENTAL_ACTIONS_GAP,
+  },
+  rentalIconBtn: {
+    position: 'relative',
+    width: RENTAL_ACTION_BTN_WIDTH,
+    minHeight: 36,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: '#EAF2FF',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#C7D6ED',
+  },
   rentalIconBtnPressed: {
     opacity: 0.86,
+  },
+  rentalActionLabelInline: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: ui.primary,
+    lineHeight: 11,
   },
   rentalIconBadge: {
     position: 'absolute',
@@ -1452,6 +1696,22 @@ const styles = StyleSheet.create({
   },
   scroll: {
     flex: 1,
+  },
+  /** Inner vertical scroll for each Activity tab (horizontal pager page). */
+  tabPanelScrollContent: {
+    flexGrow: 1,
+    paddingHorizontal: 0,
+  },
+  tabPagerViewport: {
+    flex: 1,
+    minHeight: 0,
+  },
+  tabPager: {
+    flex: 1,
+  },
+  tabPagerPage: {
+    flex: 1,
+    minHeight: 0,
   },
   scrollContent: {
     flexGrow: 1,

@@ -13,17 +13,19 @@ import { ScrollView } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { ProtectionSummaryCard } from '@/components/ProtectionSummaryCard';
+import { BackHeader } from '@/components/AppHeaders';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { numberPadAccessoryProps } from '@/components/NumberPadKeyboardAccessory';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { useListingsStore } from '@/store/listingsStore';
 import { getAuthUserDisplayName, getAuthUserIdSync } from '@/lib/authUser';
 import { Pressable } from '@/components/Pressable';
-import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { primarySolidPressed, ui } from '@/constants/appUi';
 import { getCreateListingPricingGuidance } from '@/lib/createListingPricingGuide';
 import { parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
+import { calculatePreauthAmount } from '@/lib/rentalProtection';
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -33,6 +35,9 @@ type FieldErrors = {
   description?: string;
   location?: string;
   quality?: string;
+  replacementValue?: string;
+  dailyLateFee?: string;
+  maxLateFeeCap?: string;
 };
 
 type QualityChecks = {
@@ -84,6 +89,9 @@ export default function CreateListingScreen() {
   const [qualityFunctional, setQualityFunctional] = useState(false);
   const [qualityPhotos, setQualityPhotos] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
+  const [replacementValueInput, setReplacementValueInput] = useState('');
+  const [dailyLateFeeInput, setDailyLateFeeInput] = useState('');
+  const [maxLateFeeCapInput, setMaxLateFeeCapInput] = useState('');
 
   const refTitle = useRef<TextInput>(null);
   const refPrice = useRef<TextInput>(null);
@@ -91,6 +99,9 @@ export default function CreateListingScreen() {
   const refLocation = useRef<TextInput>(null);
 
   const pricingGuidance = useMemo(() => getCreateListingPricingGuidance(title), [title]);
+  const replacementValue = parseMoneyToNumber(replacementValueInput) ?? 0;
+  const dailyLateFee = parseMoneyToNumber(dailyLateFeeInput) ?? 0;
+  const maxLateFeeCap = parseMoneyToNumber(maxLateFeeCapInput) ?? 0;
 
   const clearFieldError = useCallback((key: keyof FieldErrors) => {
     setErrors((prev) => {
@@ -118,6 +129,10 @@ export default function CreateListingScreen() {
 
   const onSubmit = () => {
     const next = validate(title, priceInput, description, location, quality);
+    if (replacementValue < 0) next.replacementValue = 'Replacement value must be 0 or greater.';
+    if (dailyLateFee < 0) next.dailyLateFee = 'Daily late fee must be 0 or greater.';
+    if (maxLateFeeCap < 0) next.maxLateFeeCap = 'Max late fee cap must be 0 or greater.';
+    if (maxLateFeeCap < dailyLateFee) next.maxLateFeeCap = 'Max late fee cap must be at least the daily late fee.';
     setErrors(next);
     if (Object.keys(next).length > 0) {
       if (next.title) refTitle.current?.focus();
@@ -137,6 +152,9 @@ export default function CreateListingScreen() {
       description: `${description.trim()}\n\nPickup: ${location.trim()}`,
       ownerName: getAuthUserDisplayName(),
       ownerUserId: getAuthUserIdSync(),
+      replacementValue,
+      dailyLateFee,
+      maxLateFeeCap,
       rating: 5,
       distance: 2.5,
       createdAt: Date.now(),
@@ -156,11 +174,8 @@ export default function CreateListingScreen() {
           keyboardVerticalOffset={0}
         >
           <ScreenEntrance style={styles.entranceFlex}>
-            <View style={[styles.topBar, { paddingTop: 8 }]}>
-            <ScreenBackButton onPress={() => router.back()} style={styles.backHit} />
-            <Text style={styles.screenTitle}>Create listing</Text>
+            <BackHeader title="Create Listing" onBack={() => router.back()} style={styles.createHeader} />
             <Text style={styles.screenSubtitle}>Rent out equipment on Renby</Text>
-          </View>
 
           <ScrollView
             style={styles.scroll}
@@ -182,6 +197,67 @@ export default function CreateListingScreen() {
                 <Text style={styles.photoPlaceholderTitle}>Add cover photo</Text>
                 <Text style={styles.photoPlaceholderHint}>Tap to try (placeholder)</Text>
               </Pressable>
+            </View>
+
+            <View style={styles.section}>
+              <Text style={styles.label}>Protection</Text>
+              <View style={[styles.moneyRow, errors.replacementValue && styles.inputInvalid]}>
+                <Text style={styles.dollarPrefix}>$</Text>
+                <TextInput
+                  placeholder="Replacement value"
+                  placeholderTextColor={ui.textSecondary}
+                  value={replacementValueInput}
+                  onChangeText={(v) => {
+                    setReplacementValueInput(sanitizeMoneyDigits(v));
+                    clearFieldError('replacementValue');
+                  }}
+                  style={styles.moneyInput}
+                  keyboardType="decimal-pad"
+                  {...numberPadAccessoryProps()}
+                />
+              </View>
+              {errors.replacementValue ? <Text style={styles.errorText}>{errors.replacementValue}</Text> : null}
+              <View style={[styles.moneyRow, errors.dailyLateFee && styles.inputInvalid, styles.inlineTopGap]}>
+                <Text style={styles.dollarPrefix}>$</Text>
+                <TextInput
+                  placeholder="Daily late fee"
+                  placeholderTextColor={ui.textSecondary}
+                  value={dailyLateFeeInput}
+                  onChangeText={(v) => {
+                    setDailyLateFeeInput(sanitizeMoneyDigits(v));
+                    clearFieldError('dailyLateFee');
+                  }}
+                  style={styles.moneyInput}
+                  keyboardType="decimal-pad"
+                  {...numberPadAccessoryProps()}
+                />
+              </View>
+              {errors.dailyLateFee ? <Text style={styles.errorText}>{errors.dailyLateFee}</Text> : null}
+              <View style={[styles.moneyRow, errors.maxLateFeeCap && styles.inputInvalid, styles.inlineTopGap]}>
+                <Text style={styles.dollarPrefix}>$</Text>
+                <TextInput
+                  placeholder="Maximum late fee cap"
+                  placeholderTextColor={ui.textSecondary}
+                  value={maxLateFeeCapInput}
+                  onChangeText={(v) => {
+                    setMaxLateFeeCapInput(sanitizeMoneyDigits(v));
+                    clearFieldError('maxLateFeeCap');
+                  }}
+                  style={styles.moneyInput}
+                  keyboardType="decimal-pad"
+                  {...numberPadAccessoryProps()}
+                />
+              </View>
+              {errors.maxLateFeeCap ? <Text style={styles.errorText}>{errors.maxLateFeeCap}</Text> : null}
+              <View style={styles.inlineTopGap}>
+                <ProtectionSummaryCard
+                  replacementValue={replacementValue}
+                  dailyLateFee={dailyLateFee}
+                  maxLateFeeCap={Math.max(maxLateFeeCap, dailyLateFee)}
+                  preauthAmount={calculatePreauthAmount(replacementValue)}
+                  compact
+                />
+              </View>
             </View>
 
             <View style={styles.section}>
@@ -388,6 +464,9 @@ const styles = StyleSheet.create({
   backHit: {
     marginBottom: 4,
   },
+  createHeader: {
+    marginBottom: 4,
+  },
   screenTitle: {
     fontSize: 22,
     fontWeight: '700',
@@ -476,6 +555,9 @@ const styles = StyleSheet.create({
     paddingRight: 14,
     fontSize: 18,
     color: ui.textPrimary,
+  },
+  inlineTopGap: {
+    marginTop: 10,
   },
   errorText: {
     marginTop: 6,

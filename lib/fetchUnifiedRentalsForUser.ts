@@ -18,6 +18,7 @@ export type UnifiedRentalRow = {
   renter_confirmed?: boolean;
   agreement_status?: 'pending' | 'confirmed' | string | null;
   confirmed_at?: string | null;
+  last_proposed_by?: string | null;
   proposal_version?: number | null;
   proposal_updated_at?: string | null;
   latest_proposal_message_id?: string | null;

@@ -9,30 +9,32 @@ export type RequestEditFormValues = {
   pickupRadiusMiles: string;
   durationType: DurationType | null;
   durationDays: string;
-  durationWeeks: string;
   totalPriceInput: string;
   deliveryFeeInput: string;
   locationInput: string;
+  pickupDateInput: string;
+  returnDateInput: string;
 };
 
 export function getRequestEditFormValues(req: Record<string, unknown>): RequestEditFormValues {
   return {
     toolName: String(req.toolName ?? ''),
     when: typeof req.when === 'string' ? req.when : null,
-    how: isHowKey(req.how) ? req.how : null,
+    how: req.how === 'delivery_and_pickup' ? 'delivery_only' : isHowKey(req.how) ? req.how : null,
     pickupRadiusMiles:
       req.pickupRadiusMiles != null && Number.isFinite(Number(req.pickupRadiusMiles))
         ? String(Math.max(1, Math.round(Number(req.pickupRadiusMiles))))
         : '10',
-    durationType: isDurationType(req.durationType) ? req.durationType : null,
+    durationType:
+      req.durationType === 'halfDay'
+        ? 'fullDay'
+        : req.durationType === 'weekly'
+          ? 'multiDay'
+          : isDurationType(req.durationType)
+            ? req.durationType
+            : null,
     durationDays:
       req.durationType === 'multiDay' &&
-      req.durationValue != null &&
-      Number.isFinite(Number(req.durationValue))
-        ? String(Math.round(Number(req.durationValue)))
-        : '',
-    durationWeeks:
-      req.durationType === 'weekly' &&
       req.durationValue != null &&
       Number.isFinite(Number(req.durationValue))
         ? String(Math.round(Number(req.durationValue)))
@@ -49,5 +51,17 @@ export function getRequestEditFormValues(req: Record<string, unknown>): RequestE
       return df != null && df >= 0 ? sanitizeMoneyDigits(String(df)) : '';
     })(),
     locationInput: req.location != null ? String(req.location) : '',
+    pickupDateInput:
+      typeof req.pickupDate === 'string'
+        ? req.pickupDate
+        : typeof req.beginAtIso === 'string'
+          ? req.beginAtIso.slice(0, 10)
+          : '',
+    returnDateInput:
+      typeof req.returnDate === 'string'
+        ? req.returnDate
+        : typeof req.returnAtIso === 'string'
+          ? req.returnAtIso.slice(0, 10)
+          : '',
   };
 }

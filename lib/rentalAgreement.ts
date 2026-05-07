@@ -7,6 +7,11 @@ type AgreementSnapshotInsert = {
   rentalSummaryJson: Record<string, unknown>;
   signedName: string;
   signedAt: string;
+  replacementValue: number;
+  dailyLateFee: number;
+  maxLateFeeCap: number;
+  preauthAmount: number;
+  verificationPhotoRefs: Array<{ id: string; path: string | null; phase: string | null }>;
 };
 
 export async function insertRentalAgreementSnapshot(
@@ -20,6 +25,11 @@ export async function insertRentalAgreementSnapshot(
     rental_summary_json: input.rentalSummaryJson,
     signed_name: input.signedName,
     signed_at: input.signedAt,
+    replacement_value: input.replacementValue,
+    daily_late_fee: input.dailyLateFee,
+    max_late_fee_cap: input.maxLateFeeCap,
+    preauth_amount: input.preauthAmount,
+    verification_photo_refs_json: input.verificationPhotoRefs,
   });
   if (error) {
     return { ok: false, error: error.message };

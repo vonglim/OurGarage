@@ -12,7 +12,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { Pressable } from '@/components/Pressable';
-import { ScreenBackButton } from '@/components/ScreenBackButton';
+import { BackHeader, RootScreenHeader } from '@/components/AppHeaders';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ScreenWrapper } from '@/components/ScreenWrapper';
@@ -137,7 +137,7 @@ export default function ProfileScreen() {
           styles.content,
           styles.scrollContent,
           {
-            paddingTop: 0,
+            paddingTop: ui.spaceMd,
             paddingBottom: 40 + insets.bottom,
           },
         ]}
@@ -145,11 +145,10 @@ export default function ProfileScreen() {
         showsVerticalScrollIndicator={false}
       >
         {isViewingOther ? (
-          <ScreenBackButton
-            onPress={() => router.back()}
-            style={{ marginTop: 8 }}
-          />
-        ) : null}
+          <BackHeader title="Profile" onBack={() => router.back()} style={styles.profileHeader} />
+        ) : (
+          <RootScreenHeader title="Profile" style={styles.profileHeader} />
+        )}
 
         <View
           style={[
@@ -370,6 +369,9 @@ const styles = StyleSheet.create({
   /** Lets short profiles fill the screen without breaking scroll when content is tall. */
   scrollContent: {
     flexGrow: 1,
+  },
+  profileHeader: {
+    marginBottom: 12,
   },
   hero: {
     overflow: 'hidden',

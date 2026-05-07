@@ -216,6 +216,8 @@ export async function addRequest(request: any): Promise<void> {
         typeof copy.requestLng === 'number' && Number.isFinite(copy.requestLng)
           ? copy.requestLng
           : null,
+      pickupDate: typeof copy.pickupDate === 'string' ? copy.pickupDate : null,
+      returnDate: typeof copy.returnDate === 'string' ? copy.returnDate : null,
     },
     posterUserId
   );
@@ -278,6 +280,8 @@ export function updateRequest(
     location: string;
     requestLat: number | null;
     requestLng: number | null;
+    pickupDate?: string | null;
+    returnDate?: string | null;
   }
 ) {
   const next = useRequestsStore.getState().requests.map((r) => {

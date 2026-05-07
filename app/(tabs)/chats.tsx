@@ -11,6 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { RootScreenHeader } from '@/components/AppHeaders';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { useAuthUserId } from '@/lib/authUser';
 import { getProfileNameForUserId, prefetchProfileNamesForUserIds } from '@/lib/profileDisplayName';
@@ -72,7 +73,7 @@ export default function ChatsScreen() {
           .from('offer_messages')
           .select('offer_id,author_id,receiver_id,body,kind,created_at')
           .or(`author_id.eq.${me},receiver_id.eq.${me}`)
-          .eq('kind', 'user_chat')
+          .in('kind', ['user_chat', 'meetup_proposal'])
           .order('created_at', { ascending: false })
           .limit(800);
         if (error) {
@@ -163,7 +164,7 @@ export default function ChatsScreen() {
             const row = (payload.new ?? payload.old) as { author_id?: string; receiver_id?: string; kind?: string } | null;
             if (!row) return;
             const k = String(row.kind ?? '').trim();
-            if (k !== 'user_chat') return;
+            if (k !== 'user_chat' && k !== 'meetup_proposal') return;
             const a = String(row.author_id ?? '').trim();
             const r = String(row.receiver_id ?? '').trim();
             if (a !== me && r !== me) return;
@@ -197,9 +198,9 @@ export default function ChatsScreen() {
   return (
     <ScreenWrapper style={styles.screenWrap}>
       <KeyboardDismissScreen style={styles.screen}>
-        <View style={[styles.header, { paddingTop: 12 }]}>
-        <Text style={styles.title}>Messages</Text>
-      </View>
+        <View style={styles.header}>
+          <RootScreenHeader title="Messages" />
+        </View>
 
       <ScrollView
         style={styles.scroll}

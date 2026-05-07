@@ -4,8 +4,11 @@ import type {
   RealtimePostgresUpdatePayload,
 } from '@supabase/supabase-js';
 import { REALTIME_SUBSCRIBE_STATES } from '@supabase/realtime-js';
+import { Platform } from 'react-native';
 
+import { getActiveChatOfferThreadId } from '@/lib/activeChatOfferThread';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { presentLocalChatBanner } from '@/lib/notifications';
 import {
   addNotificationToStore,
   replaceNotificationInStore,
@@ -219,6 +222,20 @@ export function startNotificationsServerSync(userId: string): () => void {
           const n = mapSupabaseNotificationToApp(r, currentUserId);
           if (n) {
             addNotificationToStore(n);
+            const rawType = typeof r.type === 'string' ? r.type : '';
+            const offerIdRaw = r.offer_id;
+            const offerId =
+              typeof offerIdRaw === 'string' && offerIdRaw.trim() !== '' ? offerIdRaw.trim() : '';
+            if (
+              Platform.OS !== 'web' &&
+              rawType === 'message' &&
+              offerId !== '' &&
+              offerId !== getActiveChatOfferThreadId()
+            ) {
+              const titleStr = typeof r.title === 'string' ? r.title.trim() : '';
+              const bodyStr = typeof r.body === 'string' ? r.body.trim() : '';
+              void presentLocalChatBanner(titleStr || 'Message', bodyStr || n.message);
+            }
           }
         }
       )

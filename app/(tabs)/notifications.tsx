@@ -1,4 +1,5 @@
 import { Pressable } from '@/components/Pressable';
+import { RootScreenHeader } from '@/components/AppHeaders';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React, { useCallback } from 'react';
@@ -205,9 +206,9 @@ export default function NotificationsScreen() {
   return (
     <ScreenWrapper style={styles.screenWrap}>
       <KeyboardDismissScreen style={styles.screen}>
-        <View style={[styles.header, { paddingTop: 12 }]}>
-        <Text style={styles.title}>Notifications</Text>
-      </View>
+        <View style={styles.header}>
+          <RootScreenHeader title="Alerts" />
+        </View>
 
       <FlatList
         style={styles.scroll}
@@ -288,6 +289,7 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 0,
     alignItems: 'flex-start',
+    paddingTop: ui.spaceMd,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,

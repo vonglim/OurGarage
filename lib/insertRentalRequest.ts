@@ -4,11 +4,13 @@ import { getSupabase } from '@/lib/supabase';
 
 declare const __DEV__: boolean;
 
-/** UI / store may still use `weekly`; DB column expects `week`. */
-export type RentalRequestDurationInput = 'half' | 'full' | 'weekly';
+/** MVP supports full-day only; keep week mapping compatibility. */
+export type RentalRequestDurationInput = 'full' | 'multiDay' | 'weekly';
 
-function durationTypeForDb(d: RentalRequestDurationInput): 'half' | 'full' | 'week' {
-  return d === 'weekly' ? 'week' : d;
+function durationTypeForDb(d: RentalRequestDurationInput): 'full' | 'week' {
+  if (d === 'weekly') return 'week';
+  if (d === 'multiDay') return 'full';
+  return d;
 }
 
 export async function insertRentalRequest(row: {

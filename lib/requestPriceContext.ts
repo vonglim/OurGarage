@@ -13,7 +13,7 @@ export function billingDayCountForRequest(req: {
     typeof req.durationValue === 'number' && Number.isFinite(req.durationValue) && req.durationValue >= 1
       ? Math.floor(req.durationValue)
       : 1;
-  if (t === 'halfDay') return 0.5;
+  if (t === 'halfDay') return 1;
   if (t === 'fullDay') return 1;
   if (t === 'weekly') return dv * 7;
   return dv;

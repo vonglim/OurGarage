@@ -17,10 +17,12 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Pressable } from '@/components/Pressable';
-import { ScreenBackButton } from '@/components/ScreenBackButton';
+import { BackHeader } from '@/components/AppHeaders';
+import { ProtectionSummaryCard } from '@/components/ProtectionSummaryCard';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { ui } from '@/constants/appUi';
 import { uploadListingImage } from '@/lib/uploadListingImage';
+import { calculatePreauthAmount } from '@/lib/rentalProtection';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
 
 declare const __DEV__: boolean;
@@ -35,10 +37,11 @@ type ScrollSectionKey =
   | 'photos'
   | 'name'
   | 'description'
-  | 'half'
   | 'daily'
   | 'weekly'
-  | 'replacement';
+  | 'replacement'
+  | 'lateFee'
+  | 'lateCap';
 
 export default function RentOutScreen() {
   const router = useRouter();
@@ -47,16 +50,16 @@ export default function RentOutScreen() {
   const sectionScrollY = useRef<Partial<Record<ScrollSectionKey, number>>>({});
   const nameRef = useRef<TextInput>(null);
   const descRef = useRef<TextInput>(null);
-  const halfRef = useRef<TextInput>(null);
   const dayRef = useRef<TextInput>(null);
   const weekRef = useRef<TextInput>(null);
   const replacementRef = useRef<TextInput>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [halfDay, setHalfDay] = useState('');
   const [daily, setDaily] = useState('');
   const [weekly, setWeekly] = useState('');
   const [replacementValue, setReplacementValue] = useState('');
+  const [dailyLateFee, setDailyLateFee] = useState('');
+  const [maxLateFeeCap, setMaxLateFeeCap] = useState('');
   const [submitAttempted, setSubmitAttempted] = useState(false);
   /** URIs from the camera session; first is shown in the hero preview. */
   const [listingPhotoUris, setListingPhotoUris] = useState<string[]>([]);
@@ -104,10 +107,11 @@ export default function RentOutScreen() {
   function resetFormState() {
     setTitle('');
     setDescription('');
-    setHalfDay('');
     setDaily('');
     setWeekly('');
     setReplacementValue('');
+    setDailyLateFee('');
+    setMaxLateFeeCap('');
     setListingPhotoUris([]);
     setSubmitAttempted(false);
     prevPhotoCountRef.current = 0;
@@ -117,6 +121,9 @@ export default function RentOutScreen() {
     const photoOk = listingPhotoUris.length > 0;
     const titleOk = title.trim().length > 0;
     const dailyOk = daily.trim().length > 0;
+    const replacementNum = Number(replacementValue) || 0;
+    const dailyLateFeeNum = Number(dailyLateFee) || 0;
+    const maxLateFeeCapNum = Number(maxLateFeeCap) || 0;
     if (!photoOk) {
       setSubmitAttempted(true);
       scrollToSection('photos');
@@ -133,6 +140,14 @@ export default function RentOutScreen() {
         dayRef.current?.focus();
       }
       alert('Please add an item name and daily price');
+      return;
+    }
+    if (replacementNum < 0 || dailyLateFeeNum < 0 || maxLateFeeCapNum < 0) {
+      alert('Protection values must be 0 or greater');
+      return;
+    }
+    if (maxLateFeeCapNum < dailyLateFeeNum) {
+      alert('Maximum late fee cap must be at least daily late fee');
       return;
     }
   
@@ -158,10 +173,11 @@ export default function RentOutScreen() {
       const response = await supabase.from('listings').insert({
         title,
         description,
-        half_day_price: Number(halfDay) || null,
         daily_price: Number(daily),
         weekly_price: Number(weekly) || null,
         replacement_value: Number(replacementValue) || null,
+        daily_late_fee: dailyLateFeeNum,
+        max_late_fee_cap: maxLateFeeCapNum,
         images: uploadedImageUrls,
       });
 
@@ -219,10 +235,7 @@ export default function RentOutScreen() {
             keyboardShouldPersistTaps="handled"
           >
             <View>
-              <View style={styles.headerTitleBlock}>
-                <ScreenBackButton onPress={() => router.back()} />
-                <Text style={styles.headerTitle}>List Your Equipment</Text>
-              </View>
+              <BackHeader title="List Your Equipment" onBack={() => router.back()} style={styles.rentOutHeader} />
 
               <View onLayout={registerSectionLayout('photos')}>
                 <Text style={styles.fieldLabel}>Photos</Text>
@@ -286,31 +299,12 @@ export default function RentOutScreen() {
                   multiline
                   textAlignVertical="top"
                   returnKeyType="default"
-                  onEndEditing={() => halfRef.current?.focus()}
+                  onEndEditing={() => dayRef.current?.focus()}
                   onFocus={() => scrollToSection('description')}
                 />
               </View>
 
               <Text style={styles.sectionTitle}>Pricing</Text>
-
-              <View onLayout={registerSectionLayout('half')}>
-                <Text style={styles.fieldLabel}>Half-day price ($)</Text>
-                <TextInput
-                  ref={halfRef}
-                  style={styles.input}
-                  value={halfDay}
-                  onChangeText={setHalfDay}
-                  placeholder=""
-                  keyboardType="numeric"
-                  returnKeyType="done"
-                  blurOnSubmit
-                  onSubmitEditing={() => {
-                    Keyboard.dismiss();
-                    requestAnimationFrame(() => dayRef.current?.focus());
-                  }}
-                  onFocus={() => scrollToSection('half')}
-                />
-              </View>
 
               <View onLayout={registerSectionLayout('daily')}>
                 <Text style={styles.fieldLabel}>Daily price ($)</Text>
@@ -364,6 +358,34 @@ export default function RentOutScreen() {
                   onFocus={() => scrollToSection('replacement')}
                 />
               </View>
+              <View onLayout={registerSectionLayout('lateFee')}>
+                <Text style={styles.fieldLabel}>Daily late fee ($)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={dailyLateFee}
+                  onChangeText={setDailyLateFee}
+                  placeholder=""
+                  keyboardType="numeric"
+                  returnKeyType="done"
+                  blurOnSubmit
+                  onSubmitEditing={() => Keyboard.dismiss()}
+                  onFocus={() => scrollToSection('lateFee')}
+                />
+              </View>
+              <View onLayout={registerSectionLayout('lateCap')}>
+                <Text style={styles.fieldLabel}>Maximum late fee cap ($)</Text>
+                <TextInput
+                  style={[styles.input, styles.inputTightBottom]}
+                  value={maxLateFeeCap}
+                  onChangeText={setMaxLateFeeCap}
+                  placeholder=""
+                  keyboardType="numeric"
+                  returnKeyType="done"
+                  blurOnSubmit
+                  onSubmitEditing={() => Keyboard.dismiss()}
+                  onFocus={() => scrollToSection('lateCap')}
+                />
+              </View>
 
             <Text style={styles.helperText}>
               {
@@ -374,6 +396,14 @@ export default function RentOutScreen() {
             <Text style={styles.helperTextFollowUp}>
               If unsure, enter an estimated used value. This helps protect both you and the renter.
             </Text>
+            <View style={styles.protectionSummaryWrap}>
+              <ProtectionSummaryCard
+                replacementValue={Number(replacementValue) || 0}
+                dailyLateFee={Number(dailyLateFee) || 0}
+                maxLateFeeCap={Math.max(Number(maxLateFeeCap) || 0, Number(dailyLateFee) || 0)}
+                preauthAmount={calculatePreauthAmount(Number(replacementValue) || 0)}
+              />
+            </View>
 
             <View style={styles.protectionInfoRow}>
               <Ionicons
@@ -427,6 +457,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   headerTitleBlock: {
+    marginBottom: 14,
+  },
+  rentOutHeader: {
     marginBottom: 14,
   },
   headerTitle: {
@@ -541,6 +574,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     color: HELPER_GRAY,
+  },
+  protectionSummaryWrap: {
+    marginTop: 12,
   },
   submit: {
     width: '100%',

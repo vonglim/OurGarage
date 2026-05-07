@@ -24,6 +24,8 @@ type RequestPayload = {
   location: string;
   requestLat: number | null;
   requestLng: number | null;
+  pickupDate?: string | null;
+  returnDate?: string | null;
 };
 
 /** Extra fields not in dedicated DB columns (single-table MVP). */
@@ -38,6 +40,8 @@ function encodeDescriptionExtras(payload: RequestPayload): string {
     location: payload.location,
     requestLat: payload.requestLat,
     requestLng: payload.requestLng,
+    pickupDate: payload.pickupDate ?? null,
+    returnDate: payload.returnDate ?? null,
   };
   return JSON.stringify(meta);
 }
@@ -48,16 +52,26 @@ function decodeDescriptionExtras(description: string | null): Partial<RequestPay
     const o = JSON.parse(description) as Record<string, unknown>;
     return {
       when: typeof o.when === 'string' ? o.when : null,
-      how: typeof o.how === 'string' ? o.how : 'pickup_nearby',
+      how:
+        typeof o.how === 'string'
+          ? o.how === 'delivery_and_pickup'
+            ? 'delivery_only'
+            : o.how
+          : 'pickup_nearby',
       pickupRadiusMiles:
         typeof o.pickupRadiusMiles === 'number' && Number.isFinite(o.pickupRadiusMiles)
           ? o.pickupRadiusMiles
           : 10,
-      durationType: typeof o.durationType === 'string' ? o.durationType : 'multiDay',
+      durationType:
+        typeof o.durationType === 'string'
+          ? o.durationType === 'halfDay'
+            ? 'fullDay'
+            : o.durationType
+          : 'fullDay',
       durationValue:
         typeof o.durationValue === 'number' && Number.isFinite(o.durationValue)
           ? o.durationValue
-          : 2,
+          : 1,
       deliveryFee:
         typeof o.deliveryFee === 'number' && Number.isFinite(o.deliveryFee) ? o.deliveryFee : null,
       location: typeof o.location === 'string' ? o.location : '',
@@ -65,6 +79,18 @@ function decodeDescriptionExtras(description: string | null): Partial<RequestPay
         typeof o.requestLat === 'number' && Number.isFinite(o.requestLat) ? o.requestLat : null,
       requestLng:
         typeof o.requestLng === 'number' && Number.isFinite(o.requestLng) ? o.requestLng : null,
+      pickupDate:
+        typeof o.pickupDate === 'string'
+          ? o.pickupDate
+          : typeof o.beginAtIso === 'string'
+            ? o.beginAtIso.slice(0, 10)
+            : null,
+      returnDate:
+        typeof o.returnDate === 'string'
+          ? o.returnDate
+          : typeof o.returnAtIso === 'string'
+            ? o.returnAtIso.slice(0, 10)
+            : null,
     };
   } catch {
     return {};

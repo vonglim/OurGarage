@@ -7,6 +7,7 @@ import {
   Alert,
   Animated,
   ActivityIndicator,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   ScrollView,
@@ -20,6 +21,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Pressable } from '@/components/Pressable';
+import { ProtectionSummaryCard } from '@/components/ProtectionSummaryCard';
+import { BackHeader } from '@/components/AppHeaders';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useAuthUserId } from '@/lib/authUser';
 import { formatUsd } from '@/lib/money';
@@ -29,6 +32,7 @@ import {
   uploadRentalEvidencePhoto,
 } from '@/lib/rentalEvidenceUpload';
 import { isPhotoUploadWindowOpen } from '@/lib/rentalPhotoWindow';
+import { calculatePreauthAmount } from '@/lib/rentalProtection';
 import {
   deleteVerificationPhotoById,
   deriveDualConfirmation,
@@ -93,6 +97,7 @@ type RentalRow = {
   preauth_amount?: number | null;
   preauth_authorized_at?: string | null;
   daily_late_fee?: number | null;
+  max_late_fee_cap?: number | null;
   grace_period_hours?: number | null;
   replacement_value?: number | null;
 };
@@ -851,19 +856,6 @@ export default function RentalScreen() {
     setViewerImageError(null);
     setViewerImageLoading(Boolean(viewerSourceUri));
   }, [photoViewerVisible, photoViewerIndex, viewerSourceUri]);
-  useEffect(() => {
-    if (!__DEV__ || !photoViewerVisible || !viewerPhoto) return;
-    void (async () => {
-      const debugSigned = viewerPhoto.path ? await signedUrlForEvidencePath(supabase, viewerPhoto.path) : null;
-      console.log('[verification viewer signed-url check]', {
-        selectedPhotoId: viewerPhoto.id,
-        storagePath: viewerPhoto.path ?? null,
-        thumbnailUri: viewerPhoto.signedUrl ?? null,
-        fullscreenUri: viewerSourceUri,
-        signedUrlGenerationResult: debugSigned,
-      });
-    })();
-  }, [photoViewerVisible, viewerPhoto, viewerSourceUri, supabase]);
 
   const requestTimestamp = useMemo(() => {
     const n = Number(request?.timestamp);
@@ -1018,29 +1010,21 @@ export default function RentalScreen() {
   const canUploadPickup = viewerRole === 'owner' && !handoffCompleted && pickupWindow.allowed;
   const canUploadReturn = viewerRole === 'renter' && returnWorkflowEnabled && !returnCompleted && returnWindow.allowed;
   const replacementValue = Number(rental.replacement_value ?? Math.max(finalPrice * 3, 150));
-  const preauthAmount = Number(rental.preauth_amount ?? Math.round(replacementValue * 0.5 * 100) / 100);
+  const preauthAmount = Number(rental.preauth_amount ?? calculatePreauthAmount(replacementValue));
   const lateFee = Number(rental.daily_late_fee ?? Math.max(10, Math.round(finalPrice * 0.1)));
+  const maxLateFeeCap = Number(rental.max_late_fee_cap ?? Math.max(lateFee, lateFee * 7));
   const graceHours = Number(rental.grace_period_hours ?? 2);
   const agreementVersion = Math.max(1, Number(rental.agreement_version ?? 1));
   const agreementText = [
     '1. Renter is responsible for returning the item in the same condition received, excluding normal wear.',
-    '2. Late fees apply after the grace period shown in this agreement.',
-    '3. Damage, loss, or non-return may result in additional charges up to replacement value.',
+    '2. Late fees may apply after the grace period shown in this agreement, subject to review.',
+    '3. Damage, loss, missing components, or non-return may result in eligible charges up to replacement value.',
     '4. Verification photos and rental notes are treated as shared evidence for dispute review.',
     '5. Failure to return the item may trigger additional marketplace recovery action.',
     '6. Both parties agree evidence and status transitions are tied to this rental lifecycle.',
   ].join('\n');
 
   const openPhotoViewer = (phase: VerificationPhase, index: number) => {
-    const selected = (phase === 'pickup' ? pickupEvidenceDisplay : returnEvidenceDisplay)[index] ?? null;
-    if (__DEV__) {
-      console.log('[verification viewer open]', {
-        selectedPhotoId: selected?.id ?? null,
-        storagePath: selected?.path ?? null,
-        thumbnailUri: selected?.signedUrl ?? null,
-        fullscreenUri: selected?.signedUrl ?? null,
-      });
-    }
     setViewerImageError(null);
     setViewerImageRetryKey(0);
     setPhotoViewerPhase(phase);
@@ -1229,14 +1213,17 @@ export default function RentalScreen() {
     if (!me || viewerRole !== 'owner' || !canBeginHandoff) return;
     const holdReplacementValue =
       typeof rental.replacement_value === 'number' ? rental.replacement_value : Math.max(finalPrice * 3, 150);
-    const holdPreauthAmount = Math.round(holdReplacementValue * 0.5 * 100) / 100;
+    const holdPreauthAmount = calculatePreauthAmount(holdReplacementValue);
+    const holdLateFee = rental.daily_late_fee ?? Math.max(10, Math.round(finalPrice * 0.1));
+    const holdMaxLateFeeCap = rental.max_late_fee_cap ?? Math.max(holdLateFee, holdLateFee * 7);
     await persistReadinessFlags({
       handoff_approved_by_owner: true,
       handoff_approval_started_at: new Date().toISOString(),
       replacement_value: holdReplacementValue,
       preauth_amount: holdPreauthAmount,
       preauth_status: 'pending',
-      daily_late_fee: rental.daily_late_fee ?? Math.max(10, Math.round(finalPrice * 0.1)),
+      daily_late_fee: holdLateFee,
+      max_late_fee_cap: holdMaxLateFeeCap,
       grace_period_hours: rental.grace_period_hours ?? 2,
     });
   };
@@ -1246,6 +1233,11 @@ export default function RentalScreen() {
     if (!signed || !agreementConsent || !me || viewerRole !== 'renter' || !canRenterFinalizeHandoff) return;
     const signedAt = new Date().toISOString();
     const normalizedSignedName = signed.toUpperCase();
+    const signingPhotoRefs = [...pickupEvidenceDisplay, ...returnEvidenceDisplay].map((p) => ({
+      id: p.id,
+      path: p.path ?? null,
+      phase: p.phase ?? null,
+    }));
     const snapshot = await insertRentalAgreementSnapshot(supabase, {
       rentalId: rental.id,
       agreementVersion,
@@ -1258,10 +1250,16 @@ export default function RentalScreen() {
         replacement_value: replacementValue,
         preauthorization_amount: preauthAmount,
         daily_late_fee: lateFee,
+        max_late_fee_cap: maxLateFeeCap,
         grace_period_hours: graceHours,
       },
       signedName: normalizedSignedName,
       signedAt,
+      replacementValue,
+      dailyLateFee: lateFee,
+      maxLateFeeCap,
+      preauthAmount,
+      verificationPhotoRefs: signingPhotoRefs,
     });
     if (!snapshot.ok) {
       Alert.alert('Could not finalize agreement', snapshot.error ?? 'Please try again.');
@@ -1433,10 +1431,12 @@ export default function RentalScreen() {
           alwaysBounceVertical
         >
           <View style={styles.contentWrap}>
-            <View style={styles.headerTextBlock}>
-              <Text style={styles.toolName}>{request?.title || 'Item'}</Text>
-              <Text style={styles.headerSubtitle}>{relationshipSubtitle}</Text>
-            </View>
+            <BackHeader
+              title={request?.title || 'Rental Details'}
+              subtitle={relationshipSubtitle}
+              onBack={() => router.back()}
+              style={styles.rentalBackHeader}
+            />
 
             {lifecyclePhase === 'completed' ? (
               <View style={[styles.progressRow, styles.progressRowComplete]}>
@@ -1577,6 +1577,12 @@ export default function RentalScreen() {
                 </View>
               </View>
             </View>
+            <ProtectionSummaryCard
+              replacementValue={replacementValue}
+              dailyLateFee={lateFee}
+              maxLateFeeCap={maxLateFeeCap}
+              preauthAmount={preauthAmount}
+            />
 
             {agreementStatus === 'confirmed' ? (
               <View style={[styles.checklistCard, !isTabletMargins && styles.cardPadPhone]}>
@@ -1613,6 +1619,11 @@ export default function RentalScreen() {
                       addDisabled={!canUploadPickup}
                       addDisabledReason={!canUploadPickup ? pickupWindow.helperText : null}
                     />
+                    <Text style={styles.photoWindowHelper}>
+                      {handoffCompleted
+                        ? 'Pickup evidence is locked after handoff approval is completed.'
+                        : 'Pickup evidence remains editable until handoff approval is completed.'}
+                    </Text>
                     <View style={styles.verificationSubheadRow}>
                       <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Your responsibilities</Text>
                       <Pressable
@@ -1761,6 +1772,11 @@ export default function RentalScreen() {
                     addDisabled={!canUploadReturn}
                     addDisabledReason={!canUploadReturn ? returnWindow.helperText : null}
                   />
+                  <Text style={styles.photoWindowHelper}>
+                    {returnCompleted
+                      ? 'Return evidence is locked after return confirmation is completed.'
+                      : 'Return evidence remains editable until return confirmation is completed.'}
+                  </Text>
                   <View style={styles.verificationSubheadRow}>
                     <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Your responsibilities</Text>
                     <Pressable
@@ -2082,6 +2098,10 @@ export default function RentalScreen() {
 
         <Modal visible={agreementModalVisible} transparent animationType="slide" onRequestClose={() => setAgreementModalVisible(false)}>
           <View style={styles.agreementModalBackdrop}>
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+              keyboardVerticalOffset={Platform.OS === 'ios' ? 20 : 0}
+            >
             <View style={styles.agreementModalCard}>
               <ScrollView style={styles.agreementScroll} showsVerticalScrollIndicator={false}>
                 <Text style={styles.cardSectionTitle}>Rental Agreement</Text>
@@ -2118,9 +2138,20 @@ export default function RentalScreen() {
                     <Text style={styles.agreementSummaryValue}>{formatUsd(lateFee)}</Text>
                   </View>
                   <View style={styles.agreementSummaryRow}>
+                    <Text style={styles.agreementSummaryLabel}>Maximum Late Fee Cap</Text>
+                    <Text style={styles.agreementSummaryValue}>{formatUsd(maxLateFeeCap)}</Text>
+                  </View>
+                  <View style={styles.agreementSummaryRow}>
                     <Text style={styles.agreementSummaryLabel}>Grace Period</Text>
                     <Text style={styles.agreementSummaryValue}>{`${graceHours} hours`}</Text>
                   </View>
+                  <ProtectionSummaryCard
+                    replacementValue={replacementValue}
+                    dailyLateFee={lateFee}
+                    maxLateFeeCap={maxLateFeeCap}
+                    preauthAmount={preauthAmount}
+                    compact
+                  />
                 </View>
 
                 <View style={styles.agreementSectionCard}>
@@ -2133,13 +2164,19 @@ export default function RentalScreen() {
                 </View>
 
                 <View style={styles.agreementSectionCard}>
-                  <Text style={styles.agreementSectionTitle}>Authorization Hold</Text>
+                  <Text style={styles.agreementSectionTitle}>Preauthorization Hold</Text>
                   <Text style={styles.agreementHoldAmount}>{`Preauthorization Hold: ${formatUsd(preauthAmount)}`}</Text>
                   <Text style={styles.agreementParagraph}>
-                    This is a temporary hold only and not an immediate charge.
+                    This is a temporary authorization hold and not an immediate charge.
                   </Text>
                   <Text style={styles.agreementParagraph}>
-                    No funds are charged unless claim conditions are met.
+                    Funds are not transferred unless an eligible claim is approved after review.
+                  </Text>
+                  <Text style={styles.agreementParagraph}>
+                    Eligible claim reasons may include item damage, excessive late fees, missing components, or non-return.
+                  </Text>
+                  <Text style={styles.agreementParagraph}>
+                    Holds may expire automatically according to payment provider policies and timing windows.
                   </Text>
                 </View>
 
@@ -2191,6 +2228,7 @@ export default function RentalScreen() {
                 </Pressable>
               </View>
             </View>
+            </KeyboardAvoidingView>
           </View>
         </Modal>
       </ScreenEntrance>
@@ -2229,6 +2267,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
     paddingTop: 2,
     paddingBottom: 2,
+  },
+  rentalBackHeader: {
+    marginBottom: 6,
   },
   progressRow: {
     width: '100%',

@@ -13,7 +13,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Pressable } from '@/components/Pressable';
-import { ScreenBackButton } from '@/components/ScreenBackButton';
+import { ProtectionSummaryCard } from '@/components/ProtectionSummaryCard';
+import { BackHeader } from '@/components/AppHeaders';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { ui } from '@/constants/appUi';
@@ -33,36 +34,23 @@ declare const __DEV__: boolean;
 /** Browse/supabase rows attach `images` at runtime; store type stays unchanged. */
 type ListingDetailRow = ToolListing & { images?: string[] };
 
-type DurationKey = 'half' | 'full' | 'weekly';
+type DurationKey = 'full' | 'multi';
 
 const HERO_HEIGHT = 280;
 
 const DURATION_OPTIONS: { key: DurationKey; label: string }[] = [
-  { key: 'half', label: 'Half Day' },
   { key: 'full', label: 'Full Day' },
-  { key: 'weekly', label: 'Weekly' },
+  { key: 'multi', label: 'Multi Day' },
 ];
 
-function priceForDuration(basePrice: number, key: DurationKey): number {
-  switch (key) {
-    case 'half':
-      return basePrice * 0.6;
-    case 'full':
-      return basePrice;
-    case 'weekly':
-      return basePrice * 5;
-  }
+function priceForDuration(basePrice: number, key: DurationKey, dayCount: number): number {
+  if (key === 'multi') return basePrice * Math.max(2, dayCount);
+  return basePrice;
 }
 
 function unitForDurationSelection(key: DurationKey, listingPriceUnit?: string): string {
-  switch (key) {
-    case 'half':
-      return 'half day';
-    case 'full':
-      return listingPriceUnit?.trim() || 'day';
-    case 'weekly':
-      return 'week';
-  }
+  if (key === 'multi') return 'total';
+  return listingPriceUnit?.trim() || 'day';
 }
 
 function firstParam(v: string | string[] | undefined): string | undefined {
@@ -76,6 +64,7 @@ export default function ListingDetailScreen() {
   const [heroWidth, setHeroWidth] = useState(windowWidth);
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [selectedDuration, setSelectedDuration] = useState<DurationKey>('full');
+  const [multiDayCountInput, setMultiDayCountInput] = useState('2');
   const insets = useSafeAreaInsets();
   const currentUserId = useAuthUserId();
   const params = useLocalSearchParams<{ listingId?: string | string[] }>();
@@ -138,11 +127,11 @@ export default function ListingDetailScreen() {
         <ScreenEntrance style={styles.entranceFlex}>
           <View style={styles.contentWithStickyCta}>
             <View style={styles.scroll}>
+              <BackHeader title="Listing Details" onBack={() => router.back()} style={styles.inlineDetailHeader} />
               <View
                 style={styles.heroWrap}
                 onLayout={(e) => setHeroWidth(e.nativeEvent.layout.width)}
               >
-                <ScreenBackButton variant="overlay" onPress={() => router.back()} />
                 {heroUrls.length === 0 ? (
                   <View style={styles.heroPlaceholder} />
                 ) : (
@@ -206,7 +195,11 @@ export default function ListingDetailScreen() {
                   <Text style={styles.title}>{listing.name}</Text>
                   <Text style={styles.price}>
                     {formatListingPriceWithUnit(
-                      priceForDuration(listing.price, selectedDuration),
+                      priceForDuration(
+                        listing.price,
+                        selectedDuration,
+                        Math.max(2, parseInt(multiDayCountInput || '0', 10) || 2)
+                      ),
                       unitForDurationSelection(selectedDuration, listing.priceUnit)
                     )}
                   </Text>
@@ -221,7 +214,11 @@ export default function ListingDetailScreen() {
                   <Text style={styles.durationHeading}>Select duration</Text>
                   {DURATION_OPTIONS.map(({ key, label }) => {
                     const selected = selectedDuration === key;
-                    const rowPrice = priceForDuration(listing.price, key);
+                    const rowPrice = priceForDuration(
+                      listing.price,
+                      key,
+                      Math.max(2, parseInt(multiDayCountInput || '0', 10) || 2)
+                    );
                     return (
                       <Pressable
                         key={key}
@@ -253,6 +250,28 @@ export default function ListingDetailScreen() {
                       </Pressable>
                     );
                   })}
+                  {selectedDuration === 'multi' ? (
+                    <View style={styles.multiDayWrap}>
+                      <Text style={styles.durationHeading}>Number of days</Text>
+                      <Pressable
+                        pressOpacityFeedback={false}
+                        style={({ pressed }) => [styles.durationStepper, pressed && styles.durationOptionPressed]}
+                        onPress={() =>
+                          setMultiDayCountInput(String(Math.max(2, (parseInt(multiDayCountInput || '0', 10) || 2) - 1)))
+                        }
+                      >
+                        <Text style={styles.durationStepperText}>−</Text>
+                      </Pressable>
+                      <Text style={styles.multiDayValue}>{Math.max(2, parseInt(multiDayCountInput || '0', 10) || 2)}</Text>
+                      <Pressable
+                        pressOpacityFeedback={false}
+                        style={({ pressed }) => [styles.durationStepper, pressed && styles.durationOptionPressed]}
+                        onPress={() => setMultiDayCountInput(String(Math.max(2, (parseInt(multiDayCountInput || '0', 10) || 2) + 1)))}
+                      >
+                        <Text style={styles.durationStepperText}>＋</Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
                 </View>
 
                 {description ? (
@@ -260,6 +279,14 @@ export default function ListingDetailScreen() {
                     <Text style={styles.description}>{listing.description}</Text>
                   </View>
                 ) : null}
+                <View style={styles.protectionBlock}>
+                  <ProtectionSummaryCard
+                    replacementValue={Number(listing.replacementValue ?? 0)}
+                    dailyLateFee={Number(listing.dailyLateFee ?? 0)}
+                    maxLateFeeCap={Math.max(Number(listing.maxLateFeeCap ?? 0), Number(listing.dailyLateFee ?? 0))}
+                    compact
+                  />
+                </View>
               </ScrollView>
             </View>
 
@@ -281,13 +308,14 @@ export default function ListingDetailScreen() {
                     return;
                   }
 
-                  const price = priceForDuration(listing.price, selectedDuration);
+                  const dayCount = Math.max(2, parseInt(multiDayCountInput || '0', 10) || 2);
+                  const price = priceForDuration(listing.price, selectedDuration, dayCount);
 
                   try {
                     await insertRentalRequest({
                       listingId: listing.id,
                       renterUserId: renterId,
-                      durationType: selectedDuration,
+                      durationType: selectedDuration === 'multi' ? 'multiDay' : 'full',
                       price,
                     });
                   } catch (err: unknown) {
@@ -366,6 +394,9 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     paddingBottom: ui.spaceMd,
   },
+  inlineDetailHeader: {
+    marginBottom: ui.spaceSm,
+  },
   /** Bleed hero to horizontal edges (ScreenWrapper uses 16px horizontal padding). */
   heroWrap: {
     marginHorizontal: -16,
@@ -433,6 +464,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     marginBottom: ui.spaceLg,
   },
+  protectionBlock: {
+    marginBottom: ui.spaceLg,
+  },
   description: {
     fontSize: 16,
     color: ui.textPrimary,
@@ -480,6 +514,35 @@ const styles = StyleSheet.create({
   },
   durationOptionPressed: {
     opacity: 0.92,
+  },
+  multiDayWrap: {
+    marginTop: ui.spaceSm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: ui.spaceSm,
+  },
+  durationStepper: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: ui.background,
+  },
+  durationStepperText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    lineHeight: 20,
+  },
+  multiDayValue: {
+    minWidth: 28,
+    textAlign: 'center',
+    fontSize: 16,
+    fontWeight: '700',
+    color: ui.textPrimary,
   },
   durationOptionLabel: {
     fontSize: 16,

@@ -1,54 +1,26 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
 import { Image } from 'expo-image';
-import { router, useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
-
 import * as ImagePicker from 'expo-image-picker';
-import {
-  Alert,
-  Keyboard,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { Alert, Keyboard, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+
 import { numberPadAccessoryProps } from '@/components/NumberPadKeyboardAccessory';
-import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { ui } from '@/constants/appUi';
-
 import { getAuthUserIdSync } from '@/lib/authUser';
-import {
-  formatUsd,
-  getNumericTotalPrice,
-  parseMoneyToNumber,
-  sanitizeMoneyDigits,
-} from '@/lib/money';
-import {
-  billingDayCountForRequest,
-  formatPerDayUsd,
-  suggestedOfferTotalFromListed
-} from '@/lib/requestPriceContext';
-
-import { showFeedbackToast } from '@/store/feedbackToastStore';
-import {
-  addOffer,
-  getOfferByRequestAndRenterId,
-  posterCounterOffersRemainingForRenter,
-  useOffersStore
-} from '@/store/offersStore';
-
+import { formatUsd, getNumericTotalPrice, parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
+import { billingDayCountForRequest } from '@/lib/requestPriceContext';
 import { isUuidString } from '@/lib/requestOwnership';
 import { uploadOfferImage } from '@/lib/uploadOfferImage';
-import { getRequestBySupabaseId } from '@/store/requestsStore';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
+import { showFeedbackToast } from '@/store/feedbackToastStore';
+import { addOffer, getOfferByRequestAndRenterId, posterCounterOffersRemainingForRenter, useOffersStore } from '@/store/offersStore';
+import { getRequestBySupabaseId } from '@/store/requestsStore';
 
-/** Same thumbnail geometry as `app/camera.tsx` strip. */
 const THUMB = 60;
 const THUMB_GAP = 8;
 const PHOTO_BORDER = '#D1D5DB';
@@ -63,7 +35,6 @@ function firstParam(v: string | string[] | undefined): string | undefined {
 export default function MakeOfferScreen() {
   const params = useLocalSearchParams<{ requestId?: string | string[] }>();
   const routerNav = useRouter();
-
   const requestIdStr = firstParam(params.requestId);
 
   const request = useMemo(() => {
@@ -72,7 +43,6 @@ export default function MakeOfferScreen() {
   }, [requestIdStr]);
 
   const offersFromStore = useOffersStore((s) => s.offers);
-
   const existingForThread = useMemo(() => {
     if (!request) return undefined;
     return getOfferByRequestAndRenterId(request.timestamp, getAuthUserIdSync());
@@ -80,39 +50,27 @@ export default function MakeOfferScreen() {
 
   const counterOfferSlots = useMemo(() => {
     if (!request) return 0;
-    return posterCounterOffersRemainingForRenter(
-      request.timestamp,
-      getAuthUserIdSync()
-    );
+    return posterCounterOffersRemainingForRenter(request.timestamp, getAuthUserIdSync());
   }, [offersFromStore, request]);
 
-  const dayCount = useMemo(() => {
-    if (!request) return 1;
-    return billingDayCountForRequest(request);
-  }, [request]);
-
-  const listedTotal = useMemo(() => {
-    if (!request) return null;
-    return getNumericTotalPrice(request);
-  }, [request]);
-
-  const suggestedTotal = useMemo(() => {
-    if (!listedTotal || listedTotal <= 0) return null;
-    return suggestedOfferTotalFromListed(listedTotal);
-  }, [listedTotal]);
+  const dayCount = useMemo(() => (request ? billingDayCountForRequest(request) : 1), [request]);
+  const listedTotal = useMemo(() => (request ? getNumericTotalPrice(request) : null), [request]);
 
   const [priceDraft, setPriceDraft] = useState('');
   const [messageDraft, setMessageDraft] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [uploadingPhotos, setUploadingPhotos] = useState(false);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [termsOpen, setTermsOpen] = useState(false);
+  const [replacementValueDraft, setReplacementValueDraft] = useState('');
+  const [deliveryFeeDraft, setDeliveryFeeDraft] = useState('');
+  const [dailyLateFeeDraft, setDailyLateFeeDraft] = useState('');
 
   React.useEffect(() => {
-    if (suggestedTotal != null) {
-      setPriceDraft(sanitizeMoneyDigits(String(suggestedTotal)));
-    }
-  }, [requestIdStr, suggestedTotal]);
+    if (listedTotal != null && listedTotal > 0) setPriceDraft(sanitizeMoneyDigits(String(listedTotal)));
+    else setPriceDraft('');
+  }, [requestIdStr, listedTotal]);
 
-  /** Same pattern as List Your Equipment: read multi-capture session after returning from `/camera`. */
   useFocusEffect(
     useCallback(() => {
       const { capturedPhotoUris, setCapturedPhotoUris } = useCameraSessionStore.getState();
@@ -136,29 +94,8 @@ export default function MakeOfferScreen() {
     }, [])
   );
 
-  const yourOfferTotal = useMemo(
-    () => parseMoneyToNumber(priceDraft),
-    [priceDraft]
-  );
+  const isPoster = !!request && request.posterUserId === getAuthUserIdSync();
 
-  const yourOfferPerDayLine = useMemo(() => {
-    if (!yourOfferTotal || yourOfferTotal <= 0) return 'Your offer: —';
-    return `Your offer: ${formatPerDayUsd(yourOfferTotal, dayCount)}`;
-  }, [yourOfferTotal, dayCount]);
-
-  const listedLine = useMemo(() => {
-    if (!listedTotal || listedTotal <= 0) return 'Listed price: —';
-    return `Listed at ${formatPerDayUsd(
-      listedTotal,
-      dayCount
-    )} (total ${formatUsd(listedTotal)})`;
-  }, [listedTotal, dayCount]);
-
-  const isPoster =
-    !!request &&
-    request.posterUserId === getAuthUserIdSync();
-
-  /** Matches `app/rent-out.tsx` → `app/camera.tsx` (native); web uses multi-file input like listing but with `multiple`. */
   const goToCamera = useCallback(() => {
     if (Platform.OS === 'web') {
       document.getElementById(MAKE_OFFER_WEB_FILE_INPUT_ID)?.click();
@@ -175,10 +112,7 @@ export default function MakeOfferScreen() {
     }
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert(
-        'Photos access',
-        'Allow photo library access in Settings to attach photos to your offer.'
-      );
+      Alert.alert('Photos access', 'Allow photo library access in Settings to attach photos to your offer.');
       return;
     }
     setUploadingPhotos(true);
@@ -204,19 +138,28 @@ export default function MakeOfferScreen() {
   };
 
   const onSubmit = () => {
-    if (!request || !requestIdStr) return;
-
-    if (isPoster) return;
-
+    if (!request || !requestIdStr || isPoster) return;
     const n = parseMoneyToNumber(priceDraft);
     if (!n || n <= 0) {
       showFeedbackToast('Enter a valid offer amount');
       return;
     }
+
+    const termsSummary = [
+      replacementValueDraft.trim() ? `Replacement value: $${replacementValueDraft.trim()}` : null,
+      deliveryFeeDraft.trim() ? `Delivery fee: $${deliveryFeeDraft.trim()}` : null,
+      dailyLateFeeDraft.trim() ? `Daily late fee: $${dailyLateFeeDraft.trim()}` : null,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const finalMessage = [messageDraft.trim() || null, termsSummary ? `Terms (optional):\n${termsSummary}` : null]
+      .filter(Boolean)
+      .join('\n\n');
+
     void (async () => {
       const ok = await addOffer(request.timestamp, requestIdStr, {
         price: n,
-        message: messageDraft.trim() || undefined,
+        message: finalMessage || undefined,
         ...(images.length > 0 ? { offer_images: images } : {}),
       });
       if (!ok) {
@@ -225,179 +168,132 @@ export default function MakeOfferScreen() {
       }
       Keyboard.dismiss();
       showFeedbackToast('Offer sent');
-      router.back();
+      routerNav.back();
     })();
   };
 
-  const previewUri = images[0] ?? null;
-
   if (!requestIdStr || !isUuidString(requestIdStr)) {
-    return (
-      <ScreenWrapper style={styles.screenWrap}>
-        <View style={[styles.screen, styles.centered]}>
-          <Text style={styles.muted}>Invalid request.</Text>
-        </View>
-      </ScreenWrapper>
-    );
+    return <ScreenWrapper style={styles.screenWrap}><View style={[styles.screen, styles.centered]}><Text style={styles.muted}>Invalid request.</Text></View></ScreenWrapper>;
   }
-
   if (!request) {
-    return (
-      <ScreenWrapper style={styles.screenWrap}>
-        <View style={[styles.screen, styles.centered]}>
-          <Text style={styles.muted}>Request not found.</Text>
-        </View>
-      </ScreenWrapper>
-    );
+    return <ScreenWrapper style={styles.screenWrap}><View style={[styles.screen, styles.centered]}><Text style={styles.muted}>Request not found.</Text></View></ScreenWrapper>;
   }
-
   if (existingForThread?.status === 'pending_confirmation') {
-    return (
-      <ScreenWrapper style={styles.screenWrap}>
-        <View style={[styles.screen, styles.centered]}>
-          <Text style={styles.muted}>
-            You accepted a counter. Wait for the owner to confirm the rental. You can open this
-            request from Activity to see the offer.
-          </Text>
-        </View>
-      </ScreenWrapper>
-    );
+    return <ScreenWrapper style={styles.screenWrap}><View style={[styles.screen, styles.centered]}><Text style={styles.muted}>You accepted a counter. Wait for the owner to confirm the rental. You can open this request from Activity to see the offer.</Text></View></ScreenWrapper>;
   }
-
   if (isPoster) {
-    return (
-      <ScreenWrapper style={styles.screenWrap}>
-        <View style={[styles.screen, styles.centered]}>
-          <Text style={styles.muted}>
-            You can’t make an offer on your own request.
-          </Text>
-        </View>
-      </ScreenWrapper>
-    );
+    return <ScreenWrapper style={styles.screenWrap}><View style={[styles.screen, styles.centered]}><Text style={styles.muted}>You can’t make an offer on your own request.</Text></View></ScreenWrapper>;
   }
 
   return (
     <ScreenWrapper style={styles.screenWrap}>
-      <KeyboardAvoidingView
-        style={styles.screen}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-      <ScreenEntrance style={{ flex: 1 }}>
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={{ paddingVertical: 20, paddingHorizontal: 0 }}
-          keyboardShouldPersistTaps="handled"
-        >
-          <Text style={styles.headerTitle}>Make an offer</Text>
-          <Text style={styles.headerSub}>
-            {String(request.toolName ?? 'Request')}
-          </Text>
+      <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScreenEntrance style={{ flex: 1 }}>
+          <ScrollView style={styles.scroll} contentContainerStyle={{ paddingVertical: 20, paddingHorizontal: 0 }} keyboardShouldPersistTaps="handled">
+            <Text style={styles.headerTitle}>Make an Offer</Text>
+            <Text style={styles.headerSub}>{String(request.toolName ?? 'Request')}</Text>
 
-          <Text style={styles.context}>{listedLine}</Text>
-          <Text style={styles.context}>{yourOfferPerDayLine}</Text>
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Request Summary</Text>
+              <Text style={styles.summaryRow}>Requested budget: {listedTotal != null ? formatUsd(listedTotal) : '—'}</Text>
+              <Text style={styles.summaryRow}>Estimated duration: {dayCount} {dayCount === 1 ? 'day' : 'days'}</Text>
+              {counterOfferSlots > 0 ? <Text style={styles.summaryRow}>Counter offers left: {counterOfferSlots}</Text> : null}
+            </View>
 
-          <Text style={styles.label}>Your price</Text>
-          <TextInput
-            value={priceDraft}
-            onChangeText={(t) => setPriceDraft(sanitizeMoneyDigits(t))}
-            keyboardType="decimal-pad"
-            style={styles.input}
-            {...numberPadAccessoryProps()}
-          />
+            <View style={styles.sectionCard}>
+              <Text style={styles.label}>Your Offer</Text>
+              <Text style={styles.fieldHint}>Offer amount</Text>
+              <TextInput value={priceDraft} onChangeText={(t) => setPriceDraft(sanitizeMoneyDigits(t))} keyboardType="decimal-pad" style={styles.input} {...numberPadAccessoryProps()} />
+            </View>
 
-          <Text style={styles.label}>Message (optional)</Text>
-          <TextInput
-            value={messageDraft}
-            onChangeText={setMessageDraft}
-            style={[styles.input, { height: 100 }]}
-            multiline
-          />
+            <View style={styles.sectionCard}>
+              <Text style={styles.label}>Optional Message</Text>
+              <Text style={styles.fieldHint}>Short message to renter</Text>
+              <TextInput value={messageDraft} onChangeText={setMessageDraft} style={[styles.input, { height: 100 }]} multiline />
+            </View>
 
-          <Text style={styles.fieldLabel}>Photos</Text>
-          <Pressable
-            style={[styles.photoBox, uploadingPhotos && { opacity: 0.72 }]}
-            onPress={goToCamera}
-            disabled={uploadingPhotos}
-            accessibilityRole="button"
-            accessibilityLabel="Add photos with camera"
-          >
-            {previewUri != null ? (
-              <Image source={{ uri: previewUri }} style={styles.photoPreview} contentFit="cover" />
-            ) : (
-              <View style={styles.photoEmpty}>
-                <Ionicons name="camera-outline" size={32} color={ui.primary} />
-                <Text style={styles.photoLabel}>Add Photos</Text>
+            <View style={styles.sectionCard}>
+              <Text style={styles.fieldLabel}>Photos</Text>
+              <View style={styles.photoActionRow}>
+                <Pressable style={[styles.compactBtn, uploadingPhotos && { opacity: 0.72 }]} onPress={goToCamera} disabled={uploadingPhotos}>
+                  <Text style={styles.compactBtnText}>Add Photos</Text>
+                </Pressable>
+                <Pressable style={styles.compactBtn} onPress={handlePickImages} disabled={uploadingPhotos} pressOpacityFeedback={false}>
+                  <Text style={styles.compactBtnText}>{uploadingPhotos ? 'Uploading…' : 'Library'}</Text>
+                </Pressable>
               </View>
-            )}
-          </Pressable>
-          {Platform.OS === 'web' && (
-            <input
-              id={MAKE_OFFER_WEB_FILE_INPUT_ID}
-              type="file"
-              accept="image/*"
-              multiple
-              style={{ display: 'none' }}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                const files = e.target.files;
-                if (!files?.length) return;
-                void (async () => {
-                  setUploadingPhotos(true);
-                  try {
-                    for (const file of Array.from(files)) {
-                      const uri = URL.createObjectURL(file);
-                      const url = await uploadOfferImage(uri);
-                      setImages((prev) => [...prev, url]);
+              {Platform.OS === 'web' ? (
+                <input id={MAKE_OFFER_WEB_FILE_INPUT_ID} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                  const files = e.target.files;
+                  if (!files?.length) return;
+                  void (async () => {
+                    setUploadingPhotos(true);
+                    try {
+                      for (const file of Array.from(files)) {
+                        const uri = URL.createObjectURL(file);
+                        const url = await uploadOfferImage(uri);
+                        setImages((prev) => [...prev, url]);
+                      }
+                    } catch (err) {
+                      console.error('[make-offer] web file upload failed', err);
+                      showFeedbackToast('Could not upload one or more photos. Try again.');
+                    } finally {
+                      setUploadingPhotos(false);
+                      e.target.value = '';
                     }
-                  } catch (err) {
-                    console.error('[make-offer] web file upload failed', err);
-                    showFeedbackToast('Could not upload one or more photos. Try again.');
-                  } finally {
-                    setUploadingPhotos(false);
-                    e.target.value = '';
-                  }
-                })();
-              }}
-            />
-          )}
+                  })();
+                }} />
+              ) : null}
+              <Text style={styles.photoHelperText}>Photos are optional, but helpful for negotiation context.</Text>
+              {images.length > 0 ? (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.thumbStrip} contentContainerStyle={styles.thumbStripContent}>
+                  {images.map((uri, i) => (
+                    <View key={`${uri}-${i}`} style={styles.thumbWrap}>
+                      <Pressable onPress={() => setPreviewImage(uri)} style={styles.thumbTap}>
+                        <Image source={{ uri }} style={styles.thumb} contentFit="cover" transition={0} />
+                      </Pressable>
+                      <Pressable onPress={() => setImages((prev) => prev.filter((_, idx) => idx !== i))} style={styles.thumbDelete}>
+                        <Ionicons name="close" size={12} color="#fff" />
+                      </Pressable>
+                    </View>
+                  ))}
+                </ScrollView>
+              ) : null}
+            </View>
 
-          <Text style={styles.photoHelperText}>Clear photos help the owner evaluate your offer</Text>
+            <View style={styles.sectionCard}>
+              <Pressable style={styles.termsToggle} onPress={() => setTermsOpen((v) => !v)} pressOpacityFeedback={false}>
+                <Text style={styles.sectionTitle}>Offer Details / Terms (Optional)</Text>
+                <Ionicons name={termsOpen ? 'chevron-up' : 'chevron-down'} size={18} color={ui.textSecondary} />
+              </Pressable>
+              {termsOpen ? (
+                <View>
+                  <Text style={styles.fieldHint}>Replacement value</Text>
+                  <TextInput value={replacementValueDraft} onChangeText={(t) => setReplacementValueDraft(sanitizeMoneyDigits(t))} keyboardType="decimal-pad" style={styles.input} {...numberPadAccessoryProps()} />
+                  {request.how === 'delivery_only' ? (
+                    <>
+                      <Text style={styles.fieldHint}>Delivery fee</Text>
+                      <TextInput value={deliveryFeeDraft} onChangeText={(t) => setDeliveryFeeDraft(sanitizeMoneyDigits(t))} keyboardType="decimal-pad" style={styles.input} {...numberPadAccessoryProps()} />
+                    </>
+                  ) : null}
+                  <Text style={styles.fieldHint}>Daily late fee</Text>
+                  <TextInput value={dailyLateFeeDraft} onChangeText={(t) => setDailyLateFeeDraft(sanitizeMoneyDigits(t))} keyboardType="decimal-pad" style={styles.input} {...numberPadAccessoryProps()} />
+                </View>
+              ) : null}
+            </View>
 
-          <Pressable
-            onPress={handlePickImages}
-            style={styles.chooseLibraryBtn}
-            disabled={uploadingPhotos}
-            pressOpacityFeedback={false}
-          >
-            <Text style={styles.chooseLibraryBtnText}>
-              {uploadingPhotos ? 'Uploading…' : 'Choose from library'}
-            </Text>
-          </Pressable>
-
-          {images.length > 0 ? (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.thumbStrip}
-              contentContainerStyle={styles.thumbStripContent}
-            >
-              {images.map((uri, i) => (
-                <Image
-                  key={`${uri}-${i}`}
-                  source={{ uri }}
-                  style={styles.thumb}
-                  contentFit="cover"
-                  transition={0}
-                />
-              ))}
-            </ScrollView>
-          ) : null}
-
-          <Pressable onPress={onSubmit} style={styles.submit}>
-            <Text style={styles.submitText}>Send offer</Text>
-          </Pressable>
-        </ScrollView>
-      </ScreenEntrance>
+            <Pressable onPress={onSubmit} style={styles.submit}>
+              <Text style={styles.submitText}>Send offer</Text>
+            </Pressable>
+          </ScrollView>
+        </ScreenEntrance>
       </KeyboardAvoidingView>
+
+      <Modal visible={previewImage != null} transparent animationType="fade" onRequestClose={() => setPreviewImage(null)}>
+        <Pressable style={styles.previewBackdrop} onPress={() => setPreviewImage(null)}>
+          {previewImage ? <Image source={{ uri: previewImage }} style={styles.previewImage} contentFit="contain" /> : null}
+        </Pressable>
+      </Modal>
     </ScreenWrapper>
   );
 }
@@ -408,95 +304,28 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   muted: { color: ui.textSecondary },
-
-  headerTitle: { fontSize: 22, fontWeight: '700' },
-  headerSub: { fontSize: 14, marginBottom: 10 },
-
-  context: { marginBottom: 6 },
-
-  label: { marginTop: 16 },
-
-  fieldLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#111827',
-    marginBottom: 6,
-    marginTop: 16,
-  },
-  photoBox: {
-    width: '100%',
-    aspectRatio: 1,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: PHOTO_BORDER,
-    overflow: 'hidden',
-    backgroundColor: '#F9FAFB',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  photoEmpty: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-  },
-  photoPreview: {
-    width: '100%',
-    height: '100%',
-  },
-  photoLabel: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#6B7280',
-  },
-  photoHelperText: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: HELPER_GRAY,
-    marginTop: 6,
-    marginBottom: 10,
-  },
-  chooseLibraryBtn: {
-    alignSelf: 'flex-start',
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: ui.border,
-    backgroundColor: ui.surfaceInput,
-    marginBottom: 4,
-  },
-  chooseLibraryBtnText: { fontWeight: '600', color: ui.textPrimary },
-
-  thumbStrip: {
-    marginTop: 10,
-    maxHeight: THUMB + 16,
-  },
-  thumbStripContent: {
-    paddingVertical: 4,
-    alignItems: 'center',
-    paddingRight: 8,
-  },
-  thumb: {
-    width: THUMB,
-    height: THUMB,
-    borderRadius: 8,
-    marginRight: THUMB_GAP,
-    backgroundColor: '#1F2937',
-  },
-
-  input: {
-    borderWidth: 1,
-    padding: 10,
-    borderRadius: 8,
-    marginTop: 6,
-  },
-
-  submit: {
-    marginTop: 20,
-    backgroundColor: ui.primary,
-    padding: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
+  headerTitle: { fontSize: 22, fontWeight: '700', color: ui.textPrimary },
+  headerSub: { fontSize: 14, marginBottom: 12, color: ui.textSecondary },
+  sectionCard: { borderWidth: StyleSheet.hairlineWidth, borderColor: ui.border, borderRadius: 12, padding: 12, marginBottom: 12, backgroundColor: ui.background },
+  sectionTitle: { fontSize: 15, fontWeight: '700', color: ui.textPrimary, marginBottom: 6 },
+  summaryRow: { fontSize: 14, color: ui.textSecondary, marginBottom: 2 },
+  label: { fontSize: 15, fontWeight: '700', color: ui.textPrimary },
+  fieldHint: { marginTop: 6, marginBottom: 8, color: ui.textSecondary, fontSize: 13 },
+  fieldLabel: { fontSize: 14, fontWeight: '600', color: '#111827', marginBottom: 6 },
+  photoActionRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  compactBtn: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: ui.border, backgroundColor: ui.surfaceInput },
+  compactBtnText: { fontWeight: '600', color: ui.textPrimary, fontSize: 13 },
+  termsToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  photoHelperText: { fontSize: 13, lineHeight: 18, color: HELPER_GRAY, marginTop: 4, marginBottom: 8 },
+  thumbStrip: { marginTop: 4, maxHeight: THUMB + 16 },
+  thumbStripContent: { paddingVertical: 4, alignItems: 'center', paddingRight: 8 },
+  thumbWrap: { marginRight: THUMB_GAP },
+  thumbTap: { borderRadius: 8, overflow: 'hidden' },
+  thumb: { width: THUMB, height: THUMB, borderRadius: 8, backgroundColor: '#1F2937' },
+  thumbDelete: { position: 'absolute', top: -5, right: -5, width: 18, height: 18, borderRadius: 9, backgroundColor: 'rgba(17,24,39,0.92)', alignItems: 'center', justifyContent: 'center' },
+  input: { borderWidth: 1, padding: 10, borderRadius: 8, marginTop: 6, borderColor: PHOTO_BORDER, color: ui.textPrimary, backgroundColor: ui.surfaceInput },
+  submit: { marginTop: 20, backgroundColor: ui.primary, padding: 14, borderRadius: 10, alignItems: 'center' },
   submitText: { color: 'white', fontWeight: '700' },
+  previewBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.88)', alignItems: 'center', justifyContent: 'center', padding: 20 },
+  previewImage: { width: '100%', height: '85%' },
 });

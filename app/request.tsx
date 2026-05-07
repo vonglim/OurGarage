@@ -1,38 +1,54 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useRef, useState } from 'react';
-import {
-  Alert,
-  Keyboard,
-  KeyboardAvoidingView,
-  Platform,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import { Pressable } from '@/components/Pressable';
-import { ScreenBackButton } from '@/components/ScreenBackButton';
-import { ScreenEntrance } from '@/components/ScreenEntrance';
+import { Alert, Keyboard, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ScrollView } from 'react-native-gesture-handler';
-import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
-import { ScreenWrapper } from '@/components/ScreenWrapper';
-import { numberPadAccessoryProps } from '@/components/NumberPadKeyboardAccessory';
-import { getRequestEditFormValues } from '@/lib/getRequestEditFormValues';
-import { showFeedbackToast } from '@/store/feedbackToastStore';
-import {
-  addRequest,
-  getRequestByTimestamp,
-  updateRequest,
-} from '@/store/requestsStore';
-import { DELIVERY_OPTIONS, needsDeliveryFee, type HowKey } from '@/lib/deliveryFormat';
-import { DURATION_OPTIONS, type DurationType } from '@/lib/durationFormat';
-import { parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
-import { coordinatesFromLocationField } from '@/lib/zipCoordinates';
-import { primarySolidPressed, subtleControlPressed, ui } from '@/constants/appUi';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const whenOptions = ['Today', 'This Weekend', 'Flexible'];
+import { BackHeader } from '@/components/AppHeaders';
+import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { numberPadAccessoryProps } from '@/components/NumberPadKeyboardAccessory';
+import { Pressable } from '@/components/Pressable';
+import { ScreenEntrance } from '@/components/ScreenEntrance';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
+import { primarySolidPressed, subtleControlPressed, ui } from '@/constants/appUi';
+import { type HowKey, needsDeliveryFee } from '@/lib/deliveryFormat';
+import { type DurationType } from '@/lib/durationFormat';
+import { getRequestEditFormValues } from '@/lib/getRequestEditFormValues';
+import { parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
+import { coordinatesFromLocationField } from '@/lib/zipCoordinates';
+import { showFeedbackToast } from '@/store/feedbackToastStore';
+import { addRequest, getRequestByTimestamp, updateRequest } from '@/store/requestsStore';
+
+const MAX_DURATION_DAYS = 30;
+const RADIUS_OPTIONS = [5, 10, 25, 50] as const;
+
+function formatDateDigits(input: string): string {
+  const digits = input.replace(/\D/g, '').slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
+
+function parseMaskedDate(value: string): Date | null {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value.trim());
+  if (!m) return null;
+  const mm = Number(m[1]);
+  const dd = Number(m[2]);
+  const yyyy = Number(m[3]);
+  if (!Number.isFinite(mm) || !Number.isFinite(dd) || !Number.isFinite(yyyy)) return null;
+  const d = new Date(yyyy, mm - 1, dd);
+  if (d.getFullYear() !== yyyy || d.getMonth() !== mm - 1 || d.getDate() !== dd) return null;
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function dateToMask(d: Date): string {
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const yyyy = String(d.getFullYear());
+  return `${mm}/${dd}/${yyyy}`;
+}
 
 export default function RequestAToolScreen() {
   const router = useRouter();
@@ -44,12 +60,10 @@ export default function RequestAToolScreen() {
   const insets = useSafeAreaInsets();
 
   const [toolName, setToolName] = useState('');
-  const [when, setWhen] = useState<string | null>(null);
   const [how, setHow] = useState<HowKey | null>(null);
   const [pickupRadiusMiles, setPickupRadiusMiles] = useState('10');
-  const [durationType, setDurationType] = useState<DurationType | null>(null);
-  const [durationDays, setDurationDays] = useState('');
-  const [durationWeeks, setDurationWeeks] = useState('');
+  const [pickupDateInput, setPickupDateInput] = useState('');
+  const [returnDateInput, setReturnDateInput] = useState('');
   const [totalPriceInput, setTotalPriceInput] = useState('');
   const [deliveryFeeInput, setDeliveryFeeInput] = useState('');
   const [locationInput, setLocationInput] = useState('');
@@ -58,33 +72,14 @@ export default function RequestAToolScreen() {
 
   const refToolName = useRef<TextInput>(null);
   const refLocation = useRef<TextInput>(null);
-  const refPickupRadius = useRef<TextInput>(null);
-  const refDurationDays = useRef<TextInput>(null);
-  const refDurationWeeks = useRef<TextInput>(null);
+  const refPickupDate = useRef<TextInput>(null);
+  const refReturnDate = useRef<TextInput>(null);
   const refTotalPrice = useRef<TextInput>(null);
   const refDeliveryFee = useRef<TextInput>(null);
 
   const focusAfterLocation = useCallback(() => {
-    if (how === 'pickup_nearby') {
-      refPickupRadius.current?.focus();
-    } else if (durationType === 'multiDay') {
-      refDurationDays.current?.focus();
-    } else if (durationType === 'weekly') {
-      refDurationWeeks.current?.focus();
-    } else {
-      refTotalPrice.current?.focus();
-    }
-  }, [how, durationType]);
-
-  const focusAfterPickup = useCallback(() => {
-    if (durationType === 'multiDay') {
-      refDurationDays.current?.focus();
-    } else if (durationType === 'weekly') {
-      refDurationWeeks.current?.focus();
-    } else {
-      refTotalPrice.current?.focus();
-    }
-  }, [durationType]);
+    refPickupDate.current?.focus();
+  }, [how]);
 
   const focusAfterTotal = useCallback(() => {
     if (needsDeliveryFee(how)) {
@@ -99,12 +94,10 @@ export default function RequestAToolScreen() {
       if (req.timestamp == null) return;
       const v = getRequestEditFormValues(req);
       setToolName(v.toolName);
-      setWhen(v.when);
       setHow(v.how);
       setPickupRadiusMiles(v.pickupRadiusMiles);
-      setDurationType(v.durationType);
-      setDurationDays(v.durationDays);
-      setDurationWeeks(v.durationWeeks);
+      setPickupDateInput(v.pickupDateInput);
+      setReturnDateInput(v.returnDateInput);
       setTotalPriceInput(v.totalPriceInput);
       setDeliveryFeeInput(v.deliveryFeeInput);
       setLocationInput(v.locationInput);
@@ -147,6 +140,14 @@ export default function RequestAToolScreen() {
     ])
   );
 
+  const pickupDateParsed = parseMaskedDate(pickupDateInput);
+  const returnDateParsed = parseMaskedDate(returnDateInput);
+  const durationDays =
+    pickupDateParsed && returnDateParsed
+      ? Math.max(1, Math.ceil((returnDateParsed.getTime() - pickupDateParsed.getTime()) / (24 * 60 * 60 * 1000)))
+      : 1;
+  const durationType: DurationType = durationDays > 1 ? 'multiDay' : 'fullDay';
+
   return (
     <ScreenWrapper style={styles.screenWrap}>
       <KeyboardDismissScreen style={styles.screen}>
@@ -156,12 +157,7 @@ export default function RequestAToolScreen() {
           keyboardVerticalOffset={0}
         >
           <ScreenEntrance style={styles.entranceFlex}>
-            <View style={[styles.topBar, { paddingTop: 8 }]}>
-              <View style={styles.headerTitleBlock}>
-                <ScreenBackButton onPress={() => router.back()} />
-                <Text style={styles.screenTitle}>Request equipment</Text>
-              </View>
-            </View>
+            <BackHeader title="Request Equipment" onBack={() => router.back()} style={styles.requestHeader} />
       <ScrollView
         style={styles.container}
         contentContainerStyle={[
@@ -191,7 +187,7 @@ export default function RequestAToolScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.label}>Your location (zip code or city)</Text>
+        <Text style={styles.label}>Rental Area</Text>
         <TextInput
           ref={refLocation}
           placeholder="e.g. 60614 or Chicago"
@@ -205,33 +201,27 @@ export default function RequestAToolScreen() {
           onSubmitEditing={focusAfterLocation}
         />
         <Text style={styles.fieldHint}>
-          Exact location will be shared after match.
+          Exact meetup location is shared after both sides agree.
         </Text>
       </View>
 
-      {/* When Needed */}
       <View style={styles.section}>
-        <Text style={styles.label}>When do you need it?</Text>
+        <Text style={styles.label}>How far are you willing to rent from?</Text>
         <View style={styles.optionGroup}>
-          {whenOptions.map((option) => (
+          {RADIUS_OPTIONS.map((miles) => (
             <Pressable
-              key={option}
+              key={miles}
               pressOpacityFeedback={false}
               style={({ pressed }) => [
                 styles.optionButton,
-                when === option && styles.optionSelected,
+                pickupRadiusMiles === String(miles) && styles.optionSelected,
                 pressed &&
-                  (when === option ? styles.optionPressedSelected : styles.optionPressedNeutral),
+                  (pickupRadiusMiles === String(miles) ? styles.optionPressedSelected : styles.optionPressedNeutral),
               ]}
-              onPress={() => setWhen(option)}
+              onPress={() => setPickupRadiusMiles(String(miles))}
             >
-              <Text
-                style={[
-                  styles.optionText,
-                  when === option && styles.optionTextSelected,
-                ]}
-              >
-                {option}
+              <Text style={[styles.optionText, pickupRadiusMiles === String(miles) && styles.optionTextSelected]}>
+                {miles} miles
               </Text>
             </Pressable>
           ))}
@@ -239,118 +229,73 @@ export default function RequestAToolScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.label}>Delivery</Text>
+        <Text style={styles.label}>Pickup / Delivery</Text>
         <View style={styles.optionGroup}>
-          {DELIVERY_OPTIONS.map(({ key, shortLabel }) => (
+          {[
+            { key: 'pickup_nearby' as const, label: 'Pickup', hint: 'I can meet to pick up the item.' },
+            { key: 'delivery_only' as const, label: 'Delivery', hint: 'I’d like the owner to deliver the item.' },
+          ].map((opt) => (
             <Pressable
-              key={key}
+              key={opt.key}
               pressOpacityFeedback={false}
               style={({ pressed }) => [
-                styles.optionButton,
-                how === key && styles.optionSelected,
-                pressed &&
-                  (how === key ? styles.optionPressedSelected : styles.optionPressedNeutral),
+                styles.optionCard,
+                how === opt.key && styles.optionCardSelected,
+                pressed && (how === opt.key ? styles.optionPressedSelected : styles.optionPressedNeutral),
               ]}
-              onPress={() => setHow(key)}
+              onPress={() => setHow(opt.key)}
             >
-              <Text
-                style={[
-                  styles.optionText,
-                  how === key && styles.optionTextSelected,
-                ]}
-              >
-                {shortLabel}
+              <Text style={[styles.optionCardTitle, how === opt.key && styles.optionCardTitleSelected]}>
+                {opt.label}
               </Text>
+              <Text style={[styles.optionCardHint, how === opt.key && styles.optionCardHintSelected]}>{opt.hint}</Text>
             </Pressable>
           ))}
         </View>
-        {how === 'pickup_nearby' && (
-          <TextInput
-            ref={refPickupRadius}
-            placeholder="Miles (e.g. 10)"
-            placeholderTextColor={ui.textSecondary}
-            value={pickupRadiusMiles}
-            onChangeText={(t) =>
-              setPickupRadiusMiles(t.replace(/[^0-9]/g, '').slice(0, 3))
-            }
-            style={[styles.input, styles.durationDaysInput]}
-            keyboardType="number-pad"
-            {...numberPadAccessoryProps()}
-            returnKeyType="next"
-            blurOnSubmit
-            onSubmitEditing={focusAfterPickup}
-          />
-        )}
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.label}>How long do you need it?</Text>
-        <View style={styles.optionGroup}>
-          {DURATION_OPTIONS.map(({ key, label }) => (
-            <Pressable
-              key={key}
-              pressOpacityFeedback={false}
-              style={({ pressed }) => [
-                styles.optionButton,
-                durationType === key && styles.optionSelected,
-                pressed &&
-                  (durationType === key
-                    ? styles.optionPressedSelected
-                    : styles.optionPressedNeutral),
-              ]}
-              onPress={() => {
-                setDurationType(key);
-                if (key !== 'multiDay') setDurationDays('');
-                if (key !== 'weekly') setDurationWeeks('');
-              }}
-            >
-              <Text
-                style={[
-                  styles.optionText,
-                  durationType === key && styles.optionTextSelected,
-                ]}
-              >
-                {label}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-        {durationType === 'multiDay' && (
-          <TextInput
-            ref={refDurationDays}
-            placeholder="Number of days"
-            placeholderTextColor={ui.textSecondary}
-            value={durationDays}
-            onChangeText={setDurationDays}
-            style={[styles.input, styles.durationDaysInput]}
-            keyboardType="number-pad"
-            {...numberPadAccessoryProps()}
-            returnKeyType="next"
-            blurOnSubmit
-            onSubmitEditing={() => refTotalPrice.current?.focus()}
-          />
-        )}
-        {durationType === 'weekly' && (
-          <TextInput
-            ref={refDurationWeeks}
-            placeholder="Number of weeks"
-            placeholderTextColor={ui.textSecondary}
-            value={durationWeeks}
-            onChangeText={setDurationWeeks}
-            style={[styles.input, styles.durationDaysInput]}
-            keyboardType="number-pad"
-            {...numberPadAccessoryProps()}
-            returnKeyType="next"
-            blurOnSubmit
-            onSubmitEditing={() => refTotalPrice.current?.focus()}
-          />
-        )}
+        <Text style={styles.label}>Rental Dates</Text>
+        <Text style={styles.fieldHint}>Exact meetup time will be finalized in chat.</Text>
+        <Text style={styles.inputLabel}>Pickup Date</Text>
+        <TextInput
+          ref={refPickupDate}
+          placeholder="MM/DD/YYYY"
+          placeholderTextColor={ui.textSecondary}
+          value={pickupDateInput}
+          onChangeText={(t) => setPickupDateInput(formatDateDigits(t))}
+          style={styles.input}
+          keyboardType="number-pad"
+          {...numberPadAccessoryProps()}
+          maxLength={10}
+          returnKeyType="next"
+          blurOnSubmit
+          onSubmitEditing={() => refReturnDate.current?.focus()}
+        />
+        <Text style={[styles.inputLabel, styles.inputLabelSpaced]}>Return Date</Text>
+        <TextInput
+          ref={refReturnDate}
+          placeholder="MM/DD/YYYY"
+          placeholderTextColor={ui.textSecondary}
+          value={returnDateInput}
+          onChangeText={(t) => setReturnDateInput(formatDateDigits(t))}
+          style={styles.input}
+          keyboardType="number-pad"
+          {...numberPadAccessoryProps()}
+          maxLength={10}
+          returnKeyType="next"
+          blurOnSubmit
+          onSubmitEditing={() => refTotalPrice.current?.focus()}
+        />
+        <Text style={styles.durationSummary}>
+          Estimated rental duration: {durationDays} {durationDays === 1 ? 'day' : 'days'}
+        </Text>
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.label}>Total price for entire duration</Text>
+        <Text style={styles.label}>Budget</Text>
         <Text style={styles.fieldHint}>
-          One total for the full time you need the item — not a daily rate.
+          What are you hoping to pay for the rental?
         </Text>
         <View style={styles.moneyRow}>
           <Text style={styles.dollarPrefix}>$</Text>
@@ -368,6 +313,7 @@ export default function RequestAToolScreen() {
             onSubmitEditing={focusAfterTotal}
           />
         </View>
+        <Text style={styles.softEstimate}>Estimated based on listing rates.</Text>
       </View>
 
       {needsDeliveryFee(how) && (
@@ -416,42 +362,28 @@ export default function RequestAToolScreen() {
             );
             return;
           }
-          if (!durationType) {
-            Alert.alert('Missing info', 'Please choose how long you need the item.');
-            return;
-          }
           if (!how) {
             Alert.alert('Missing info', 'Please choose a delivery option.');
             return;
           }
-          if (durationType === 'multiDay') {
-            const n = parseInt(durationDays, 10);
-            if (!Number.isFinite(n) || n < 1) {
-              Alert.alert('Missing info', 'Enter the number of days (1 or more).');
-              return;
-            }
-          }
-          if (durationType === 'weekly') {
-            const w = parseInt(durationWeeks, 10);
-            if (!Number.isFinite(w) || w < 1) {
-              Alert.alert('Missing info', 'Enter the number of weeks (1 or more).');
-              return;
-            }
-          }
-          if (how === 'pickup_nearby') {
-            const mi = parseInt(pickupRadiusMiles, 10);
-            if (!Number.isFinite(mi) || mi < 1) {
-              Alert.alert('Missing info', 'Enter how many miles count as nearby pickup.');
-              return;
-            }
+          const mi = parseInt(pickupRadiusMiles, 10);
+          if (!Number.isFinite(mi) || mi < 1) {
+            Alert.alert('Missing info', 'Choose your rental search radius.');
+            return;
           }
 
-          const durationValue =
-            durationType === 'multiDay'
-              ? Math.max(1, parseInt(durationDays, 10))
-              : durationType === 'weekly'
-                ? Math.max(1, parseInt(durationWeeks, 10))
-                : null;
+          if (!pickupDateParsed || !returnDateParsed) {
+            Alert.alert('Missing info', 'Enter valid pickup and return dates in MM/DD/YYYY format.');
+            return;
+          }
+          if (returnDateParsed.getTime() <= pickupDateParsed.getTime()) {
+            Alert.alert('Missing info', 'Return date must be after pickup date.');
+            return;
+          }
+          if (durationDays > MAX_DURATION_DAYS) {
+            Alert.alert('Missing info', `Maximum duration is ${MAX_DURATION_DAYS} days.`);
+            return;
+          }
 
           const totalPriceNum = parseMoneyToNumber(totalPriceInput);
           if (totalPriceNum == null || totalPriceNum < 0) {
@@ -476,28 +408,28 @@ export default function RequestAToolScreen() {
 
           const payload = {
             toolName: toolName.trim(),
-            when,
+            when: pickupDateInput,
             how,
-            pickupRadiusMiles: pickupMiles,
+            pickupRadiusMiles: mi,
             durationType,
-            durationValue,
+            durationValue: durationDays,
             totalPrice: totalPriceNum,
             deliveryFee: deliveryFeeNum,
             location: locTrim,
             requestLat: geo?.lat ?? null,
             requestLng: geo?.lng ?? null,
+            pickupDate: pickupDateInput,
+            returnDate: returnDateInput,
           };
 
           if (editingTimestamp != null) {
             updateRequest(editingTimestamp, payload);
             setEditingTimestamp(null);
             setToolName('');
-            setWhen(null);
             setHow(null);
             setPickupRadiusMiles('10');
-            setDurationType(null);
-            setDurationDays('');
-            setDurationWeeks('');
+            setPickupDateInput('');
+            setReturnDateInput('');
             setTotalPriceInput('');
             setDeliveryFeeInput('');
             setLocationInput('');
@@ -540,21 +472,8 @@ const styles = StyleSheet.create({
   kav: {
     flex: 1,
   },
-  topBar: {
-    paddingHorizontal: 0,
-    paddingBottom: 0,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: ui.border,
-    backgroundColor: ui.background,
-  },
-  headerTitleBlock: {
-    marginBottom: 14,
-  },
-  screenTitle: {
-    marginTop: 8,
-    fontSize: 22,
-    fontWeight: '700',
-    color: ui.textPrimary,
+  requestHeader: {
+    marginBottom: 10,
   },
   container: {
     flex: 1,
@@ -591,8 +510,20 @@ const styles = StyleSheet.create({
     backgroundColor: ui.surfaceStriped,
     color: ui.text,
   },
-  durationDaysInput: {
+  inputLabel: {
+    fontSize: 13,
+    color: ui.textPrimary,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  inputLabelSpaced: {
     marginTop: 12,
+  },
+  durationSummary: {
+    marginTop: 10,
+    fontSize: 13,
+    color: ui.textSecondary,
+    lineHeight: 18,
   },
   fieldHint: {
     fontSize: 13,
@@ -626,6 +557,37 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
   },
+  optionCard: {
+    width: '100%',
+    borderRadius: ui.radiusButton,
+    borderWidth: 1,
+    borderColor: ui.border,
+    backgroundColor: ui.surfaceNeutral,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    marginBottom: 10,
+  },
+  optionCardSelected: {
+    backgroundColor: ui.primary,
+    borderColor: ui.primary,
+  },
+  optionCardTitle: {
+    color: ui.textPrimary,
+    fontSize: 15,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  optionCardTitleSelected: {
+    color: ui.primaryOn,
+  },
+  optionCardHint: {
+    color: ui.textSecondary,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  optionCardHintSelected: {
+    color: 'rgba(255,255,255,0.9)',
+  },
   optionButton: {
     paddingVertical: 10,
     paddingHorizontal: 14,
@@ -653,6 +615,11 @@ const styles = StyleSheet.create({
   },
   optionTextSelected: {
     color: ui.primaryOn,
+  },
+  softEstimate: {
+    marginTop: 8,
+    fontSize: 12,
+    color: ui.textSecondary,
   },
   submitButton: {
     marginTop: 20,
