@@ -18,12 +18,15 @@ import { STACK_TRANSITION_DURATION_MS } from '@/constants/navigation';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { lightImpact } from '@/lib/haptics';
 import { ensureProfile } from '@/lib/ensureProfile';
+import { startMessageUnreadSync } from '@/lib/messageUnreadSync';
 import { startNotificationsServerSync } from '@/lib/notificationsServerSync';
 import { registerAndStorePushTokenAsync } from '@/lib/notifications';
+import { installDevLocalStateResetHelper, resetLocalMessagingState } from '@/lib/resetLocalAppState';
 import { clearRemoteProfileCache } from '@/lib/remoteProfileCache';
 import { logRentalEvidenceStorageHealthInDev } from '@/lib/devStorageVerification';
 import { getSupabase, supabase } from '../lib/supabase';
 import { applySessionToAuthStore } from '@/store/authSessionStore';
+import { useMessageUnreadStore } from '@/store/messageUnreadStore';
 import { resetProfileToDefault } from '@/store/profileStore';
 
 function NavigationHaptics() {
@@ -49,10 +52,12 @@ export default function RootLayout() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [needsCreateUsername, setNeedsCreateUsername] = useState(false);
+  const didResetLocalMessagingOnStartup = useRef(false);
 
   useEffect(() => {
     if (!__DEV__) return;
     void logRentalEvidenceStorageHealthInDev();
+    installDevLocalStateResetHelper();
   }, []);
 
   useEffect(() => {
@@ -98,6 +103,7 @@ export default function RootLayout() {
         setNeedsCreateUsername(false);
         clearRemoteProfileCache();
         resetProfileToDefault();
+        useMessageUnreadStore.getState().clear();
       }
       setSession(next);
     };
@@ -130,10 +136,35 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
+    if (!session?.user?.id) {
+      didResetLocalMessagingOnStartup.current = false;
+      return;
+    }
+    if (didResetLocalMessagingOnStartup.current) return;
+    didResetLocalMessagingOnStartup.current = true;
+    void resetLocalMessagingState('auth_startup');
+  }, [session?.user?.id]);
+
+  useEffect(() => {
     if (loading) return;
     if (needsCreateUsername) return;
     if (!session?.user?.id) return;
     return startNotificationsServerSync(session.user.id);
+  }, [loading, needsCreateUsername, session?.user?.id]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (needsCreateUsername) return;
+    if (!session?.user?.id) return;
+    if (__DEV__) {
+      console.log('[messageUnreadSync] auth ready', {
+        loading,
+        needsCreateUsername,
+        userId: session.user.id,
+      });
+      console.log('[messageUnreadSync] starting for user', session.user.id);
+    }
+    return startMessageUnreadSync(session.user.id);
   }, [loading, needsCreateUsername, session?.user?.id]);
 
   useEffect(() => {

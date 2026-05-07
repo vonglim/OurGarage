@@ -178,6 +178,8 @@ type NotificationsState = {
   markAsRead: (notificationId: string) => void;
   /** All rows for the current user; use when viewing Activity / Notifications or dismissing the badge. */
   markAllAsRead: () => void;
+  /** Mark all unread except message rows (used by Activity so chat unread remains sticky). */
+  markAllAsReadExceptMessages: () => void;
   removeNotification: (notificationId: string) => void;
 };
 
@@ -277,6 +279,14 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
   markAllAsRead: () => {
     set((state) => ({
       notifications: state.notifications.map((n) => ({ ...n, read: true })),
+    }));
+    void persistNotifications(get().notifications);
+  },
+  markAllAsReadExceptMessages: () => {
+    set((state) => ({
+      notifications: state.notifications.map((n) =>
+        n.type === 'message' ? n : { ...n, read: true }
+      ),
     }));
     void persistNotifications(get().notifications);
   },

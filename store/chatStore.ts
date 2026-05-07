@@ -9,10 +9,9 @@ import { getPublicProfileForView } from '@/lib/publicProfiles';
 import { getRequestOwnerId, getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import {
   fetchRequestChatMessagesFromSupabase,
-  insertRequestChatMessageToSupabase,
   OFFER_USER_CHAT_MESSAGE_KIND,
 } from '@/lib/supabaseRequestChatMessages';
-import { insertServerNotificationToRecipient } from '@/lib/insertServerNotification';
+import { sendOfferThreadUserMessage } from '@/lib/sendOfferThreadMessage';
 import { getOfferById, getOfferUserPreview } from './offersStore';
 import { getAuthUserIdSync, useAuthUserId } from '@/lib/authUser';
 import { getProfile } from './profileStore';
@@ -550,7 +549,7 @@ export async function addChatMessage(chatId: string, text: string): Promise<void
     return;
   }
   const requestRowId = getRequestSupabaseRowId(req as Record<string, unknown>);
-  const res = await insertRequestChatMessageToSupabase({
+  const res = await sendOfferThreadUserMessage({
     requestRowId: requestRowId ? requestRowId : undefined,
     offerId: offerIdStr,
     authorId: senderId,
@@ -558,21 +557,19 @@ export async function addChatMessage(chatId: string, text: string): Promise<void
     body: trimmed,
   });
   if (__DEV__) {
-    console.log('INSERT RESULT', { data: res.data, error: res.error });
+    console.log('INSERT RESULT', res);
   }
   if (res.error != null) {
     console.error('Message insert failed', res.error);
     return;
   }
-  if (res.data == null || res.data.id === '') {
+  if (res.messageId == null || res.messageId === '') {
     console.error('Message insert failed: empty id in response', res);
     return;
   }
-  const serverId = res.data.id;
-  let requestIdForNotif: number | null = null;
+  const serverId = res.messageId;
   chats = chats.map((c) => {
     if (c.id !== chatId) return c;
-    requestIdForNotif = c.requestId;
     const replaced = c.messages.map((m) => (m.id === optimisticId ? { ...m, id: serverId } : m));
     const prevUnread = c.unreadCountByUserId?.[receiverId] ?? 0;
     return {
@@ -588,18 +585,6 @@ export async function addChatMessage(chatId: string, text: string): Promise<void
   emit();
   void persist();
   void scheduleLocalNewMessageNotificationForTesting(trimmed);
-  if (requestIdForNotif != null) {
-    const requestRow = getRequestSupabaseRowId(req as Record<string, unknown>);
-    insertServerNotificationToRecipient({
-      actorId: senderId,
-      recipientUserId: receiverId,
-      type: 'message',
-      title: 'New message',
-      body: 'You received a new message',
-      requestId: requestRow,
-      offerId: offerIdStr,
-    });
-  }
   await syncChatWithSupabase(chatId, { bumpUnreadForNewIncoming: false });
 }
 
@@ -644,6 +629,15 @@ export async function syncChatWithSupabase(
     console.log('SYNC RESULT COUNT', rows.length);
   }
   if (rows.length === 0) {
+    if (__DEV__) {
+      console.log('[chat] cleanup stale local thread: backend has zero offer_messages', {
+        chatId,
+        offerUuid,
+      });
+    }
+    chats = chats.filter((c) => c.id !== chatId);
+    emit();
+    void persist();
     return;
   }
   const me = getAuthUserIdSync().trim();

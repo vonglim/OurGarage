@@ -27,6 +27,8 @@ import {
 } from '@/components/RentalDetailsCard';
 import { subtleControlPressed, ui } from '@/constants/appUi';
 import { useAuthUserId } from '@/lib/authUser';
+import { markMessageNotificationsForOfferAsRead, markOfferThreadRead } from '@/lib/messageUnread';
+import { sendOfferThreadUserMessage } from '@/lib/sendOfferThreadMessage';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 
@@ -348,6 +350,10 @@ export default function ChatDetailScreen() {
             if (prev.some((m) => m.id === msg.id)) return prev;
             return [...prev, msg];
           });
+          if (meId && authorId && authorId !== meId) {
+            void markOfferThreadRead(threadOfferId);
+            void markMessageNotificationsForOfferAsRead(threadOfferId);
+          }
         }
       )
       .on(
@@ -400,7 +406,13 @@ export default function ChatDetailScreen() {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [threadOfferId, loadMessages]);
+  }, [threadOfferId, loadMessages, meId]);
+
+  useEffect(() => {
+    if (!threadOfferId || !meId) return;
+    void markOfferThreadRead(threadOfferId);
+    void markMessageNotificationsForOfferAsRead(threadOfferId);
+  }, [threadOfferId, meId]);
 
   const onSend = async () => {
     const text = draft.trim();
@@ -408,16 +420,18 @@ export default function ChatDetailScreen() {
     setDraft('');
     const receiverId =
       rental == null ? null : rental.owner_user_id === meId ? rental.renter_user_id : rental.owner_user_id;
-    const insertRow: Record<string, unknown> = {
-      offer_id: threadOfferId,
-      author_id: meId,
-      receiver_id: receiverId,
+    if (!receiverId) {
+      showFeedbackToast('Could not resolve recipient');
+      return;
+    }
+    const { error } = await sendOfferThreadUserMessage({
+      offerId: threadOfferId,
+      requestRowId: rental?.request_id ?? null,
+      rentalId: threadRentalId,
+      authorId: meId,
+      receiverId,
       body: text,
-      price: null,
-      kind: 'user_chat',
-    };
-    if (threadRentalId) insertRow.rental_id = threadRentalId;
-    const { error } = await getSupabase().from('offer_messages').insert(insertRow);
+    });
     if (error) {
       console.error('SEND ERROR', error);
       showFeedbackToast('Could not send');
@@ -441,6 +455,19 @@ export default function ChatDetailScreen() {
         agreement_status: 'confirmed',
         confirmed_at: new Date().toISOString(),
       };
+      if (__DEV__) {
+        console.log('[proposal-confirm] accept press', {
+          routeId: id,
+          threadOfferId,
+          threadRentalId,
+          rentalId: rental.id,
+          requestId: rental.request_id,
+          offerId: rental.offer_id,
+          meId,
+          messageId: message.id,
+          patch,
+        });
+      }
 
       setAcceptingMessageId(message.id);
       try {
@@ -451,8 +478,27 @@ export default function ChatDetailScreen() {
           .select('*')
           .single();
         if (error) {
+          if (__DEV__) {
+            console.warn('[proposal-confirm] accept update failed', {
+              routeId: id,
+              threadOfferId,
+              threadRentalId,
+              rentalId: rental.id,
+              error: error.message,
+              code: error.code,
+              details: error.details,
+              hint: error.hint,
+              patchKeys: Object.keys(patch),
+            });
+          }
           showFeedbackToast('Could not confirm yet.');
           return;
+        }
+        if (__DEV__) {
+          console.log('[proposal-confirm] accept update ok', {
+            rentalId: rental.id,
+            updatedId: (data as { id?: string } | null)?.id ?? null,
+          });
         }
         if (data) setRental(data as RentalMeetupDetails);
         setAcceptedMessageIds((prev) => (prev.includes(message.id) ? prev : [...prev, message.id]));
@@ -460,7 +506,7 @@ export default function ChatDetailScreen() {
         setAcceptingMessageId(null);
       }
     },
-    [rental, meId]
+    [rental, meId, id, threadOfferId, threadRentalId]
   );
 
   const insertMeetupSystemMessage = useCallback(
@@ -524,25 +570,62 @@ export default function ChatDetailScreen() {
         patch.agreement_status = 'pending';
         patch.confirmed_at = null;
       }
+      if (__DEV__) {
+        console.log('[proposal-confirm] footer confirm attempt', {
+          routeId: id,
+          threadOfferId,
+          threadRentalId,
+          rentalId: rental.id,
+          requestId: rental.request_id,
+          offerId: rental.offer_id,
+          meId,
+          patch,
+        });
+      }
       const { data, error } = await getSupabase()
         .from('rentals')
         .update(patch)
         .eq('id', rental.id)
         .select('*')
         .single();
+      if (error && __DEV__) {
+        console.warn('[proposal-confirm] footer confirm failed', {
+          routeId: id,
+          threadOfferId,
+          threadRentalId,
+          rentalId: rental.id,
+          error: error.message,
+          code: error.code,
+          details: error.details,
+          hint: error.hint,
+          patchKeys: Object.keys(patch),
+        });
+      }
       if (!error && data) setRental(data as RentalMeetupDetails);
     } finally {
       setRentalBusy(false);
     }
-  }, [rental, meId]);
+  }, [rental, meId, id, threadOfferId, threadRentalId]);
 
   const onProposeRentalDetails = useCallback(
     async (input: {
       meetupTimeIso: string;
       meetupLocation: string;
       returnTimeIso: string;
-    }) => {
-      if (!rental) return;
+    }): Promise<boolean> => {
+      if (__DEV__) {
+        console.log('[proposal] onProposeRentalDetails called', {
+          routeId: id,
+          threadOfferId,
+          threadRentalId,
+          rentalId: rental?.id ?? null,
+          requestId: rental?.request_id ?? null,
+          offerId: rental?.offer_id ?? null,
+          meId,
+          input,
+        });
+      }
+      if (!rental) return false;
       setRentalBusy(true);
       try {
         const supabase = getSupabase();
@@ -553,34 +636,51 @@ export default function ChatDetailScreen() {
           typeof rental.proposal_version === 'number' && Number.isFinite(rental.proposal_version)
             ? rental.proposal_version + 1
             : 2;
-        const { error } = await supabase
-          .from('rentals')
-          .update({
-            pickup_datetime: input.meetupTimeIso,
-            return_datetime: input.returnTimeIso,
-            meetup_time: input.meetupTimeIso,
-            meetup_location: input.meetupLocation,
-            return_time: input.returnTimeIso,
-            return_location: input.meetupLocation,
-            // Proposer auto-confirms their own proposal; other party resets to pending.
-            confirmed_by_owner: iAmOwner ? true : false,
-            confirmed_by_renter: iAmRenter ? true : false,
-            owner_confirmed: iAmOwner ? true : false,
-            renter_confirmed: iAmRenter ? true : false,
-            agreement_status: 'pending',
-            confirmed_at: null,
-            last_proposed_by: meId,
-            proposal_version: nextProposalVersion,
-            proposal_updated_at: nowIso,
-            latest_proposal_message_id: null,
-          })
-          .eq('id', rental.id);
+        const hasCol = (k: string) => Object.prototype.hasOwnProperty.call(rental, k);
+        const payload: Record<string, unknown> = {
+          meetup_time: input.meetupTimeIso,
+          meetup_location: input.meetupLocation,
+          return_time: input.returnTimeIso,
+          return_location: input.meetupLocation,
+          confirmed_by_owner: iAmOwner ? true : false,
+          confirmed_by_renter: iAmRenter ? true : false,
+        };
+        if (hasCol('pickup_datetime')) payload.pickup_datetime = input.meetupTimeIso;
+        if (hasCol('return_datetime')) payload.return_datetime = input.returnTimeIso;
+        if (hasCol('owner_confirmed')) payload.owner_confirmed = iAmOwner ? true : false;
+        if (hasCol('renter_confirmed')) payload.renter_confirmed = iAmRenter ? true : false;
+        if (hasCol('agreement_status')) payload.agreement_status = 'pending';
+        if (hasCol('confirmed_at')) payload.confirmed_at = null;
+        if (hasCol('last_proposed_by')) payload.last_proposed_by = meId;
+        if (hasCol('proposal_version')) payload.proposal_version = nextProposalVersion;
+        if (hasCol('proposal_updated_at')) payload.proposal_updated_at = nowIso;
+        if (hasCol('latest_proposal_message_id')) payload.latest_proposal_message_id = null;
+        if (__DEV__) {
+          console.log('[proposal] rentals update payload keys', {
+            rentalId: rental.id,
+            keys: Object.keys(payload),
+          });
+        }
+        const { error } = await supabase.from('rentals').update(payload).eq('id', rental.id);
         if (error) {
+          if (__DEV__) {
+            console.warn('[proposal] rentals update failed', {
+              rentalId: rental.id,
+              error: error.message,
+              code: error.code,
+            });
+          }
           showFeedbackToast('Could not update rental details.');
-          return;
+          return false;
         }
         const messageId = await insertMeetupSystemMessage(input);
-        if (messageId) {
+        if (__DEV__) {
+          console.log('[proposal] insertMeetupSystemMessage result', {
+            rentalId: rental.id,
+            messageId,
+          });
+        }
+        if (messageId && hasCol('latest_proposal_message_id')) {
           await supabase
             .from('rentals')
             .update({ latest_proposal_message_id: messageId })
@@ -588,11 +688,18 @@ export default function ChatDetailScreen() {
         }
         const { data } = await supabase.from('rentals').select('*').eq('id', rental.id).single();
         if (data) setRental(data as RentalMeetupDetails);
+        if (__DEV__) {
+          console.log('[proposal] onProposeRentalDetails success', {
+            rentalId: rental.id,
+            latestProposalMessageId: messageId ?? null,
+          });
+        }
+        return true;
       } finally {
         setRentalBusy(false);
       }
     },
-    [rental, meId, insertMeetupSystemMessage]
+    [rental, meId, insertMeetupSystemMessage, id, threadOfferId, threadRentalId]
   );
 
   if (!id) {
@@ -669,6 +776,12 @@ export default function ChatDetailScreen() {
                     busy={rentalBusy}
                     onConfirm={onConfirmRentalDetails}
                     onProposeChange={onProposeRentalDetails}
+                    onPrepareMeetup={() => {
+                      router.push({
+                        pathname: '/rental/[id]',
+                        params: { id: rental.id },
+                      });
+                    }}
                   />
                 </View>
               ) : (

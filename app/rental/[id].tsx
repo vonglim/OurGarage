@@ -40,6 +40,7 @@ import {
 } from '@/lib/rentalVerification';
 import { getSupabase } from '@/lib/supabase';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
+import { useMessageUnreadStore } from '@/store/messageUnreadStore';
 import { primarySolidPressed, shadowCard, shadowKey, ui } from '@/constants/appUi';
 
 type RentalRow = {
@@ -313,6 +314,7 @@ export default function RentalScreen() {
   const [pickupEvidenceDisplay, setPickupEvidenceDisplay] = useState<{ id: string; uri: string }[]>([]);
   const [returnEvidenceDisplay, setReturnEvidenceDisplay] = useState<{ id: string; uri: string }[]>([]);
   const [uploadingEvidence, setUploadingEvidence] = useState(false);
+  const unreadByOfferId = useMessageUnreadStore((s) => s.unreadByOfferId);
 
   useEffect(() => {
     setPickupEvidenceDisplay([]);
@@ -686,6 +688,10 @@ export default function RentalScreen() {
         : agreementStatus === 'confirmed'
           ? 2
           : 1;
+  const threadUnread =
+    typeof rental.offer_id === 'string' && rental.offer_id.trim() !== ''
+      ? (unreadByOfferId[rental.offer_id.trim()] ?? 0)
+      : 0;
 
   const togglePickupItem = (id: string) => {
     setPickupChecklist((prev) => {
@@ -826,6 +832,11 @@ export default function RentalScreen() {
         onPress={openRentalChat}
       >
         <Text style={styles.messageSecondaryBtnText}>Message</Text>
+        {threadUnread > 0 ? (
+          <View style={styles.threadMessageBadge}>
+            <Text style={styles.threadMessageBadgeText}>{threadUnread > 99 ? '99+' : String(threadUnread)}</Text>
+          </View>
+        ) : null}
       </Pressable>
       <Pressable
         pressOpacityFeedback={false}
@@ -1923,6 +1934,7 @@ const styles = StyleSheet.create({
     lineHeight: 15,
   },
   messageSecondaryBtn: {
+    position: 'relative',
     marginTop: 10,
     paddingVertical: 10,
     borderRadius: ui.radiusButton,
@@ -1936,6 +1948,25 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: ui.primary,
+  },
+  threadMessageBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#D7263D',
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+  },
+  threadMessageBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '800',
   },
   reportTextHit: {
     alignSelf: 'center',

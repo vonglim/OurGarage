@@ -56,7 +56,8 @@ type Props = {
     meetupTimeIso: string;
     returnTimeIso: string;
     meetupLocation: string;
-  }) => Promise<void>;
+  }) => Promise<boolean>;
+  onPrepareMeetup?: () => void;
 };
 
 export type RentalDetailsCardHandle = {
@@ -133,6 +134,7 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
     busy = false,
     onConfirm,
     onProposeChange,
+    onPrepareMeetup,
   }: Props,
   ref
 ) {
@@ -167,6 +169,17 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
   }, [rental]);
 
   const openPropose = () => {
+    if (__DEV__) {
+      console.log('[proposal] openPropose attempt', {
+        rentalId: rental.id,
+        offerId: rental.offer_id,
+        requestId: rental.request_id,
+        isOwner,
+        isRenter,
+        busy,
+        showHeaderEditAction,
+      });
+    }
     const pickup = initialDraftDate(rental.meetup_time);
     setMeetupDraft(pickup);
     setReturnDraft(initialReturnDraft(rental.return_time ?? null, pickup));
@@ -175,6 +188,11 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
     setActivePicker(null);
     setProposeOpen(true);
   };
+  React.useEffect(() => {
+    if (__DEV__) {
+      console.log('[proposal] modal state changed', { proposeOpen, rentalId: rental.id });
+    }
+  }, [proposeOpen, rental.id]);
   useImperativeHandle(
     ref,
     () => ({
@@ -236,6 +254,16 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
   };
 
   const handleSubmit = async () => {
+    if (__DEV__) {
+      console.log('[proposal] submit attempt', {
+        rentalId: rental.id,
+        offerId: rental.offer_id,
+        requestId: rental.request_id,
+        meetupIso: meetupDraft.toISOString(),
+        returnIso: returnDraft.toISOString(),
+        meetupLocation: meetupLocation.trim(),
+      });
+    }
     const loc = meetupLocation.trim();
     if (!loc) {
       alert('Enter meetup location');
@@ -251,17 +279,26 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
     }
     setSubmitting(true);
     try {
-      await onProposeChange({
+      const ok = await onProposeChange({
         meetupTimeIso: meetupDraft.toISOString(),
         returnTimeIso: returnDraft.toISOString(),
         meetupLocation: loc,
       });
+      if (!ok) {
+        if (__DEV__) {
+          console.warn('[proposal] submit aborted: onProposeChange returned false');
+        }
+        return;
+      }
       setRecentLocations((prev) => {
         if (loc && !prev.includes(loc)) return [loc, ...prev].slice(0, 8);
         return prev;
       });
       Keyboard.dismiss();
       setProposeOpen(false);
+      if (__DEV__) {
+        console.log('[proposal] submit success -> modal closed', { rentalId: rental.id });
+      }
     } finally {
       setSubmitting(false);
     }
@@ -301,7 +338,16 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
         {showHeaderEditAction ? (
           <Pressable
             pressOpacityFeedback={false}
-            onPress={openPropose}
+            onPress={() => {
+              if (__DEV__) {
+                console.log('[proposal] button press fired', {
+                  rentalId: rental.id,
+                  offerId: rental.offer_id,
+                  requestId: rental.request_id,
+                });
+              }
+              openPropose();
+            }}
             style={({ pressed }) => [styles.editBtn, pressed && styles.secondaryBtnPressed]}
           >
             <Text style={styles.editBtnText}>Propose Change</Text>
@@ -380,6 +426,15 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
           ]}
         >
           <Text style={styles.confirmedBarText}>✓ Rental details confirmed</Text>
+          {onPrepareMeetup ? (
+            <Pressable
+              pressOpacityFeedback={false}
+              onPress={onPrepareMeetup}
+              style={({ pressed }) => [styles.prepareMeetupCta, pressed && styles.secondaryBtnPressed]}
+            >
+              <Text style={styles.prepareMeetupCtaText}>Prepare for meetup</Text>
+            </Pressable>
+          ) : null}
         </Animated.View>
       ) : null}
 
@@ -662,6 +717,19 @@ const styles = StyleSheet.create({
     color: '#2E7D4F',
     lineHeight: 16,
     textAlign: 'center',
+  },
+  prepareMeetupCta: {
+    marginTop: 6,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(46,125,79,0.12)',
+  },
+  prepareMeetupCtaText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#2E7D4F',
+    letterSpacing: 0.1,
   },
   actions: {
     marginTop: 6,

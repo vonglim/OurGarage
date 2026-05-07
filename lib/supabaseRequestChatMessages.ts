@@ -31,6 +31,7 @@ export type InsertRequestChatMessageResult = {
 export async function insertRequestChatMessageToSupabase(input: {
   requestRowId?: string | null;
   offerId: string;
+  rentalId?: string | null;
   authorId: string;
   /** Counterparty; must not equal `authorId` (both are Supabase auth `user` ids or equivalent string ids). */
   receiverId: string;
@@ -49,6 +50,11 @@ export async function insertRequestChatMessageToSupabase(input: {
   const rid = input.requestRowId != null && String(input.requestRowId).trim() !== '' ? String(input.requestRowId).trim() : '';
   if (rid !== '') {
     base.request_id = rid;
+  }
+  const rentalId =
+    input.rentalId != null && String(input.rentalId).trim() !== '' ? String(input.rentalId).trim() : '';
+  if (rentalId !== '') {
+    base.rental_id = rentalId;
   }
   const { data, error } = await supabase
     .from('offer_messages')

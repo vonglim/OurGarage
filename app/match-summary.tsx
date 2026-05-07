@@ -16,6 +16,7 @@ import {
   getRequestBySupabaseId,
   getRequestByTimestamp,
 } from '@/store/requestsStore';
+import { useMessageUnreadStore } from '@/store/messageUnreadStore';
 import { primarySolidPressed, shadowCard, shadowKey, ui } from '@/constants/appUi';
 
 function dashLocation(loc: unknown): string {
@@ -29,6 +30,7 @@ export default function MatchSummaryScreen() {
   const rawId = params.requestId;
   const requestIdStr = Array.isArray(rawId) ? rawId[0] : rawId;
   const [tick, setTick] = useState(0);
+  const unreadByOfferId = useMessageUnreadStore((s) => s.unreadByOfferId);
 
   useFocusEffect(
     useCallback(() => {
@@ -47,6 +49,11 @@ export default function MatchSummaryScreen() {
     if (!Number.isFinite(id)) return undefined;
     return getRequestByTimestamp(id);
   }, [requestIdStr, tick]);
+  const messageThreadUnread = useMemo(() => {
+    const offerId = String(request?.acceptedOfferId ?? '').trim();
+    if (!offerId) return 0;
+    return unreadByOfferId[offerId] ?? 0;
+  }, [request?.acceptedOfferId, unreadByOfferId]);
 
   if (!requestIdStr) {
     return (
@@ -152,6 +159,13 @@ export default function MatchSummaryScreen() {
           }}
         >
           <Text style={styles.messageButtonText}>Message</Text>
+          {messageThreadUnread > 0 ? (
+            <View style={styles.threadMessageBadge}>
+              <Text style={styles.threadMessageBadgeText}>
+                {messageThreadUnread > 99 ? '99+' : String(messageThreadUnread)}
+              </Text>
+            </View>
+          ) : null}
         </Pressable>
 
         {getEffectiveRentalStatus(request) === 'active' ? (
@@ -290,6 +304,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   messageButton: {
+    position: 'relative',
     backgroundColor: ui.primary,
     paddingVertical: ui.padButtonV,
     borderRadius: ui.radiusButton,
@@ -304,6 +319,25 @@ const styles = StyleSheet.create({
     color: ui.primaryOn,
     fontSize: 16,
     fontWeight: '600',
+  },
+  threadMessageBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#D7263D',
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+  },
+  threadMessageBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '800',
   },
   startButton: {
     backgroundColor: ui.primary,

@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ScrollView,
   StyleSheet,
@@ -8,50 +8,191 @@ import {
 } from 'react-native';
 import { Pressable } from '@/components/Pressable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
-import {
-  getLastMessagePreview,
-  getOtherParticipant,
-  getUnreadCountForUser,
-  useChats,
-  type Chat,
-} from '@/store/chatStore';
 import { useAuthUserId } from '@/lib/authUser';
-import { prefetchProfileNamesForUserIds } from '@/lib/profileDisplayName';
+import { getProfileNameForUserId, prefetchProfileNamesForUserIds } from '@/lib/profileDisplayName';
+import { useMessageUnreadStore } from '@/store/messageUnreadStore';
+import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { ui } from '@/constants/appUi';
 import { useProfileCacheVersion } from '@/hooks/useProfileCacheVersion';
 
-function sortByLatest(a: Chat, b: Chat): number {
-  const ta = a.messages.length ? a.messages[a.messages.length - 1].timestamp : a.createdAt;
-  const tb = b.messages.length ? b.messages[b.messages.length - 1].timestamp : b.createdAt;
+type InboxThread = {
+  offerId: string;
+  otherUserId: string;
+  preview: string;
+  latestTs: number;
+  archived: boolean;
+};
+
+type OfferMessageLite = {
+  offer_id: string;
+  author_id: string;
+  receiver_id: string | null;
+  body: string | null;
+  kind: string | null;
+  created_at: string;
+};
+
+type OfferLite = {
+  id: string;
+  request_id: string | null;
+  renter_id: string | null;
+};
+
+type RequestLite = {
+  id: string;
+  user_id: string | null;
+};
+
+function sortByLatest(a: InboxThread, b: InboxThread): number {
+  const ta = a.latestTs;
+  const tb = b.latestTs;
   return tb - ta;
 }
 
 export default function ChatsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const chats = useChats();
   const me = useAuthUserId();
+  const unreadByOfferId = useMessageUnreadStore((s) => s.unreadByOfferId);
+  const [threads, setThreads] = useState<InboxThread[]>([]);
   useProfileCacheVersion();
+
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!me || !isSupabaseConfigured()) return;
+      let cancelled = false;
+      const supabase = getSupabase();
+
+      const hydrate = async () => {
+        const { data: msgRows, error } = await supabase
+          .from('offer_messages')
+          .select('offer_id,author_id,receiver_id,body,kind,created_at')
+          .or(`author_id.eq.${me},receiver_id.eq.${me}`)
+          .eq('kind', 'user_chat')
+          .order('created_at', { ascending: false })
+          .limit(800);
+        if (error) {
+          if (__DEV__) console.warn('[messages] fetch offer_messages failed', error.message);
+          if (!cancelled) setThreads([]);
+          return;
+        }
+
+        const rows = (msgRows ?? []) as OfferMessageLite[];
+        const firstByOffer = new Map<string, OfferMessageLite>();
+        for (const row of rows) {
+          const offerId = String(row.offer_id ?? '').trim();
+          if (!offerId || firstByOffer.has(offerId)) continue;
+          firstByOffer.set(offerId, row);
+        }
+        const offerIds = [...firstByOffer.keys()];
+        if (offerIds.length === 0) {
+          if (!cancelled) setThreads([]);
+          return;
+        }
+
+        const { data: offersData } = await supabase
+          .from('offers')
+          .select('id,request_id,renter_id')
+          .in('id', offerIds);
+        const offers = (offersData ?? []) as OfferLite[];
+        const offerMetaById = new Map(offers.map((o) => [o.id, o]));
+        const requestIds = offers
+          .map((o) => (typeof o.request_id === 'string' ? o.request_id.trim() : ''))
+          .filter((s) => s.length > 0);
+        let requestById = new Map<string, RequestLite>();
+        if (requestIds.length > 0) {
+          const { data: reqData } = await supabase
+            .from('requests')
+            .select('id,user_id')
+            .in('id', requestIds);
+          requestById = new Map(((reqData ?? []) as RequestLite[]).map((r) => [r.id, r]));
+        }
+
+        const out: InboxThread[] = [];
+        const userIdsForNames: string[] = [];
+        for (const offerId of offerIds) {
+          const latest = firstByOffer.get(offerId);
+          if (!latest) continue;
+          const offerMeta = offerMetaById.get(offerId);
+          const requestMeta =
+            offerMeta?.request_id && requestById.has(offerMeta.request_id)
+              ? requestById.get(offerMeta.request_id)!
+              : null;
+
+          const authorId = String(latest.author_id ?? '').trim();
+          const receiverId = String(latest.receiver_id ?? '').trim();
+          let otherUserId = authorId === me ? receiverId : authorId;
+          if (!otherUserId) {
+            const renterId = String(offerMeta?.renter_id ?? '').trim();
+            const posterId = String(requestMeta?.user_id ?? '').trim();
+            otherUserId = renterId && renterId !== me ? renterId : posterId && posterId !== me ? posterId : '';
+          }
+          if (!otherUserId) continue;
+          userIdsForNames.push(otherUserId);
+          const text = String(latest.body ?? '').trim();
+          out.push({
+            offerId,
+            otherUserId,
+            preview: text || 'Message',
+            latestTs: Date.parse(String(latest.created_at ?? '')) || Date.now(),
+            archived: false,
+          });
+        }
+
+        await prefetchProfileNamesForUserIds(userIdsForNames);
+        if (cancelled) return;
+        setThreads(out.sort(sortByLatest));
+      };
+
+      void hydrate();
+
+      const id =
+        typeof globalThis.crypto?.randomUUID === 'function'
+          ? globalThis.crypto.randomUUID()
+          : `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+      const channel = supabase
+        .channel(`messages-inbox:${me}:${id}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'offer_messages' },
+          (payload) => {
+            const row = (payload.new ?? payload.old) as { author_id?: string; receiver_id?: string; kind?: string } | null;
+            if (!row) return;
+            const k = String(row.kind ?? '').trim();
+            if (k !== 'user_chat') return;
+            const a = String(row.author_id ?? '').trim();
+            const r = String(row.receiver_id ?? '').trim();
+            if (a !== me && r !== me) return;
+            void hydrate();
+          }
+        )
+        .subscribe();
+
+      return () => {
+        cancelled = true;
+        void supabase.removeChannel(channel);
+      };
+    }, [me])
+  );
 
   useEffect(() => {
     const ids: string[] = [];
-    for (const c of chats) {
-      for (const p of c.participants) {
-        if (p.userId) ids.push(p.userId);
-      }
-      for (const m of c.messages) {
-        if (m.senderId) ids.push(m.senderId);
-        if (m.receiverId) ids.push(m.receiverId);
-      }
+    for (const t of threads) {
+      if (t.otherUserId) ids.push(t.otherUserId);
     }
-    void prefetchProfileNamesForUserIds(ids);
-  }, [chats]);
-  const active = chats.filter((c) => !c.archived).sort(sortByLatest);
-  const archived = chats.filter((c) => c.archived).sort(sortByLatest);
+    if (ids.length > 0) {
+      void prefetchProfileNamesForUserIds(ids);
+    }
+  }, [threads]);
+
+  const active = useMemo(() => threads.filter((t) => !t.archived).sort(sortByLatest), [threads]);
+  const archived = useMemo(() => threads.filter((t) => t.archived).sort(sortByLatest), [threads]);
   const hasAny = active.length > 0 || archived.length > 0;
+  const rowName = (userId: string) => getProfileNameForUserId(userId);
 
   return (
     <ScreenWrapper style={styles.screenWrap}>
@@ -83,20 +224,15 @@ export default function ChatsScreen() {
               <Text style={styles.sectionEmpty}>No active conversations</Text>
             ) : (
               <View style={styles.listCard}>
-                {active.map((chat, index) => {
-                  const other = getOtherParticipant(chat, me);
-                  const preview = getLastMessagePreview(chat);
-                  const unread = getUnreadCountForUser(chat, me);
+                {active.map((thread, index) => {
+                  const preview = thread.preview;
+                  const unread = unreadByOfferId[thread.offerId] ?? 0;
                   const isLast = index === active.length - 1;
                   return (
                     <Pressable
-                      key={chat.id}
+                      key={thread.offerId}
                       onPress={() => {
-                        const routeId =
-                          chat.offerId && chat.offerId !== 'legacy'
-                            ? chat.offerId
-                            : chat.id;
-                        router.push({ pathname: '/chat/[id]', params: { id: routeId } });
+                        router.push({ pathname: '/chat/[id]', params: { id: thread.offerId } });
                       }}
                       style={({ pressed }) => [
                         styles.row,
@@ -107,7 +243,7 @@ export default function ChatsScreen() {
                       <View style={styles.rowText}>
                         <View style={styles.nameRow}>
                           <Text style={styles.rowName} numberOfLines={1}>
-                            {other.displayName}
+                            {rowName(thread.otherUserId)}
                           </Text>
                           {unread > 0 ? (
                             <View style={styles.unreadBadge}>
@@ -133,20 +269,15 @@ export default function ChatsScreen() {
               <Text style={styles.sectionEmptyMuted}>No archived chats</Text>
             ) : (
               <View style={[styles.listCard, styles.listCardArchived]}>
-                {archived.map((chat, index) => {
-                  const other = getOtherParticipant(chat, me);
-                  const preview = getLastMessagePreview(chat);
-                  const unread = getUnreadCountForUser(chat, me);
+                {archived.map((thread, index) => {
+                  const preview = thread.preview;
+                  const unread = unreadByOfferId[thread.offerId] ?? 0;
                   const isLast = index === archived.length - 1;
                   return (
                     <Pressable
-                      key={chat.id}
+                      key={thread.offerId}
                       onPress={() => {
-                        const routeId =
-                          chat.offerId && chat.offerId !== 'legacy'
-                            ? chat.offerId
-                            : chat.id;
-                        router.push({ pathname: '/chat/[id]', params: { id: routeId } });
+                        router.push({ pathname: '/chat/[id]', params: { id: thread.offerId } });
                       }}
                       style={({ pressed }) => [
                         styles.rowArchived,
@@ -157,7 +288,7 @@ export default function ChatsScreen() {
                       <View style={styles.rowText}>
                         <View style={styles.nameRow}>
                           <Text style={styles.rowNameArchived} numberOfLines={1}>
-                            {other.displayName}
+                            {rowName(thread.otherUserId)}
                           </Text>
                           {unread > 0 ? (
                             <View style={[styles.unreadBadge, styles.unreadBadgeArchived]}>

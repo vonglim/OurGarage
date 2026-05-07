@@ -1,5 +1,4 @@
 import { CardPressable } from '@/components/CardPressable';
-import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
 import { Pressable } from '@/components/Pressable';
 import {
@@ -31,14 +30,14 @@ import {
   unifiedRentalTitle,
   type UnifiedRentalRow,
 } from '@/lib/fetchUnifiedRentalsForUser';
-import { markAllNotificationsAsRead } from '@/lib/markNotificationsRead';
+import { markAllNonMessageNotificationsAsRead } from '@/lib/markNotificationsRead';
 import { formatUsd, getNumericOfferPrice } from '@/lib/money';
 import { formatMilesShort } from '@/lib/requestDistance';
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { getSupabase } from '@/lib/supabase';
 import { refreshActivityScreenFromSupabase } from '@/lib/supabaseActivityRefresh';
 import { updateRentalRequestStatus } from '@/lib/updateRentalRequestStatus';
-import { useTotalUnreadChatCount } from '@/store/chatStore';
+import { useMessageUnreadStore, useUnreadMessagesTotal } from '@/store/messageUnreadStore';
 import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
 import type { AppNotification } from '@/store/notificationsStore';
 import { useNotificationsStore } from '@/store/notificationsStore';
@@ -170,7 +169,11 @@ export default function ActivityScreen() {
   const listings = useListingsStore((s) => s.listings);
   const offers = useOffersStore((state) => state.offers);
   const notifications = useNotificationsStore((s) => s.notifications);
-  const unreadCount = useTotalUnreadChatCount();
+  const unreadCount = useUnreadMessagesTotal();
+  const unreadByOfferId = useMessageUnreadStore((s) => s.unreadByOfferId);
+  if (__DEV__) {
+    console.log('[Activity] render unread messages total', unreadCount);
+  }
   const hasUnreadMessages = unreadCount > 0;
   const requests = useRequestsStore((s) => s.requests);
   const [pendingListingRentals, setPendingListingRentals] = useState<PendingListingRentalRow[]>([]);
@@ -207,7 +210,7 @@ export default function ActivityScreen() {
     useCallback(() => {
       // Request + offer data only. Notifications list comes from `notificationsStore` (realtime + initial fetch), not a refetch here.
       void refreshActivityScreenFromSupabase();
-      markAllNotificationsAsRead();
+      markAllNonMessageNotificationsAsRead();
       void refreshListingRentalRequests();
       void refreshUnifiedRentals();
     }, [refreshListingRentalRequests, refreshUnifiedRentals])
@@ -553,103 +556,103 @@ export default function ActivityScreen() {
 
   return (
     <ScreenWrapper style={styles.screenWrap}>
-      <KeyboardDismissScreen style={styles.screen}>
+      <View style={styles.screen}>
         <ScreenEntrance style={styles.screenInner}>
-          <View style={[styles.header, { paddingTop: 12 }]}>
-          <View style={styles.headerTitleRow}>
-            <Text style={styles.screenTitle} numberOfLines={1}>
-              My Activity
-            </Text>
-            <Pressable
-              pressOpacityFeedback={false}
-              haptic
-              onPress={goToChats}
-              style={({ pressed }) => [
-                styles.messagesPill,
-                { backgroundColor: hasUnreadMessages ? '#22C55E' : '#0B1F3A' },
-                pressed && styles.messagesPillPressed,
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel={hasUnreadMessages ? `Messages, ${unreadCount} unread` : 'Messages'}
-            >
-              <Text style={styles.messagesPillLabel}>Messages</Text>
-              {hasUnreadMessages ? (
-                <View style={styles.messagesPillBadge}>
-                  <Text style={styles.messagesPillBadgeText}>{formatSectionCount(unreadCount)}</Text>
-                </View>
-              ) : null}
-            </Pressable>
-          </View>
+          <ScrollView
+            style={styles.scroll}
+            contentContainerStyle={[styles.scrollContent, { paddingBottom: fabBottomReserve }]}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            bounces
+          >
+            <View style={[styles.header, { paddingTop: 12 }]}>
+              <View style={styles.headerTitleRow}>
+                <Text style={styles.screenTitle} numberOfLines={1}>
+                  My Activity
+                </Text>
+                <Pressable
+                  pressOpacityFeedback={false}
+                  haptic
+                  onPress={goToChats}
+                  style={({ pressed }) => [
+                    styles.messagesPill,
+                    pressed && styles.messagesPillPressed,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={hasUnreadMessages ? `Messages, ${unreadCount} unread` : 'Messages'}
+                >
+                  <Text style={styles.messagesPillLabel}>Messages</Text>
+                  {hasUnreadMessages ? (
+                    <View style={styles.messagesPillBadge}>
+                      <Text style={styles.messagesPillBadgeText}>{formatSectionCount(unreadCount)}</Text>
+                    </View>
+                  ) : null}
+                </Pressable>
+              </View>
 
-          <View style={styles.tabRow}>
-            <Pressable
-              onPress={() => setTab('requests')}
-              style={({ pressed }) => [
-                styles.tabCell,
-                tab === 'requests' ? styles.tabCellActive : styles.tabCellInactive,
-                tab !== 'requests' && requestsActivityCount > 0 && styles.tabCellMutedAttention,
-                pressed && styles.tabPressed,
-              ]}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: tab === 'requests' }}
-              accessibilityLabel={`Requests, ${requestsActivityCount} updates`}
-            >
-              <Text style={[styles.tabLabel, tab === 'requests' && styles.tabLabelActive]}>Requests</Text>
-              {requestsActivityCount > 0 ? (
-                <View style={styles.tabBadge}>
-                  <Text style={styles.tabBadgeText}>{formatSectionCount(requestsActivityCount)}</Text>
-                </View>
-              ) : null}
-            </Pressable>
-            <Pressable
-              onPress={() => setTab('offers')}
-              style={({ pressed }) => [
-                styles.tabCell,
-                tab === 'offers' ? styles.tabCellActive : styles.tabCellInactive,
-                tab !== 'offers' && offersSectionBadgeCount > 0 && styles.tabCellMutedAttention,
-                pressed && styles.tabPressed,
-              ]}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: tab === 'offers' }}
-              accessibilityLabel={`Offers, ${offersSectionBadgeCount} need attention`}
-            >
-              <Text style={[styles.tabLabel, tab === 'offers' && styles.tabLabelActive]}>Offers</Text>
-              {offersSectionBadgeCount > 0 ? (
-                <View style={styles.tabBadge}>
-                  <Text style={styles.tabBadgeText}>{formatSectionCount(offersSectionBadgeCount)}</Text>
-                </View>
-              ) : null}
-            </Pressable>
-            <Pressable
-              onPress={() => setTab('rentals')}
-              style={({ pressed }) => [
-                styles.tabCell,
-                tab === 'rentals' ? styles.tabCellActive : styles.tabCellInactive,
-                tab !== 'rentals' && rentalsActivityCount > 0 && styles.tabCellMutedAttention,
-                pressed && styles.tabPressed,
-              ]}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: tab === 'rentals' }}
-              accessibilityLabel={`Rentals, ${rentalsTotalCount} items`}
-            >
-              <Text style={[styles.tabLabel, tab === 'rentals' && styles.tabLabelActive]}>Rentals</Text>
-              {rentalsTotalCount > 0 ? (
-                <View style={tab === 'rentals' ? styles.tabBadge : styles.tabBadgeMuted}>
-                  <Text style={tab === 'rentals' ? styles.tabBadgeText : styles.tabBadgeMutedText}>
-                    {formatSectionCount(rentalsTotalCount)}
-                  </Text>
-                </View>
-              ) : null}
-            </Pressable>
-          </View>
-        </View>
+              <View style={styles.tabRow}>
+                <Pressable
+                  onPress={() => setTab('requests')}
+                  style={({ pressed }) => [
+                    styles.tabCell,
+                    tab === 'requests' ? styles.tabCellActive : styles.tabCellInactive,
+                    tab !== 'requests' && requestsActivityCount > 0 && styles.tabCellMutedAttention,
+                    pressed && styles.tabPressed,
+                  ]}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: tab === 'requests' }}
+                  accessibilityLabel={`Requests, ${requestsActivityCount} updates`}
+                >
+                  <Text style={[styles.tabLabel, tab === 'requests' && styles.tabLabelActive]}>Requests</Text>
+                  {requestsActivityCount > 0 ? (
+                    <View style={styles.tabBadge}>
+                      <Text style={styles.tabBadgeText}>{formatSectionCount(requestsActivityCount)}</Text>
+                    </View>
+                  ) : null}
+                </Pressable>
+                <Pressable
+                  onPress={() => setTab('offers')}
+                  style={({ pressed }) => [
+                    styles.tabCell,
+                    tab === 'offers' ? styles.tabCellActive : styles.tabCellInactive,
+                    tab !== 'offers' && offersSectionBadgeCount > 0 && styles.tabCellMutedAttention,
+                    pressed && styles.tabPressed,
+                  ]}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: tab === 'offers' }}
+                  accessibilityLabel={`Offers, ${offersSectionBadgeCount} need attention`}
+                >
+                  <Text style={[styles.tabLabel, tab === 'offers' && styles.tabLabelActive]}>Offers</Text>
+                  {offersSectionBadgeCount > 0 ? (
+                    <View style={styles.tabBadge}>
+                      <Text style={styles.tabBadgeText}>{formatSectionCount(offersSectionBadgeCount)}</Text>
+                    </View>
+                  ) : null}
+                </Pressable>
+                <Pressable
+                  onPress={() => setTab('rentals')}
+                  style={({ pressed }) => [
+                    styles.tabCell,
+                    tab === 'rentals' ? styles.tabCellActive : styles.tabCellInactive,
+                    tab !== 'rentals' && rentalsActivityCount > 0 && styles.tabCellMutedAttention,
+                    pressed && styles.tabPressed,
+                  ]}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: tab === 'rentals' }}
+                  accessibilityLabel={`Rentals, ${rentalsTotalCount} items`}
+                >
+                  <Text style={[styles.tabLabel, tab === 'rentals' && styles.tabLabelActive]}>Rentals</Text>
+                  {rentalsTotalCount > 0 ? (
+                    <View style={tab === 'rentals' ? styles.tabBadge : styles.tabBadgeMuted}>
+                      <Text style={tab === 'rentals' ? styles.tabBadgeText : styles.tabBadgeMutedText}>
+                        {formatSectionCount(rentalsTotalCount)}
+                      </Text>
+                    </View>
+                  ) : null}
+                </Pressable>
+              </View>
+            </View>
 
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: fabBottomReserve }]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
           {tab === 'requests' ? (
             <View
               style={[
@@ -914,6 +917,10 @@ export default function ActivityScreen() {
                             typeof row.listing_id === 'string' && row.listing_id.trim() !== ''
                               ? row.listing_id.trim()
                               : null;
+                          const messageUnread =
+                            typeof row.offer_id === 'string' && row.offer_id.trim() !== ''
+                              ? (unreadByOfferId[row.offer_id.trim()] ?? 0)
+                              : 0;
                           return (
                             <View key={row.id} style={styles.matchedRentalCard}>
                               <Text style={styles.matchedRentalTitle} numberOfLines={2}>
@@ -949,6 +956,13 @@ export default function ActivityScreen() {
                                   accessibilityLabel="Message"
                                 >
                                   <Text style={styles.activeBtnPrimaryLargeText}>Message</Text>
+                                  {messageUnread > 0 ? (
+                                    <View style={styles.threadMessageBtnBadge}>
+                                      <Text style={styles.threadMessageBtnBadgeText}>
+                                        {formatSectionCount(messageUnread)}
+                                      </Text>
+                                    </View>
+                                  ) : null}
                                 </Pressable>
                                 <Pressable
                                   pressOpacityFeedback={false}
@@ -989,6 +1003,10 @@ export default function ActivityScreen() {
                         const title = unifiedRentalTitle(row);
                         const priceNum = Number(row.price);
                         const priceLabel = Number.isFinite(priceNum) ? formatUsd(priceNum) : '—';
+                        const messageUnread =
+                          typeof row.offer_id === 'string' && row.offer_id.trim() !== ''
+                            ? (unreadByOfferId[row.offer_id.trim()] ?? 0)
+                            : 0;
                         return (
                           <View key={row.id} style={styles.matchedRentalCard}>
                             <Text style={styles.matchedRentalTitle} numberOfLines={2}>
@@ -1024,6 +1042,13 @@ export default function ActivityScreen() {
                                 accessibilityLabel="Message"
                               >
                                 <Text style={styles.activeBtnPrimaryLargeText}>Message</Text>
+                                {messageUnread > 0 ? (
+                                  <View style={styles.threadMessageBtnBadge}>
+                                    <Text style={styles.threadMessageBtnBadgeText}>
+                                      {formatSectionCount(messageUnread)}
+                                    </Text>
+                                  </View>
+                                ) : null}
                               </Pressable>
                               <Pressable
                                 pressOpacityFeedback={false}
@@ -1054,11 +1079,11 @@ export default function ActivityScreen() {
               )}
             </View>
           ) : null}
-        </ScrollView>
+          </ScrollView>
 
           <MainTabFab />
         </ScreenEntrance>
-      </KeyboardDismissScreen>
+      </View>
     </ScreenWrapper>
   );
 }
@@ -1097,12 +1122,13 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   messagesPill: {
+    position: 'relative',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 12,
+    backgroundColor: '#0B1F3A',
   },
   messagesPillPressed: {
     opacity: 0.9,
@@ -1113,15 +1139,21 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   messagesPillBadge: {
-    minWidth: 22,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.25)',
+    position: 'absolute',
+    top: -3,
+    right: 2,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 5,
+    borderRadius: 9,
+    backgroundColor: '#D7263D',
     alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
   },
   messagesPillBadgeText: {
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '800',
     color: '#fff',
   },
@@ -1371,6 +1403,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
+    flexGrow: 1,
     paddingHorizontal: 0,
     paddingTop: ui.padScreenH,
   },
@@ -1524,6 +1557,7 @@ const styles = StyleSheet.create({
   },
   activeBtnPrimaryLarge: {
     alignSelf: 'stretch',
+    position: 'relative',
     paddingVertical: 18,
     paddingHorizontal: ui.padScreenH,
     borderRadius: ui.radiusButton,
@@ -1539,6 +1573,25 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
     color: ui.primaryOn,
+  },
+  threadMessageBtnBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#D7263D',
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+  },
+  threadMessageBtnBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '800',
   },
   listingCard: {
     ...cardChrome,

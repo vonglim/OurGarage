@@ -25,6 +25,7 @@ import { billingDayCountForRequest, formatPerDayUsd } from '@/lib/requestPriceCo
 import { fetchOffersByRequestIdWithProfiles } from '@/lib/supabaseOffers';
 import { getSupabase } from '@/lib/supabase';
 import { mapSupabaseOfferRowToOffer } from '@/lib/supabaseOffers';
+import { useMessageUnreadStore } from '@/store/messageUnreadStore';
 import {
   type Offer,
   getOfferUserPreview,
@@ -195,6 +196,12 @@ const requestId = params.requestId ?? '';
   
   const reviewed =
     requestTs != null && userReviews.some((r) => r.requestTimestamp === requestTs);
+  const unreadByOfferId = useMessageUnreadStore((s) => s.unreadByOfferId);
+  const messageThreadUnread = useMemo(() => {
+    const acceptedOfferId = String(request?.acceptedOfferId ?? '').trim();
+    if (!acceptedOfferId) return 0;
+    return unreadByOfferId[acceptedOfferId] ?? 0;
+  }, [request?.acceptedOfferId, unreadByOfferId]);
   const reviewType = 'renter';
 
   if (!requestId || !isUuidString(requestId)) {
@@ -392,6 +399,13 @@ const requestId = params.requestId ?? '';
             style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
           >
             <Text style={styles.secondaryBtnText}>Message</Text>
+            {messageThreadUnread > 0 ? (
+              <View style={styles.threadMessageBadge}>
+                <Text style={styles.threadMessageBadgeText}>
+                  {messageThreadUnread > 99 ? '99+' : String(messageThreadUnread)}
+                </Text>
+              </View>
+            ) : null}
           </Pressable>
         )}
 
@@ -673,6 +687,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   secondaryBtn: {
+    position: 'relative',
     marginTop: 16,
     alignSelf: 'stretch',
     paddingVertical: 12,
@@ -689,6 +704,25 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: ui.primary,
+  },
+  threadMessageBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#D7263D',
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+  },
+  threadMessageBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '800',
   },
   primaryOutlineBtn: {
     marginTop: 10,
