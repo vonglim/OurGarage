@@ -1,5 +1,5 @@
+import { BackHeader } from '@/components/AppHeaders';
 import { Pressable } from '@/components/Pressable';
-import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useFocusEffect } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -421,22 +421,12 @@ export default function RequestDetailsScreen() {
       <KeyboardDismissScreen style={styles.screen}>
         <ScreenEntrance style={styles.entranceFlex}>
           <View style={[styles.header, { paddingTop: 8 }]}>
-            <View style={styles.headerRow}>
-              <View style={styles.headerBackWrap}>
-                <ScreenBackButton onPress={() => router.back()} style={styles.backHit} />
-              </View>
-              <View style={styles.headerCenter}>
-                <Text style={styles.headerRequestTitle} numberOfLines={1}>
-                  {request.toolName || 'Request'}
-                </Text>
-                {headerSubtitle ? (
-                  <Text style={styles.headerSubtitle} numberOfLines={2}>
-                    {headerSubtitle}
-                  </Text>
-                ) : null}
-              </View>
-              <View style={styles.headerRight}>
-                {!isOwner && canMakeOffer ? (
+            <BackHeader
+              title={request.toolName || 'Request'}
+              onBack={() => router.back()}
+              subtitle={headerSubtitle || undefined}
+              rightAccessory={
+                !isOwner && canMakeOffer ? (
                   <Pressable
                     pressOpacityFeedback={false}
                     haptic
@@ -458,11 +448,9 @@ export default function RequestDetailsScreen() {
                   <Text style={styles.headerOfferCountMuted} numberOfLines={2}>
                     Waiting
                   </Text>
-                ) : (
-                  <View style={styles.headerRightSpacer} />
-                )}
-              </View>
-            </View>
+                ) : undefined
+              }
+            />
           </View>
 
           <ScrollView
@@ -845,54 +833,10 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: 0,
-    paddingBottom: 10,
+    paddingBottom: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,
     backgroundColor: ui.surfaceGrouped,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    minHeight: 44,
-    gap: 8,
-  },
-  headerBackWrap: {
-    width: 44,
-    flexShrink: 0,
-    justifyContent: 'center',
-    paddingTop: 2,
-  },
-  headerCenter: {
-    flex: 1,
-    minWidth: 0,
-    justifyContent: 'center',
-  },
-  headerRight: {
-    flexShrink: 0,
-    maxWidth: 120,
-    alignItems: 'flex-end',
-    justifyContent: 'flex-start',
-    paddingTop: 2,
-  },
-  headerRightSpacer: {
-    width: 44,
-    minHeight: 36,
-  },
-  backHit: {
-    paddingVertical: 4,
-  },
-  headerRequestTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: ui.textPrimary,
-    letterSpacing: -0.2,
-  },
-  headerSubtitle: {
-    marginTop: 2,
-    fontSize: 12,
-    fontWeight: '500',
-    color: ui.textSecondary,
-    lineHeight: 16,
   },
   headerMakeOfferBtn: {
     paddingVertical: 8,

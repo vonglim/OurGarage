@@ -39,6 +39,10 @@ import { getPublicProfileForView } from '@/lib/publicProfiles';
 import { formatMilesShort } from '@/lib/requestDistance';
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { getSupabase } from '@/lib/supabase';
+import {
+  activityRentalsIntentPendingSyncRef,
+  readAndClearActivityPendingIntent,
+} from '@/lib/activityPendingIntent';
 import { refreshActivityScreenFromSupabase } from '@/lib/supabaseActivityRefresh';
 import { updateRentalRequestStatus } from '@/lib/updateRentalRequestStatus';
 import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
@@ -347,16 +351,6 @@ export default function ActivityScreen() {
   const refreshUnifiedRentalsRef = useRef(refreshUnifiedRentals);
   refreshUnifiedRentalsRef.current = refreshUnifiedRentals;
 
-  useFocusEffect(
-    useCallback(() => {
-      // Request + offer data only. Notifications list comes from `notificationsStore` (realtime + initial fetch), not a refetch here.
-      void refreshActivityScreenFromSupabase();
-      markAllNonMessageNotificationsAsRead();
-      void refreshListingRentalRequests();
-      void refreshUnifiedRentals();
-    }, [refreshListingRentalRequests, refreshUnifiedRentals])
-  );
-
   useEffect(() => {
     const uid = me.trim();
     if (!uid) return;
@@ -455,6 +449,8 @@ export default function ActivityScreen() {
   );
   const swipeRefs = useRef(new Map<number, Swipeable>());
   const fabBottomReserve = useMainTabFabBottomReserve();
+  /** When true, skip restoring last Activity tab from storage (rentals deep-link won the race). */
+  const activityRentalsIntentAppliedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -462,8 +458,13 @@ export default function ActivityScreen() {
       try {
         const raw = await AsyncStorage.getItem(ACTIVITY_LAST_TAB_STORAGE_KEY);
         if (cancelled) return;
-        const parsed = parseStoredActivityTab(raw);
-        if (parsed != null) setTab(parsed);
+        if (
+          !activityRentalsIntentPendingSyncRef.current &&
+          !activityRentalsIntentAppliedRef.current
+        ) {
+          const parsed = parseStoredActivityTab(raw);
+          if (parsed != null) setTab(parsed);
+        }
       } finally {
         if (!cancelled) setActivityTabHydrated(true);
       }
@@ -501,6 +502,32 @@ export default function ActivityScreen() {
       });
     },
     [activityPageWidth]
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void (async () => {
+        try {
+          const intent = await readAndClearActivityPendingIntent();
+          if (cancelled || intent?.tab !== 'rentals') return;
+          activityRentalsIntentAppliedRef.current = true;
+          goToActivityTab('rentals');
+          setRentalsSubView(intent.rentalsSub);
+        } finally {
+          activityRentalsIntentPendingSyncRef.current = false;
+        }
+      })();
+      void refreshActivityScreenFromSupabase();
+      markAllNonMessageNotificationsAsRead();
+      void refreshListingRentalRequests();
+      void refreshUnifiedRentals();
+      return () => {
+        cancelled = true;
+        activityRentalsIntentAppliedRef.current = false;
+        activityRentalsIntentPendingSyncRef.current = false;
+      };
+    }, [goToActivityTab, refreshListingRentalRequests, refreshUnifiedRentals])
   );
 
   const onActivityPagerScrollEnd = useCallback(

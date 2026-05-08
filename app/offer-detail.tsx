@@ -35,6 +35,7 @@ import {
   getRequestSupabaseRowId,
   isUuidString,
 } from '@/lib/requestOwnership';
+import { scheduleActivityRentalsIntent } from '@/lib/activityPendingIntent';
 import { getPresetById } from '@/lib/userAvatarPresets';
 import { finalizeOfferAcceptance } from '@/lib/finalizeOfferAcceptance';
 import {
@@ -518,6 +519,23 @@ export default function OfferDetailScreen() {
       ? 120 + insets.bottom
       : 32 + insets.bottom;
 
+  const activityRentalsSubLabel =
+    isViewerPoster ? 'RENTING' : isRenterOnThread ? 'EQUIPMENT OWNER' : 'RENTING';
+
+  const openActivityRentalsFromDeal = useCallback(async () => {
+    const sub: 'renting' | 'listing' = isViewerPoster
+      ? 'renting'
+      : isRenterOnThread
+        ? 'listing'
+        : 'renting';
+    try {
+      await scheduleActivityRentalsIntent(sub);
+    } catch {
+      // Prefer landing on Activity even if persistence fails.
+    }
+    router.push('/(tabs)/activity');
+  }, [isViewerPoster, isRenterOnThread]);
+
   return (
     <ScreenWrapper style={styles.screenWrap}>
       <View style={{ flex: 1, backgroundColor: ui.surfaceGrouped }}>
@@ -542,8 +560,19 @@ export default function OfferDetailScreen() {
           <View style={[styles.notice, styles.dealInProgressNotice]}>
             <Text style={styles.dealInProgressTitle}>Deal in progress</Text>
             <Text style={styles.dealInProgressBody}>
-              This request is matched. Accept, counter, and new offers are locked.
+              You have an active agreement on this request. Continue in Activity to confirm details, coordinate meetup
+              or delivery, and message the other party. Accept, counter, and new offers are closed here.
             </Text>
+            <Pressable
+              accessibilityRole="link"
+              accessibilityLabel={`Open Activity, Rentals tab, ${activityRentalsSubLabel}`}
+              onPress={openActivityRentalsFromDeal}
+              style={({ pressed }) => [styles.dealInProgressLinkWrap, pressed && styles.dealInProgressLinkPressed]}
+            >
+              <Text style={styles.dealInProgressLink}>
+                Open Activity · Rentals · {activityRentalsSubLabel}
+              </Text>
+            </Pressable>
           </View>
         ) : null}
 
@@ -1337,6 +1366,20 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#2E7D32',
     lineHeight: 22,
+  },
+  dealInProgressLinkWrap: {
+    alignSelf: 'flex-start',
+    marginTop: 12,
+    paddingVertical: 4,
+  },
+  dealInProgressLinkPressed: {
+    opacity: 0.75,
+  },
+  dealInProgressLink: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: ui.primary,
+    textDecorationLine: 'underline',
   },
   buttonContainer: {
     position: 'absolute',

@@ -49,7 +49,9 @@ import {
   uploadRentalEvidencePhoto,
 } from '@/lib/rentalEvidenceUpload';
 import { isPhotoUploadWindowOpen } from '@/lib/rentalPhotoWindow';
+import { formatDurationDisplay } from '@/lib/durationFormat';
 import { calculatePreauthAmount } from '@/lib/rentalProtection';
+import { mapSupabaseRequestSelectRowToApp } from '@/lib/supabaseRequests';
 import {
   deleteVerificationPhotoById,
   deriveDualConfirmation,
@@ -160,6 +162,59 @@ function formatDurationDays(
   if (!Number.isFinite(pickupMs) || !Number.isFinite(returnMs) || returnMs <= pickupMs) return null;
   const days = Math.max(1, Math.ceil((returnMs - pickupMs) / 86_400_000));
   return `${days} day${days === 1 ? '' : 's'}`;
+}
+
+const DEFAULT_MEETUP_HOUR = 10;
+const DEFAULT_MEETUP_MINUTE = 0;
+
+function parseYyyyMmDdToLocalDateAt10Am(dateStr: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr.trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return null;
+  return new Date(y, mo, d, DEFAULT_MEETUP_HOUR, DEFAULT_MEETUP_MINUTE, 0, 0);
+}
+
+function requestPickupReturnFallbackMs(req: unknown): { pickupMs: number | null; returnMs: number | null } {
+  if (!req || typeof req !== 'object') return { pickupMs: null, returnMs: null };
+  const r = req as Record<string, unknown>;
+  const pRaw =
+    (typeof r.pickupDate === 'string' && r.pickupDate.trim()) ||
+    (typeof r.pickup_date === 'string' && r.pickup_date.trim()) ||
+    '';
+  const rRaw =
+    (typeof r.returnDate === 'string' && r.returnDate.trim()) ||
+    (typeof r.return_date === 'string' && r.return_date.trim()) ||
+    '';
+  const pd = pRaw ? parseYyyyMmDdToLocalDateAt10Am(pRaw) : null;
+  const rd = rRaw ? parseYyyyMmDdToLocalDateAt10Am(rRaw) : null;
+  return {
+    pickupMs: pd ? pd.getTime() : null,
+    returnMs: rd ? rd.getTime() : null,
+  };
+}
+
+function formatAgreementMeetingPickupReturn(
+  agreementConfirmed: boolean,
+  rentalIso: string | null | undefined,
+  fallbackMs: number | null
+): string {
+  if (rentalIso) {
+    const t = Date.parse(rentalIso);
+    if (Number.isFinite(t)) {
+      if (agreementConfirmed) return formatCompactDate(rentalIso);
+      return formatCompactDateTime(rentalIso);
+    }
+  }
+  if (fallbackMs != null && Number.isFinite(fallbackMs)) {
+    const d = new Date(fallbackMs);
+    const datePart = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    const timePart = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    return `${datePart} • ${timePart}`;
+  }
+  return 'Not set';
 }
 
 const OWNER_PICKUP_ITEMS = [
@@ -567,7 +622,7 @@ export default function RentalScreen() {
         return;
       }
 
-      setRequest(data);
+      setRequest(mapSupabaseRequestSelectRowToApp(data as Record<string, unknown>));
     };
 
     void fetchRequest();
@@ -1163,6 +1218,10 @@ export default function RentalScreen() {
   const editLockedByPickupWindow = Number.isFinite(pickupAtMs) && pickupAtMs - Date.now() <= 24 * 60 * 60 * 1000;
   const showMeetingConfirmedActions = agreementStatus === 'confirmed';
   const canEditConfirmed = !proposalBusy && !editLockedByPickupWindow;
+  const canOpenMeetingProposal =
+    termsCompleted &&
+    !proposalBusy &&
+    (showMeetingAccept || showMeetingPrimaryAction || (showMeetingConfirmedActions && canEditConfirmed));
   const meetingCompleted = agreementStatus === 'confirmed' && !hasPendingProposal;
   const lifecycleStatusForLayout = String(rental.status ?? 'pending').trim().toLowerCase();
   const returnWorkflowEnabledForLayout = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
@@ -1171,11 +1230,42 @@ export default function RentalScreen() {
   const returnCompletedForCard = ['returned', 'completed', 'cancelled'].includes(lifecycleStatusForLayout);
   const termsReplacementValue = Number(rental.replacement_value ?? Math.max(finalPrice * 3, 150));
 
-  const computedDurationLabel =
+  const { pickupMs: requestPickupFallbackMs, returnMs: requestReturnFallbackMs } =
+    requestPickupReturnFallbackMs(request);
+  const meetingPickupDisplay = formatAgreementMeetingPickupReturn(
+    agreementStatus === 'confirmed',
+    rental.pickup_datetime ?? rental.meetup_time,
+    requestPickupFallbackMs
+  );
+  const meetingReturnDisplay = formatAgreementMeetingPickupReturn(
+    agreementStatus === 'confirmed',
+    rental.return_datetime ?? rental.return_time,
+    requestReturnFallbackMs
+  );
+  const meetupLocationTrimmed = (rental.meetup_location || rental.return_location || '').trim();
+
+  let computedDurationLabel =
     formatDurationDays(rental.pickup_datetime ?? rental.meetup_time, rental.return_datetime ?? rental.return_time) ??
-    request?.when ??
-    rental.duration_type ??
-    '—';
+    null;
+  if (!computedDurationLabel && request) {
+    const fd = formatDurationDisplay({
+      durationType: (request as { durationType?: string }).durationType,
+      durationValue: (request as { durationValue?: number | null }).durationValue,
+      duration: (request as { when?: string | null }).when,
+    });
+    if (fd !== '—') computedDurationLabel = fd;
+  }
+  if (!computedDurationLabel) {
+    const dvRaw = (rental as Record<string, unknown>).duration_value;
+    const dv = typeof dvRaw === 'number' && Number.isFinite(dvRaw) ? dvRaw : null;
+    const fd = formatDurationDisplay({
+      durationType: rental.duration_type ?? undefined,
+      durationValue: dv,
+      duration: null,
+    });
+    if (fd !== '—') computedDurationLabel = fd;
+  }
+  computedDurationLabel = computedDurationLabel ?? '—';
   const durationWarningEval = evaluateDurationChange({
     baselineDurationHours: baselineDurationHoursFromRequest(request),
     proposedDurationHours: durationHoursBetween(
@@ -1710,16 +1800,25 @@ export default function RentalScreen() {
               subtitle={relationshipSubtitle}
               onBack={() => router.back()}
               rightAccessory={
-                <Pressable
-                  pressOpacityFeedback={false}
-                  haptic
-                  accessibilityRole="button"
-                  accessibilityLabel="Open chat"
-                  onPress={openRentalChat}
-                  style={({ pressed }) => [styles.topChatIconBtn, pressed && styles.topChatIconBtnPressed]}
-                >
-                  <Ionicons name="chatbubble-ellipses-outline" size={18} color={ui.primary} />
-                </Pressable>
+                <View style={styles.topChatIconSlot}>
+                  <Pressable
+                    pressOpacityFeedback={false}
+                    haptic
+                    accessibilityRole="button"
+                    accessibilityLabel="Open chat"
+                    onPress={openRentalChat}
+                    style={({ pressed }) => [
+                      styles.topChatIconBtnInner,
+                      pressed && styles.topChatIconBtnPressed,
+                    ]}
+                  >
+                    <View style={styles.topChatIconScaled}>
+                      <View style={styles.topChatIconCircle}>
+                        <Ionicons name="chatbubble-ellipses-outline" size={9} color={ui.primary} />
+                      </View>
+                    </View>
+                  </Pressable>
+                </View>
               }
               style={styles.rentalBackHeader}
             />
@@ -1893,9 +1992,30 @@ export default function RentalScreen() {
                   <View style={styles.agreementGridRow}>
                     <View style={styles.agreementGridCell}>
                       <Text style={styles.metaLabel}>Meetup location</Text>
-                      <Text style={styles.agreementLocationValue}>
-                        {rental.meetup_location || rental.return_location || 'Not set'}
-                      </Text>
+                      {meetupLocationTrimmed ? (
+                        <Text style={styles.agreementLocationValue}>{meetupLocationTrimmed}</Text>
+                      ) : (
+                        <Pressable
+                          pressOpacityFeedback={false}
+                          disabled={!canOpenMeetingProposal}
+                          onPress={openMeetingProposalEditor}
+                          accessibilityRole="button"
+                          accessibilityLabel="Propose meetup location"
+                          style={({ pressed }) => [
+                            styles.meetingProposeLinkHit,
+                            pressed && canOpenMeetingProposal && styles.meetingProposeLinkPressed,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.meetingProposeLink,
+                              !canOpenMeetingProposal && styles.meetingProposeLinkDisabled,
+                            ]}
+                          >
+                            Propose
+                          </Text>
+                        </Pressable>
+                      )}
                     </View>
                     <View style={styles.agreementGridCell}>
                       <Text style={styles.metaLabel}>Duration</Text>
@@ -1908,22 +2028,14 @@ export default function RentalScreen() {
                   <View style={styles.agreementGridRow}>
                     <View style={styles.agreementGridCell}>
                       <Text style={styles.metaLabel}>Pickup</Text>
-                      <Text style={styles.agreementDatetimeValue}>
-                        {agreementStatus === 'confirmed'
-                          ? formatCompactDate(rental.pickup_datetime ?? rental.meetup_time)
-                          : formatCompactDateTime(rental.pickup_datetime ?? rental.meetup_time)}
-                      </Text>
+                      <Text style={styles.agreementDatetimeValue}>{meetingPickupDisplay}</Text>
                     </View>
                     <View style={styles.agreementGridCell} />
                   </View>
                   <View style={[styles.agreementGridRow, styles.agreementGridRowLast]}>
                     <View style={styles.agreementGridCell}>
                       <Text style={styles.metaLabel}>Return</Text>
-                      <Text style={styles.agreementDatetimeValue}>
-                        {agreementStatus === 'confirmed'
-                          ? formatCompactDate(rental.return_datetime ?? rental.return_time)
-                          : formatCompactDateTime(rental.return_datetime ?? rental.return_time)}
-                      </Text>
+                      <Text style={styles.agreementDatetimeValue}>{meetingReturnDisplay}</Text>
                     </View>
                     <View style={[styles.agreementGridCell, styles.agreementGridCellTimestamp]}>
                       {showMeetingAccept ? (
@@ -2572,10 +2684,30 @@ const styles = StyleSheet.create({
   rentalBackHeader: {
     marginBottom: 6,
   },
-  topChatIconBtn: {
+  /** Keeps header layout width; inner control is scaled 2× for a larger message icon. */
+  topChatIconSlot: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
+  },
+  topChatIconBtnInner: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
+  },
+  topChatIconScaled: {
+    transform: [{ scale: 2 }],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topChatIconCircle: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#EAF2FF',
@@ -2584,6 +2716,25 @@ const styles = StyleSheet.create({
   },
   topChatIconBtnPressed: {
     opacity: 0.86,
+  },
+  meetingProposeLinkHit: {
+    alignSelf: 'flex-start',
+    marginTop: 3,
+    paddingVertical: 2,
+  },
+  meetingProposeLinkPressed: {
+    opacity: 0.75,
+  },
+  meetingProposeLink: {
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: '700',
+    color: ui.primary,
+    textDecorationLine: 'underline',
+  },
+  meetingProposeLinkDisabled: {
+    color: ui.textMuted,
+    textDecorationLine: 'none',
   },
   progressRow: {
     width: '100%',
