@@ -16,6 +16,7 @@ import { BackHeader, RootScreenHeader } from '@/components/AppHeaders';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ScreenWrapper } from '@/components/ScreenWrapper';
+import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
 
 import { PresetAvatarModal } from '@/components/PresetAvatarModal';
 import { UserActivityDot } from '@/components/UserActivityDot';
@@ -79,6 +80,7 @@ export default function ProfileScreen() {
   const viewPublic = isViewingOther ? getPublicProfileForView(viewUserIdParam) : null;
 
   const insets = useSafeAreaInsets();
+  const fabBottomReserve = useMainTabFabBottomReserve();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const [profile, setProfile] = useState<UserProfile>(() => getProfile());
   const [presetModalOpen, setPresetModalOpen] = useState(false);
@@ -138,7 +140,7 @@ export default function ProfileScreen() {
           styles.scrollContent,
           {
             paddingTop: ui.spaceMd,
-            paddingBottom: 40 + insets.bottom,
+            paddingBottom: fabBottomReserve + insets.bottom,
           },
         ]}
         keyboardShouldPersistTaps="handled"
@@ -346,6 +348,7 @@ export default function ProfileScreen() {
           }}
         />
       ) : null}
+      {!isViewingOther ? <MainTabFab /> : null}
       </View>
     </ScreenWrapper>
   );

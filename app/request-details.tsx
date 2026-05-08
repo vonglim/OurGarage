@@ -10,7 +10,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { OfferOffererRow } from '@/components/OfferOffererRow';
-import { RequestMetaLines } from '@/components/RequestMetaLines';
 import {
   destructiveOutlinePressed,
   outlinePrimaryPressed,
@@ -18,9 +17,12 @@ import {
   ui,
 } from '@/constants/appUi';
 import { useAuthUserId } from '@/lib/authUser';
+import { formatHowDisplay, needsDeliveryFee } from '@/lib/deliveryFormat';
+import { formatDurationDisplay } from '@/lib/durationFormat';
 import { formatUsd, getNumericOfferPrice, getNumericTotalPrice } from '@/lib/money';
 import { openChatForRequest } from '@/lib/openRequestChat';
 import { getRequestOwnerId, isUuidString } from '@/lib/requestOwnership';
+import { formatDistanceFromYou } from '@/lib/requestDistance';
 import { billingDayCountForRequest, formatPerDayUsd } from '@/lib/requestPriceContext';
 import { fetchOffersByRequestIdWithProfiles } from '@/lib/supabaseOffers';
 import { getSupabase } from '@/lib/supabase';
@@ -82,21 +84,67 @@ function getTimeAgo(timestamp: number): string {
   return days === 1 ? '1 day ago' : `${days} days ago`;
 }
 
+function extractTermLine(message: string | null | undefined, label: string): string | null {
+  const text = String(message ?? '');
+  if (!text) return null;
+  const m = text.match(new RegExp(`${label}:\\s*([^\\n]+)`, 'i'));
+  const v = m?.[1]?.trim();
+  return v && v.length > 0 ? v : null;
+}
+
+function parseDeliveryFeeFromOfferMessage(message: string | null | undefined): number | null {
+  const text = String(message ?? '').trim();
+  if (!text) return null;
+  const m = text.match(/Delivery fee:\s*\$?\s*([0-9,]+(?:\.[0-9]+)?)/i);
+  if (!m) return null;
+  const n = Number(String(m[1]).replace(/,/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+function offerItemPreviewLines(offer: Offer): { line1: string | null; line2: string | null } {
+  const brand = extractTermLine(offer.message, 'Brand and model');
+  const desc =
+    extractTermLine(offer.message, 'Description') ??
+    (offer.toolDescription?.trim().length ? offer.toolDescription.trim() : null);
+  return { line1: brand, line2: desc };
+}
+
+function offerConditionSnippet(message: string | null | undefined): string | null {
+  const line =
+    message
+      ?.trim()
+      .split('\n')
+      .map((l) => l.trim())
+      .find(
+        (l) =>
+          !/^(terms \(optional\)|brand and model:|description:|replacement value:|delivery fee:|daily late fee)/i.test(
+            l
+          )
+      ) ?? null;
+  if (!line || line.length < 2) return null;
+  return line.length > 28 ? `${line.slice(0, 26)}…` : line;
+}
+
+function dashMeta(value: unknown): string {
+  if (value == null) return '—';
+  const s = String(value).trim();
+  return s === '' ? '—' : s;
+}
+
 export default function RequestDetailsScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams() as {
-  requestId?: string;
-  requestTimestamp?: string;
-  offerId?: string;
-};
+    requestId?: string;
+    requestTimestamp?: string;
+    offerId?: string;
+  };
 
-const requestTimestampParam = params.requestTimestamp ?? '';
-const offerId = params.offerId ?? '';
-const requestId = params.requestId ?? '';
+  const requestId = params.requestId ?? '';
 
   const [tick, setTick] = useState(0);
   /** Mapped from Supabase `offers` rows for this request. */
   const [offers, setOffers] = useState<Offer[]>([]);
+  const [requestSummaryExpanded, setRequestSummaryExpanded] = useState(true);
   const userReviews = useUserReviews();
   const currentUserId = useAuthUserId();
 
@@ -180,6 +228,14 @@ const requestId = params.requestId ?? '';
     );
   }, [request, currentUserId, displayOffers]);
 
+  useEffect(() => {
+    if (visibleOffers.length > 0) {
+      setRequestSummaryExpanded(false);
+    } else {
+      setRequestSummaryExpanded(true);
+    }
+  }, [visibleOffers.length]);
+
   const requestDayCount = useMemo(
     () => (request ? billingDayCountForRequest(request) : 1),
     [request]
@@ -193,7 +249,7 @@ const requestId = params.requestId ?? '';
   const matched = !!request?.matched;
   const rentalStatus = request ? getEffectiveRentalStatus(request) : 'pending';
   const requestTs = request?.timestamp;
-  
+
   const reviewed =
     requestTs != null && userReviews.some((r) => r.requestTimestamp === requestTs);
   const unreadByOfferId = useMessageUnreadStore((s) => s.unreadByOfferId);
@@ -203,6 +259,21 @@ const requestId = params.requestId ?? '';
     return unreadByOfferId[acceptedOfferId] ?? 0;
   }, [request?.acceptedOfferId, unreadByOfferId]);
   const reviewType = 'renter';
+
+  const goToOfferDetail = useCallback(
+    (offer: Offer) => {
+      if (request?.timestamp == null) return;
+      router.push({
+        pathname: '/offer-detail',
+        params: {
+          requestId: String(requestId),
+          requestTimestamp: String(request.timestamp),
+          offerId: String(offer.id),
+        } as Record<string, string>,
+      });
+    },
+    [request?.timestamp, requestId]
+  );
 
   if (!requestId || !isUuidString(requestId)) {
     return (
@@ -228,7 +299,7 @@ const requestId = params.requestId ?? '';
     );
   }
   const requestOwnerId = getRequestOwnerId(request as Record<string, unknown>);
-  
+
   const isOwner = requestOwnerId != null && requestOwnerId !== '' && requestOwnerId === currentUserId;
 
   const ownerOpenForOffers =
@@ -278,7 +349,7 @@ const requestId = params.requestId ?? '';
     });
   };
 
-  const onMessage = () => {
+  const onMessageMatched = () => {
     if (request.timestamp == null || !matched) return;
     openChatForRequest(router, request.timestamp);
   };
@@ -298,225 +369,459 @@ const requestId = params.requestId ?? '';
     );
   };
 
+  const deliveryFeeDisplay = useMemo(() => {
+    const fee = request?.deliveryFee;
+    const feeNum =
+      typeof fee === 'number' && Number.isFinite(fee)
+        ? fee
+        : fee != null && String(fee).trim() !== ''
+          ? Number(String(fee).replace(/[^0-9.]/g, ''))
+          : null;
+    return feeNum != null && Number.isFinite(feeNum) ? formatUsd(feeNum) : '—';
+  }, [request?.deliveryFee]);
+
+  const collapsedSummaryLine1 =
+    request != null
+      ? listedTotalNum != null && Number.isFinite(listedTotalNum)
+        ? `${formatUsd(listedTotalNum)} • ${formatDurationDisplay(request)} • ${formatHowDisplay(request)}`
+        : `${formatDurationDisplay(request)} • ${formatHowDisplay(request)}`
+      : '';
+
+  const pickupLabel = request != null ? String(request.pickupDate ?? request.when ?? '').trim() : '';
+  const returnLabel = request != null ? String(request.returnDate ?? '').trim() : '';
+  const collapsedSummaryLine2 =
+    returnLabel && pickupLabel ? `${pickupLabel} → ${returnLabel}` : pickupLabel || '—';
+  const collapsedSummaryLine3 = request != null ? dashMeta(request.location) : '—';
+
+  const headerSubtitle = useMemo(() => {
+    if (isOwner && visibleOffers.length > 0) {
+      return 'Compare offers from nearby owners';
+    }
+    if (isOwner && ownerOpenForOffers && visibleOffers.length === 0) {
+      return 'Nearby owners will respond here';
+    }
+    if (!isOwner && visibleOffers.length > 0) {
+      return 'Track your offer on this request';
+    }
+    if (!isOwner) {
+      return 'Equipment request';
+    }
+    return '';
+  }, [isOwner, visibleOffers.length, ownerOpenForOffers]);
+
+  const offersSectionTitle =
+    visibleOffers.length === 0
+      ? 'Offers'
+      : `${visibleOffers.length} offer${visibleOffers.length === 1 ? '' : 's'} received`;
+
+  const canToggleRequestSummary = visibleOffers.length > 0;
+
   return (
     <ScreenWrapper style={styles.screenWrap}>
       <KeyboardDismissScreen style={styles.screen}>
         <ScreenEntrance style={styles.entranceFlex}>
           <View style={[styles.header, { paddingTop: 8 }]}>
-          <View style={styles.headerRow}>
-            <View style={styles.headerLeft}>
-              <ScreenBackButton onPress={() => router.back()} style={styles.backHit} />
+            <View style={styles.headerRow}>
+              <View style={styles.headerBackWrap}>
+                <ScreenBackButton onPress={() => router.back()} style={styles.backHit} />
+              </View>
+              <View style={styles.headerCenter}>
+                <Text style={styles.headerRequestTitle} numberOfLines={1}>
+                  {request.toolName || 'Request'}
+                </Text>
+                {headerSubtitle ? (
+                  <Text style={styles.headerSubtitle} numberOfLines={2}>
+                    {headerSubtitle}
+                  </Text>
+                ) : null}
+              </View>
+              <View style={styles.headerRight}>
+                {!isOwner && canMakeOffer ? (
+                  <Pressable
+                    pressOpacityFeedback={false}
+                    haptic
+                    onPress={onMakeOffer}
+                    style={({ pressed }) => [
+                      styles.headerMakeOfferBtn,
+                      pressed && primarySolidPressed,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Make offer"
+                  >
+                    <Text style={styles.headerMakeOfferBtnText}>Make Offer</Text>
+                  </Pressable>
+                ) : isOwner && showOwnerHasOffersSummary ? (
+                  <Text style={styles.headerOfferCount} numberOfLines={1}>
+                    {visibleOffers.length} offer{visibleOffers.length === 1 ? '' : 's'}
+                  </Text>
+                ) : isOwner && showOwnerWaitingForOffers ? (
+                  <Text style={styles.headerOfferCountMuted} numberOfLines={2}>
+                    Waiting
+                  </Text>
+                ) : (
+                  <View style={styles.headerRightSpacer} />
+                )}
+              </View>
             </View>
-            <Text style={styles.headerTitleCenter} numberOfLines={1}>
-              Request details
-            </Text>
-            <View style={styles.headerRight}>
-              {!isOwner && canMakeOffer ? (
+          </View>
+
+          <ScrollView
+            style={styles.container}
+            contentContainerStyle={[
+              styles.content,
+              { paddingBottom: 40 + insets.bottom },
+            ]}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Text style={styles.sectionLabel}>{offersSectionTitle}</Text>
+            {ownerOpenForOffers && visibleOffers.length > 0 ? (
+              <Text style={styles.sectionHelper}>
+                Compare offers, message owners, or accept an agreement.
+              </Text>
+            ) : null}
+            {listedPerDayLine != null && visibleOffers.length > 0 ? (
+              <Text style={styles.listedContextLine}>{listedPerDayLine}</Text>
+            ) : null}
+
+            {visibleOffers.length === 0 ? (
+              ownerOpenForOffers ? (
+                <View style={styles.offersEmptyCard}>
+                  <Text style={styles.offersEmptyTitle}>No offers yet</Text>
+                  <Text style={styles.offersEmptyBody}>
+                    Nearby owners will appear here when they respond.
+                  </Text>
+                </View>
+              ) : (
+                <Text style={styles.muted}>No offers yet</Text>
+              )
+            ) : (
+              visibleOffers.map((offer, index) => {
+                const who = getOfferUserPreview(offer);
+                const isBestOffer = index === 0;
+                const offerBasePrice = getNumericOfferPrice(offer);
+                const fee = request.deliveryFee;
+                const feeNum =
+                  typeof fee === 'number' && Number.isFinite(fee)
+                    ? fee
+                    : fee != null && String(fee).trim() !== ''
+                      ? Number(String(fee).replace(/[^0-9.]/g, ''))
+                      : null;
+                const offerDeliveryFee =
+                  parseDeliveryFeeFromOfferMessage(offer.message) ??
+                  (needsDeliveryFee(request.how) && feeNum != null && Number.isFinite(feeNum)
+                    ? feeNum
+                    : 0);
+                const offerTotalWithDelivery = offerBasePrice + offerDeliveryFee;
+                const theirPerDay =
+                  offerTotalWithDelivery > 0
+                    ? formatPerDayUsd(offerTotalWithDelivery, requestDayCount)
+                    : '—';
+                const { line1: brandLine, line2: descLine } = offerItemPreviewLines(offer);
+                const conditionChip = offerConditionSnippet(offer.message);
+                const areaChip = String(request.location ?? '').trim();
+                const showOwnerActions =
+                  isOwner && ownerOpenForOffers && !matched && offer.status !== 'declined';
+                const showRenterActions = !isOwner && !matched && visibleOffers.length > 0;
+
+                return (
+                  <View
+                    key={offer.id}
+                    style={[
+                      styles.offerCard,
+                      isBestOffer && styles.offerCardBest,
+                      matched && styles.offerCardMatched,
+                    ]}
+                  >
+                    {isBestOffer ? (
+                      <View style={styles.bestValueBadge}>
+                        <Text style={styles.bestValueBadgeText}>Best value</Text>
+                      </View>
+                    ) : null}
+                    <OfferOffererRow
+                      name={who.name}
+                      rating={who.rating}
+                      avatar={who.avatar}
+                      lastActive={who.lastActive}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/(tabs)/profile',
+                          params: { viewUserId: who.userId },
+                        })
+                      }
+                    />
+
+                    <View style={styles.offerPriceBlock}>
+                      <Text style={styles.offerTotal}>{formatUsd(offerTotalWithDelivery)}</Text>
+                      <Text style={styles.offerSubPrice}>
+                        {theirPerDay} • {requestDayCount} {requestDayCount === 1 ? 'day' : 'days'}
+                      </Text>
+                    </View>
+
+                    <View style={styles.chipRow}>
+                      <View style={styles.chip}>
+                        <Text style={styles.chipText} numberOfLines={1}>
+                          {formatHowDisplay(request)}
+                        </Text>
+                      </View>
+                      {conditionChip ? (
+                        <View style={styles.chip}>
+                          <Text style={styles.chipText} numberOfLines={1}>
+                            {conditionChip}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {areaChip ? (
+                        <View style={styles.chip}>
+                          <Text style={styles.chipText} numberOfLines={1}>
+                            {areaChip}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+
+                    {brandLine || descLine ? (
+                      <View style={styles.itemPreviewBlock}>
+                        {brandLine ? (
+                          <Text style={styles.itemPreviewLine} numberOfLines={1}>
+                            {brandLine}
+                          </Text>
+                        ) : null}
+                        {descLine ? (
+                          <Text style={styles.itemPreviewLineMuted} numberOfLines={1}>
+                            {descLine}
+                          </Text>
+                        ) : null}
+                      </View>
+                    ) : null}
+
+                    {requestOwnerId != null &&
+                    offer.lastUpdatedBy === requestOwnerId &&
+                    offer.lastUpdatedBy !== offer.renterId ? (
+                      <Text style={styles.offerCounterHint}>Your last counter is shown above</Text>
+                    ) : null}
+
+                    <Text style={styles.offerTime}>{getTimeAgo(offer.updatedAt)}</Text>
+
+                    {showOwnerActions ? (
+                      <View style={styles.offerActionRow}>
+                        {offer.status === 'pending' || offer.status === 'pending_confirmation' ? (
+                          <Pressable
+                            pressOpacityFeedback={false}
+                            haptic
+                            onPress={() => goToOfferDetail(offer)}
+                            style={({ pressed }) => [
+                              styles.actionPrimary,
+                              pressed && primarySolidPressed,
+                            ]}
+                          >
+                            <Text style={styles.actionPrimaryText}>
+                              {offer.status === 'pending_confirmation' ? 'Review' : 'Accept'}
+                            </Text>
+                          </Pressable>
+                        ) : null}
+                        {offer.status === 'pending' ? (
+                          <Pressable
+                            pressOpacityFeedback={false}
+                            haptic
+                            onPress={() => goToOfferDetail(offer)}
+                            style={({ pressed }) => [
+                              styles.actionSecondary,
+                              pressed && styles.actionSecondaryPressed,
+                            ]}
+                          >
+                            <Text style={styles.actionSecondaryText}>Counter</Text>
+                          </Pressable>
+                        ) : null}
+                        <Pressable
+                          pressOpacityFeedback={false}
+                          onPress={() => goToOfferDetail(offer)}
+                          style={({ pressed }) => [
+                            styles.actionTertiary,
+                            pressed && styles.actionTertiaryPressed,
+                          ]}
+                        >
+                          <Text style={styles.actionTertiaryText}>Details</Text>
+                        </Pressable>
+                      </View>
+                    ) : showRenterActions ? (
+                      <View style={styles.offerActionRow}>
+                        <Pressable
+                          pressOpacityFeedback={false}
+                          haptic
+                          onPress={() => goToOfferDetail(offer)}
+                          style={({ pressed }) => [
+                            styles.actionPrimary,
+                            pressed && primarySolidPressed,
+                          ]}
+                        >
+                          <Text style={styles.actionPrimaryText}>View offer</Text>
+                        </Pressable>
+                        <Pressable
+                          pressOpacityFeedback={false}
+                          onPress={() => goToOfferDetail(offer)}
+                          style={({ pressed }) => [
+                            styles.actionTertiary,
+                            pressed && styles.actionTertiaryPressed,
+                          ]}
+                        >
+                          <Text style={styles.actionTertiaryText}>Details</Text>
+                        </Pressable>
+                      </View>
+                    ) : matched ? (
+                      <Pressable
+                        pressOpacityFeedback={false}
+                        onPress={() => goToOfferDetail(offer)}
+                        style={({ pressed }) => [
+                          styles.actionTertiary,
+                          { marginTop: 4 },
+                          pressed && styles.actionTertiaryPressed,
+                        ]}
+                      >
+                        <Text style={styles.actionTertiaryText}>View details</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                );
+              })
+            )}
+
+            <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>Request summary</Text>
+
+            {requestSummaryExpanded ? (
+              <View style={styles.summaryCard}>
+                {canToggleRequestSummary ? (
+                  <Pressable
+                    pressOpacityFeedback={false}
+                    onPress={() => setRequestSummaryExpanded(false)}
+                    style={styles.summaryCollapseHeader}
+                  >
+                    <Text style={styles.summaryCollapseTitle}>Request summary</Text>
+                    <Text style={styles.summaryCollapseChevron}>▲</Text>
+                  </Pressable>
+                ) : null}
+
+                <Text style={styles.toolName}>{request.toolName || 'No name'}</Text>
+                {request.timestamp != null ? (
+                  <Text style={styles.detailMuted}>Posted {getTimeAgo(request.timestamp)}</Text>
+                ) : null}
+                {rentalStatus === 'completed' ? (
+                  <Text style={styles.statusCompleted}>Rental completed</Text>
+                ) : rentalStatus === 'active' ? (
+                  <Text style={styles.statusActive}>Rental active</Text>
+                ) : matched ? (
+                  <Text style={styles.statusMatched}>Matched</Text>
+                ) : null}
+                {rentalStatus === 'active' && request.rentalStart != null ? (
+                  <Text style={styles.detailMuted}>Rental started {getTimeAgo(request.rentalStart)}</Text>
+                ) : null}
+                {matched && (
+                  <Text style={styles.acceptedPriceBanner}>
+                    Accepted total for entire duration: {formatUsd(request.acceptedPrice)}
+                  </Text>
+                )}
+
+                <Text style={styles.metaGroupLabel}>Rental</Text>
+                <Text style={styles.detail}>When: {request.when || 'N/A'}</Text>
+                <Text style={styles.detail}>Duration: {formatDurationDisplay(request)}</Text>
+                <Text style={styles.detail}>
+                  Total for entire duration:{' '}
+                  {listedTotalNum != null ? formatUsd(listedTotalNum) : '—'}
+                </Text>
+
+                <Text style={styles.metaGroupLabel}>Delivery</Text>
+                <Text style={styles.detail}>Delivery: {formatHowDisplay(request)}</Text>
+                {needsDeliveryFee(request.how) ? (
+                  <Text style={styles.detail}>Delivery fee you can pay: {deliveryFeeDisplay}</Text>
+                ) : null}
+
+                <Text style={styles.metaGroupLabel}>Location</Text>
+                <Text style={styles.detail}>Listed area: {dashMeta(request.location)}</Text>
+                <Text style={styles.detail}>Distance from you: {formatDistanceFromYou(request)}</Text>
+                <Text style={styles.hintLine}>Exact location will be shared after match.</Text>
+
+                {showOwnerWaitingForOffers ? (
+                  <Text style={styles.waitingForOffersHint}>Waiting for offers</Text>
+                ) : showOwnerHasOffersSummary ? (
+                  <Text style={styles.ownerHasOffersHint}>
+                    {formatOwnerOfferCountMessage(visibleOffers.length)}
+                  </Text>
+                ) : null}
+
+                {!matched ? (
+                  isOwner ? (
+                    <Pressable
+                      pressOpacityFeedback={false}
+                      haptic
+                      onPress={onEditRequest}
+                      style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
+                    >
+                      <Text style={styles.secondaryBtnText}>Edit Request</Text>
+                    </Pressable>
+                  ) : null
+                ) : null}
+              </View>
+            ) : (
+              <Pressable
+                pressOpacityFeedback={false}
+                onPress={() => setRequestSummaryExpanded(true)}
+                style={({ pressed }) => [
+                  styles.summaryCollapsedCard,
+                  pressed && styles.summaryCollapsedPressed,
+                ]}
+              >
+                <View style={styles.summaryCollapsedTop}>
+                  <Text style={styles.summaryCollapsedTitle}>Request summary</Text>
+                  <Text style={styles.summaryCollapsedChevron}>▼</Text>
+                </View>
+                <Text style={styles.summaryCollapsedLine}>{collapsedSummaryLine1}</Text>
+                <Text style={styles.summaryCollapsedLine}>{collapsedSummaryLine2}</Text>
+                <Text style={styles.summaryCollapsedLineMuted}>{collapsedSummaryLine3}</Text>
+              </Pressable>
+            )}
+
+            {matched ? (
+              <Pressable
+                pressOpacityFeedback={false}
+                onPress={onMessageMatched}
+                style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
+              >
+                <Text style={styles.secondaryBtnText}>Message</Text>
+                {messageThreadUnread > 0 ? (
+                  <View style={styles.threadMessageBadge}>
+                    <Text style={styles.threadMessageBadgeText}>
+                      {messageThreadUnread > 99 ? '99+' : String(messageThreadUnread)}
+                    </Text>
+                  </View>
+                ) : null}
+              </Pressable>
+            ) : null}
+
+            {showMarkRentalComplete(request) ? (
+              <Pressable
+                pressOpacityFeedback={false}
+                onPress={onEndRental}
+                style={({ pressed }) => [styles.primaryOutlineBtn, pressed && styles.primaryOutlinePressed]}
+              >
+                <Text style={styles.primaryOutlineBtnText}>End Rental</Text>
+              </Pressable>
+            ) : null}
+
+            {isLeaveReviewEligible(request) ? (
+              reviewed ? (
+                <Text style={styles.reviewedNote}>Review submitted</Text>
+              ) : (
                 <Pressable
                   pressOpacityFeedback={false}
                   haptic
-                  onPress={onMakeOffer}
-                  style={({ pressed }) => [
-                    styles.headerMakeOfferBtn,
-                    pressed && primarySolidPressed,
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityLabel="Make offer"
+                  onPress={onLeaveReview}
+                  style={({ pressed }) => [styles.leaveReviewBtn, pressed && styles.leaveReviewBtnPressed]}
                 >
-                  <Text style={styles.headerMakeOfferBtnText}>Make Offer</Text>
+                  <Text style={styles.leaveReviewBtnText}>Leave Review</Text>
                 </Pressable>
-              ) : isOwner ? (
-                <Text
-                  style={styles.headerOwnerCaption}
-                  numberOfLines={2}
-                  accessibilityRole="text"
-                  accessibilityLabel={
-                    showOwnerWaitingForOffers ? 'Waiting for offers' : 'Your request'
-                  }
-                >
-                  {showOwnerWaitingForOffers ? 'Waiting for offers' : 'Your request'}
-                </Text>
-              ) : (
-                <View style={styles.headerRightSpacer} />
-              )}
-            </View>
-          </View>
-        </View>
-
-      <ScrollView
-        style={styles.container}
-        contentContainerStyle={[
-          styles.content,
-          { paddingBottom: 40 + insets.bottom },
-        ]}
-        keyboardShouldPersistTaps="handled"
-      >
-        <Text style={styles.toolName}>{request.toolName || 'No name'}</Text>
-        {request.timestamp != null ? (
-          <Text style={styles.detailMuted}>Posted {getTimeAgo(request.timestamp)}</Text>
-        ) : null}
-        {rentalStatus === 'completed' ? (
-          <Text style={styles.statusCompleted}>Rental completed</Text>
-        ) : rentalStatus === 'active' ? (
-          <Text style={styles.statusActive}>Rental active</Text>
-        ) : matched ? (
-          <Text style={styles.statusMatched}>Matched</Text>
-        ) : null}
-        {rentalStatus === 'active' && request.rentalStart != null ? (
-          <Text style={styles.detailMuted}>Rental started {getTimeAgo(request.rentalStart)}</Text>
-        ) : null}
-        {matched && (
-          <Text style={styles.acceptedPriceBanner}>
-            Accepted total for entire duration: {formatUsd(request.acceptedPrice)}
-          </Text>
-        )}
-        <Text style={styles.detail}>When: {request.when || 'N/A'}</Text>
-        <RequestMetaLines req={request} detailStyle={styles.detail} />
-
-        {showOwnerWaitingForOffers ? (
-          <Text style={styles.waitingForOffersHint}>Waiting for offers</Text>
-        ) : showOwnerHasOffersSummary ? (
-          <Text style={styles.ownerHasOffersHint}>
-            {formatOwnerOfferCountMessage(visibleOffers.length)}
-          </Text>
-        ) : null}
-
-        {!matched ? (
-          isOwner ? (
-            <Pressable
-              pressOpacityFeedback={false}
-              haptic
-              onPress={onEditRequest}
-              style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
-            >
-              <Text style={styles.secondaryBtnText}>Edit Request</Text>
-            </Pressable>
-          ) : null
-        ) : (
-          <Pressable
-            pressOpacityFeedback={false}
-            onPress={onMessage}
-            style={({ pressed }) => [styles.secondaryBtn, pressed && styles.secondaryBtnPressed]}
-          >
-            <Text style={styles.secondaryBtnText}>Message</Text>
-            {messageThreadUnread > 0 ? (
-              <View style={styles.threadMessageBadge}>
-                <Text style={styles.threadMessageBadgeText}>
-                  {messageThreadUnread > 99 ? '99+' : String(messageThreadUnread)}
-                </Text>
-              </View>
+              )
             ) : null}
-          </Pressable>
-        )}
-
-        {showMarkRentalComplete(request) ? (
-          <Pressable
-            pressOpacityFeedback={false}
-            onPress={onEndRental}
-            style={({ pressed }) => [styles.primaryOutlineBtn, pressed && styles.primaryOutlinePressed]}
-          >
-            <Text style={styles.primaryOutlineBtnText}>End Rental</Text>
-          </Pressable>
-        ) : null}
-
-        {isLeaveReviewEligible(request) ? (
-          reviewed ? (
-            <Text style={styles.reviewedNote}>Review submitted</Text>
-          ) : (
-            <Pressable
-              pressOpacityFeedback={false}
-              haptic
-              onPress={onLeaveReview}
-              style={({ pressed }) => [styles.leaveReviewBtn, pressed && styles.leaveReviewBtnPressed]}
-            >
-              <Text style={styles.leaveReviewBtnText}>Leave Review</Text>
-            </Pressable>
-          )
-        ) : null}
-
-        <Text style={styles.sectionTitle}>Offers</Text>
-        {ownerOpenForOffers && visibleOffers.length > 0 ? (
-          <Text style={styles.ownerOfferActionsHint}>
-            Open an offer to accept, send a counter-offer, or decline. You can negotiate on price.
-          </Text>
-        ) : null}
-        {listedPerDayLine != null ? <Text style={styles.listedContextLine}>{listedPerDayLine}</Text> : null}
-        {visibleOffers.length === 0 ? (
-          ownerOpenForOffers ? null : (
-            <Text style={styles.muted}>No offers yet</Text>
-          )
-        ) : (
-          visibleOffers.map((offer, index) => {
-            const who = getOfferUserPreview(offer);
-            const isBestOffer = index === 0;
-            const offerTotal = getNumericOfferPrice(offer);
-            const theirPerDay =
-              offerTotal > 0 ? formatPerDayUsd(offerTotal, requestDayCount) : '—';
-            return (
-              <View
-                key={offer.id}
-                style={[styles.offerCard, matched && styles.offerCardMatched]}
-              >
-                {isBestOffer ? (
-                  <Text style={styles.bestOfferLabel}>Best Offer ⭐</Text>
-                ) : null}
-                <OfferOffererRow
-                  name={who.name}
-                  rating={who.rating}
-                  avatar={who.avatar}
-                  lastActive={who.lastActive}
-                  onPress={() =>
-                    router.push({
-                      pathname: '/(tabs)/profile',
-                      params: { viewUserId: who.userId },
-                    })
-                  }
-                />
-                <Pressable
-                  onPress={() => {
-                    if (request.timestamp == null) return;
-                    router.push({
-                      pathname: '/offer-detail',
-                      params: {
-                        requestId: String(requestId),
-                        requestTimestamp: String(request.timestamp ?? ''),
-                        offerId: String(offer.id),
-                      } as Record<string, string>,
-                    });
-                  }}
-                  style={({ pressed }) => [
-                    styles.offerCardTapArea,
-                    pressed && styles.offerCardPressed,
-                  ]}
-                >
-                  <Text style={styles.offerPriceLine}>
-                    Their offer: {formatUsd(offerTotal)} total ({theirPerDay})
-                  </Text>
-                  {requestOwnerId != null &&
-                  offer.lastUpdatedBy === requestOwnerId &&
-                  offer.lastUpdatedBy !== offer.renterId ? (
-                    <Text style={styles.offerCounterHint}>Your last counter is shown above</Text>
-                  ) : null}
-                  {offer.message?.trim() ? (
-                    <Text style={styles.offerMessagePreview} numberOfLines={3}>
-                      {offer.message.trim()}
-                    </Text>
-                  ) : null}
-                  <Text style={styles.offerTime}>{getTimeAgo(offer.updatedAt)}</Text>
-                  <Text style={styles.offerTapHint}>
-                    {matched
-                      ? 'Tap for details'
-                      : offer.status === 'pending_confirmation'
-                        ? 'Tap to confirm rental or decline'
-                        : 'Tap to accept, counter, or decline'}
-                  </Text>
-                </Pressable>
-              </View>
-            );
-          })
-        )}
-      </ScrollView>
-      </ScreenEntrance>
+          </ScrollView>
+        </ScreenEntrance>
       </KeyboardDismissScreen>
     </ScreenWrapper>
   );
@@ -547,63 +852,82 @@ const styles = StyleSheet.create({
   },
   headerRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    minHeight: 40,
+    alignItems: 'flex-start',
+    minHeight: 44,
+    gap: 8,
   },
-  headerLeft: {
-    width: 108,
+  headerBackWrap: {
+    width: 44,
     flexShrink: 0,
+    justifyContent: 'center',
+    paddingTop: 2,
+  },
+  headerCenter: {
+    flex: 1,
+    minWidth: 0,
     justifyContent: 'center',
   },
   headerRight: {
-    width: 108,
     flexShrink: 0,
+    maxWidth: 120,
     alignItems: 'flex-end',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
+    paddingTop: 2,
   },
   headerRightSpacer: {
-    width: 108,
+    width: 44,
     minHeight: 36,
   },
   backHit: {
     paddingVertical: 4,
   },
-  headerTitleCenter: {
-    flex: 1,
+  headerRequestTitle: {
     fontSize: 17,
     fontWeight: '700',
     color: ui.textPrimary,
-    textAlign: 'center',
+    letterSpacing: -0.2,
+  },
+  headerSubtitle: {
+    marginTop: 2,
+    fontSize: 12,
+    fontWeight: '500',
+    color: ui.textSecondary,
+    lineHeight: 16,
   },
   headerMakeOfferBtn: {
     paddingVertical: 8,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     borderRadius: 999,
     backgroundColor: ui.primary,
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerMakeOfferBtnText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     color: ui.primaryOn,
     letterSpacing: -0.2,
   },
-  headerOwnerCaption: {
-    maxWidth: 108,
+  headerOfferCount: {
     fontSize: 12,
     fontWeight: '700',
-    lineHeight: 15,
     color: ui.primary,
     textAlign: 'right',
-    opacity: 0.88,
+  },
+  headerOfferCountMuted: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: ui.textSecondary,
+    textAlign: 'right',
+    lineHeight: 14,
   },
   container: {
     flex: 1,
-    backgroundColor: ui.background,
+    backgroundColor: ui.surfaceGrouped,
   },
   content: {
-    paddingVertical: 24,
+    paddingTop: 14,
+    paddingBottom: 24,
     paddingHorizontal: 0,
   },
   centered: {
@@ -614,19 +938,148 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     backgroundColor: ui.background,
   },
-  toolName: {
-    fontSize: 24,
+  sectionLabel: {
+    fontSize: 12,
     fontWeight: '700',
-    color: ui.textPrimary,
+    color: ui.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.55,
+    marginBottom: 6,
+  },
+  sectionLabelSpaced: {
+    marginTop: 20,
+  },
+  sectionHelper: {
+    fontSize: 13,
+    color: ui.textSecondary,
+    lineHeight: 18,
     marginBottom: 8,
   },
-  detailMuted: {
+  listedContextLine: {
     fontSize: 13,
+    fontWeight: '600',
+    color: ui.textPrimary,
+    marginBottom: 10,
+  },
+  offersEmptyCard: {
+    backgroundColor: ui.background,
+    borderRadius: ui.radiusCard,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+    padding: 16,
+    marginBottom: 8,
+  },
+  offersEmptyTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    marginBottom: 6,
+  },
+  offersEmptyBody: {
+    fontSize: 14,
+    color: ui.textSecondary,
+    lineHeight: 20,
+  },
+  summaryCard: {
+    backgroundColor: ui.background,
+    borderRadius: ui.radiusCard,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+    padding: 14,
+    marginBottom: 12,
+  },
+  summaryCollapseHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: ui.border,
+  },
+  summaryCollapseTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: ui.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  summaryCollapseChevron: {
+    fontSize: 12,
+    color: ui.textSecondary,
+    fontWeight: '700',
+  },
+  summaryCollapsedCard: {
+    backgroundColor: ui.background,
+    borderRadius: ui.radiusCard,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+    padding: 14,
+    marginBottom: 12,
+  },
+  summaryCollapsedPressed: {
+    opacity: 0.92,
+    backgroundColor: ui.surfaceTintPrimary,
+  },
+  summaryCollapsedTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  summaryCollapsedTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: ui.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  summaryCollapsedChevron: {
+    fontSize: 12,
+    color: ui.textSecondary,
+    fontWeight: '700',
+  },
+  summaryCollapsedLine: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: ui.textPrimary,
+    lineHeight: 20,
+  },
+  summaryCollapsedLineMuted: {
+    fontSize: 13,
+    color: ui.textSecondary,
+    marginTop: 4,
+  },
+  toolName: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    marginBottom: 6,
+  },
+  detailMuted: {
+    fontSize: 14,
     color: ui.textSecondary,
     marginBottom: 6,
   },
-  waitingForOffersHint: {
+  metaGroupLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: ui.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginTop: 12,
+    marginBottom: 6,
+  },
+  hintLine: {
+    fontSize: 12,
+    color: ui.textSecondary,
+    fontStyle: 'italic',
     marginTop: 4,
+    marginBottom: 4,
+    lineHeight: 17,
+  },
+  waitingForOffersHint: {
+    marginTop: 8,
     marginBottom: 2,
     fontSize: 14,
     fontWeight: '600',
@@ -634,24 +1087,12 @@ const styles = StyleSheet.create({
     letterSpacing: -0.1,
   },
   ownerHasOffersHint: {
-    marginTop: 4,
+    marginTop: 8,
     marginBottom: 2,
     fontSize: 15,
     fontWeight: '700',
     color: ui.primary,
     letterSpacing: -0.2,
-  },
-  ownerOfferActionsHint: {
-    fontSize: 14,
-    color: ui.textSecondary,
-    lineHeight: 20,
-    marginBottom: 10,
-  },
-  listedContextLine: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: ui.textPrimary,
-    marginBottom: 10,
   },
   statusMatched: {
     fontSize: 15,
@@ -685,10 +1126,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: ui.textPrimary,
     marginBottom: 6,
+    lineHeight: 22,
   },
   secondaryBtn: {
     position: 'relative',
-    marginTop: 16,
+    marginTop: 12,
     alignSelf: 'stretch',
     paddingVertical: 12,
     borderRadius: ui.radiusButton,
@@ -764,61 +1206,92 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: ui.textSecondary,
   },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: ui.textPrimary,
-    marginTop: 28,
-    marginBottom: 12,
-  },
   muted: {
     fontSize: 15,
     color: ui.textSubtle,
     lineHeight: 22,
   },
-  bestOfferLabel: {
-    alignSelf: 'flex-start',
-    marginBottom: 10,
-    fontSize: 13,
-    fontWeight: '700',
-    color: ui.primary,
-  },
   offerCard: {
-    backgroundColor: ui.surfaceInput,
+    backgroundColor: ui.background,
     borderRadius: ui.radiusCard,
     padding: 12,
     marginBottom: 10,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: ui.border,
   },
-  /** Detail navigation only; keeps `OfferOffererRow` out of this Pressable. */
-  offerCardTapArea: {
-    alignSelf: 'stretch',
-    marginHorizontal: -4,
-    paddingHorizontal: 4,
-    paddingBottom: 2,
-    borderRadius: 10,
-  },
-  offerCardPressed: {
-    opacity: 0.92,
-    backgroundColor: ui.surfaceTintPrimary,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: ui.primary,
+  offerCardBest: {
+    borderColor: '#2E7D32',
+    backgroundColor: '#F1F8F4',
+    borderWidth: 1.5,
   },
   offerCardMatched: {
-    opacity: 0.85,
+    opacity: 0.88,
   },
-  offerTapHint: {
+  bestValueBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#E8F5E9',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    marginBottom: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(46,125,50,0.35)',
+  },
+  bestValueBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#1B5E20',
+    letterSpacing: 0.2,
+  },
+  offerPriceBlock: {
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  offerTotal: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: ui.textPrimary,
+    letterSpacing: -0.5,
+  },
+  offerSubPrice: {
+    marginTop: 2,
     fontSize: 14,
     fontWeight: '600',
-    color: ui.primary,
-    marginTop: 4,
+    color: ui.textSecondary,
   },
-  offerPriceLine: {
-    fontSize: 17,
-    fontWeight: '700',
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 8,
+  },
+  chip: {
+    borderRadius: ui.radiusChip,
+    backgroundColor: ui.surfaceTintPrimary,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(11,31,58,0.12)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    maxWidth: '100%',
+  },
+  chipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: ui.primary,
+  },
+  itemPreviewBlock: {
+    marginBottom: 6,
+  },
+  itemPreviewLine: {
+    fontSize: 14,
+    fontWeight: '600',
     color: ui.textPrimary,
-    marginBottom: 4,
+    lineHeight: 20,
+  },
+  itemPreviewLineMuted: {
+    fontSize: 13,
+    color: ui.textSecondary,
+    lineHeight: 18,
   },
   offerCounterHint: {
     fontSize: 12,
@@ -826,15 +1299,73 @@ const styles = StyleSheet.create({
     color: ui.primary,
     marginBottom: 4,
   },
-  offerMessagePreview: {
-    fontSize: 14,
+  offerTime: {
+    fontSize: 12,
     color: ui.textSecondary,
-    lineHeight: 20,
     marginBottom: 6,
   },
-  offerTime: {
+  offerActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  actionPrimary: {
+    flexGrow: 1,
+    flexBasis: '28%',
+    minWidth: 88,
+    backgroundColor: ui.primary,
+    borderRadius: ui.radiusButton,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionPrimaryText: {
     fontSize: 14,
-    color: ui.textSecondary,
-    marginBottom: 12,
+    fontWeight: '700',
+    color: ui.primaryOn,
+  },
+  actionSecondary: {
+    flexGrow: 1,
+    flexBasis: '28%',
+    minWidth: 88,
+    borderRadius: ui.radiusButton,
+    borderWidth: 2,
+    borderColor: ui.primary,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: ui.background,
+  },
+  actionSecondaryPressed: {
+    ...outlinePrimaryPressed,
+  },
+  actionSecondaryText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: ui.primary,
+  },
+  actionTertiary: {
+    flexGrow: 1,
+    flexBasis: '28%',
+    minWidth: 88,
+    position: 'relative',
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: ui.radiusButton,
+    backgroundColor: ui.surfaceInput,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+  },
+  actionTertiaryPressed: {
+    opacity: 0.9,
+    backgroundColor: ui.borderLight,
+  },
+  actionTertiaryText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: ui.textPrimary,
   },
 });

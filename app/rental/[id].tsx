@@ -1,8 +1,9 @@
 import { useFocusEffect } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Image } from 'expo-image';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -21,11 +22,27 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Pressable } from '@/components/Pressable';
-import { ProtectionSummaryCard } from '@/components/ProtectionSummaryCard';
+import {
+  RentalDetailsCard,
+  type RentalDetailsCardHandle,
+  type RentalMeetupDetails,
+} from '@/components/RentalDetailsCard';
 import { BackHeader } from '@/components/AppHeaders';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useAuthUserId } from '@/lib/authUser';
+import { insertServerNotificationToRecipient } from '@/lib/insertServerNotification';
+import {
+  insertMeetupProposalOfferMessage,
+} from '@/lib/meetupProposalThreadEvent';
 import { formatUsd } from '@/lib/money';
+import { getProfileNameForUserId } from '@/lib/profileDisplayName';
+import {
+  baselineDurationHoursFromRequest,
+  DURATION_GRACE_HOURS,
+  durationHoursBetween,
+  evaluateDurationChange,
+} from '@/lib/proposalDurationChange';
+import { isUuidString } from '@/lib/requestOwnership';
 import { insertRentalAgreementSnapshot } from '@/lib/rentalAgreement';
 import {
   RENTAL_EVIDENCE_BUCKET_MISSING_MESSAGE,
@@ -57,7 +74,6 @@ import {
 } from '@/lib/rentalNotes';
 import { getSupabase } from '@/lib/supabase';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
-import { useMessageUnreadStore } from '@/store/messageUnreadStore';
 import { primarySolidPressed, shadowCard, shadowKey, ui } from '@/constants/appUi';
 
 type RentalRow = {
@@ -79,8 +95,10 @@ type RentalRow = {
   renter_confirmed?: boolean | null;
   agreement_status?: 'pending' | 'confirmed' | string | null;
   confirmed_at?: string | null;
+  last_proposed_by?: string | null;
   proposal_version?: number | null;
   proposal_updated_at?: string | null;
+  latest_proposal_message_id?: string | null;
   confirmed_by_owner?: boolean | null;
   confirmed_by_renter?: boolean | null;
   owner_pickup_ready?: boolean | null;
@@ -122,6 +140,26 @@ function formatCompactDateTime(value: string | null | undefined): string {
   const datePart = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   const timePart = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   return `${datePart} • ${timePart}`;
+}
+
+function formatCompactDate(value: string | null | undefined): string {
+  if (!value) return 'Not set';
+  const t = Date.parse(value);
+  if (!Number.isFinite(t)) return 'Not set';
+  const d = new Date(t);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function formatDurationDays(
+  pickupIso: string | null | undefined,
+  returnIso: string | null | undefined
+): string | null {
+  if (!pickupIso || !returnIso) return null;
+  const pickupMs = Date.parse(pickupIso);
+  const returnMs = Date.parse(returnIso);
+  if (!Number.isFinite(pickupMs) || !Number.isFinite(returnMs) || returnMs <= pickupMs) return null;
+  const days = Math.max(1, Math.ceil((returnMs - pickupMs) / 86_400_000));
+  return `${days} day${days === 1 ? '' : 's'}`;
 }
 
 const OWNER_PICKUP_ITEMS = [
@@ -465,6 +503,8 @@ export default function RentalScreen() {
   const [returnEvidenceDisplay, setReturnEvidenceDisplay] = useState<PhotoDisplay[]>([]);
   const [verificationRows, setVerificationRows] = useState<RentalVerificationRow[]>([]);
   const [uploadingEvidence, setUploadingEvidence] = useState(false);
+  const [termsExpanded, setTermsExpanded] = useState(true);
+  const [meetingExpanded, setMeetingExpanded] = useState(true);
   const [pickupExpanded, setPickupExpanded] = useState(true);
   const [returnExpanded, setReturnExpanded] = useState(false);
   const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
@@ -476,14 +516,16 @@ export default function RentalScreen() {
   const [agreementModalVisible, setAgreementModalVisible] = useState(false);
   const [signatureName, setSignatureName] = useState('');
   const [agreementConsent, setAgreementConsent] = useState(false);
+  const [proposalBusy, setProposalBusy] = useState(false);
   const [rentalNotes, setRentalNotes] = useState<RentalNoteRow[]>([]);
   const [ownerNoteDraft, setOwnerNoteDraft] = useState('');
   const [renterNoteDraft, setRenterNoteDraft] = useState('');
   const [addingOwnerNote, setAddingOwnerNote] = useState(false);
   const [addingRenterNote, setAddingRenterNote] = useState(false);
-  const unreadByOfferId = useMessageUnreadStore((s) => s.unreadByOfferId);
   const refreshInFlightRef = useRef<Promise<void> | null>(null);
   const refreshQueuedRef = useRef(false);
+  const proposalEditorRef = useRef<RentalDetailsCardHandle | null>(null);
+  const workflowViewKeyRef = useRef<string>('');
 
   useEffect(() => {
     setPickupEvidenceDisplay([]);
@@ -735,9 +777,7 @@ export default function RentalScreen() {
     const isAfterHandoff = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
       status
     );
-    const isAfterReturn = ['returned', 'completed', 'cancelled'].includes(status);
     setPickupExpanded(!isAfterHandoff);
-    setReturnExpanded(isAfterHandoff && !isAfterReturn);
   }, [rental?.status]);
 
   /** Same as listing / offers: multi-capture `/camera` session, then upload each frame to rental evidence. */
@@ -857,10 +897,205 @@ export default function RentalScreen() {
     setViewerImageLoading(Boolean(viewerSourceUri));
   }, [photoViewerVisible, photoViewerIndex, viewerSourceUri]);
 
-  const requestTimestamp = useMemo(() => {
-    const n = Number(request?.timestamp);
-    return Number.isFinite(n) ? n : null;
-  }, [request?.timestamp]);
+  const onProposeRentalDetails = useCallback(
+    async (input: { meetupTimeIso: string; returnTimeIso: string; meetupLocation: string }): Promise<boolean> => {
+      if (!rental || !me) return false;
+      const baselineDurationHours = baselineDurationHoursFromRequest(request);
+      const proposedDurationHours = durationHoursBetween(input.meetupTimeIso, input.returnTimeIso);
+      const durationEval = evaluateDurationChange({
+        baselineDurationHours,
+        proposedDurationHours,
+        graceHours: DURATION_GRACE_HOURS,
+      });
+      if (durationEval.warningTriggered) {
+        const continueProposal = await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            'Duration Change Warning',
+            [
+              'The proposed meetup times change the original rental duration.',
+              '',
+              `Original duration: ${durationEval.originalLabel ?? '—'}`,
+              `Proposed duration: ${durationEval.proposedLabel ?? '—'}`,
+              '',
+              'The final rental price may change based on the agreed daily rate and requires approval from the other user.',
+            ].join('\n'),
+            [
+              { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Continue Proposal', onPress: () => resolve(true) },
+            ]
+          );
+        });
+        if (!continueProposal) return false;
+      }
+      setProposalBusy(true);
+      try {
+        const iAmOwner = rental.owner_user_id === me;
+        const iAmRenter = rental.renter_user_id === me;
+        const nowIso = new Date().toISOString();
+        const nextProposalVersion =
+          typeof rental.proposal_version === 'number' && Number.isFinite(rental.proposal_version)
+            ? rental.proposal_version + 1
+            : 2;
+        const hasCol = (k: string) => Object.prototype.hasOwnProperty.call(rental, k);
+        const payload: Record<string, unknown> = {
+          meetup_time: input.meetupTimeIso,
+          meetup_location: input.meetupLocation,
+          return_time: input.returnTimeIso,
+          return_location: input.meetupLocation,
+          confirmed_by_owner: iAmOwner ? true : false,
+          confirmed_by_renter: iAmRenter ? true : false,
+        };
+        if (hasCol('pickup_datetime')) payload.pickup_datetime = input.meetupTimeIso;
+        if (hasCol('return_datetime')) payload.return_datetime = input.returnTimeIso;
+        if (hasCol('owner_confirmed')) payload.owner_confirmed = iAmOwner ? true : false;
+        if (hasCol('renter_confirmed')) payload.renter_confirmed = iAmRenter ? true : false;
+        if (hasCol('agreement_status')) payload.agreement_status = 'pending';
+        if (hasCol('confirmed_at')) payload.confirmed_at = null;
+        if (hasCol('last_proposed_by')) payload.last_proposed_by = me;
+        if (hasCol('proposal_version')) payload.proposal_version = nextProposalVersion;
+        if (hasCol('proposal_updated_at')) payload.proposal_updated_at = nowIso;
+        if (hasCol('latest_proposal_message_id')) payload.latest_proposal_message_id = null;
+
+        const { error: updateError } = await supabase.from('rentals').update(payload).eq('id', rental.id);
+        if (updateError) {
+          Alert.alert('Could not save proposal', 'Please try again.');
+          return false;
+        }
+
+        const receiverId = iAmOwner ? rental.renter_user_id : rental.owner_user_id;
+        const requestRowId =
+          rental.request_id != null && isUuidString(String(rental.request_id)) ? String(rental.request_id) : null;
+        const offerId = rental.offer_id != null && isUuidString(String(rental.offer_id)) ? String(rental.offer_id) : null;
+        let messageId: string | null = null;
+        if (offerId && receiverId && receiverId !== me) {
+          messageId = await insertMeetupProposalOfferMessage({
+            offerId,
+            requestRowId,
+            rentalId: rental.id,
+            authorId: me,
+            receiverId,
+            meetupTimeIso: input.meetupTimeIso,
+            returnTimeIso: input.returnTimeIso,
+            meetupLocation: input.meetupLocation,
+            durationWarningLine: durationEval.warningLine,
+          });
+          if (!messageId) {
+            Alert.alert('Could not post proposal', 'Chat proposal message could not be created.');
+            return false;
+          }
+          insertServerNotificationToRecipient({
+            actorId: me,
+            recipientUserId: receiverId,
+            type: 'message',
+            title: durationEval.warningTriggered
+              ? `${getProfileNameForUserId(me)} proposed updated meetup times with a changed rental duration`
+              : `${getProfileNameForUserId(me)} proposed a pickup time`,
+            body: String(request?.title ?? '').trim()
+              ? `New meetup proposal for ${String(request?.title).trim()}`
+              : 'A meetup time was proposed.',
+            offerId,
+            requestId: requestRowId,
+          });
+        }
+
+        if (messageId && Object.prototype.hasOwnProperty.call(rental, 'latest_proposal_message_id')) {
+          await supabase.from('rentals').update({ latest_proposal_message_id: messageId }).eq('id', rental.id);
+        }
+        await refreshVerificationState();
+        return true;
+      } finally {
+        setProposalBusy(false);
+      }
+    },
+    [me, refreshVerificationState, rental, request, request?.title, supabase]
+  );
+
+  const onAcceptMeetingProposal = useCallback(async () => {
+    if (!rental || !me) return;
+    setProposalBusy(true);
+    try {
+      const patch: Record<string, unknown> = {
+        confirmed_by_owner: true,
+        confirmed_by_renter: true,
+        owner_confirmed: true,
+        renter_confirmed: true,
+        agreement_status: 'confirmed',
+        confirmed_at: new Date().toISOString(),
+      };
+      const { error } = await supabase.from('rentals').update(patch).eq('id', rental.id);
+      if (error) {
+        Alert.alert('Could not confirm yet', 'Please try again.');
+        return;
+      }
+      await refreshVerificationState();
+    } finally {
+      setProposalBusy(false);
+    }
+  }, [me, refreshVerificationState, rental, supabase]);
+
+  const openMeetingProposalEditor = useCallback(() => {
+    proposalEditorRef.current?.openProposeModal();
+  }, []);
+
+  useEffect(() => {
+    if (!rental) return;
+    const termsNow =
+      rental.price != null || request?.accepted_price != null || request?.acceptedPrice != null;
+    const ownerConfirmedNow =
+      typeof rental.owner_confirmed === 'boolean'
+        ? rental.owner_confirmed
+        : typeof rental.confirmed_by_owner === 'boolean'
+          ? rental.confirmed_by_owner
+          : false;
+    const renterConfirmedNow =
+      typeof rental.renter_confirmed === 'boolean'
+        ? rental.renter_confirmed
+        : typeof rental.confirmed_by_renter === 'boolean'
+          ? rental.confirmed_by_renter
+          : false;
+    const agreementNow: 'pending' | 'confirmed' =
+      rental.agreement_status === 'confirmed'
+        ? 'confirmed'
+        : rental.agreement_status === 'pending'
+          ? 'pending'
+          : ownerConfirmedNow && renterConfirmedNow
+            ? 'confirmed'
+            : 'pending';
+    const proposalActorNow = String(rental.last_proposed_by ?? '').trim();
+    const hasPendingNow = agreementNow === 'pending' && proposalActorNow.length > 0;
+    const meetingCompletedNow = agreementNow === 'confirmed' && !hasPendingNow;
+    const statusNow = String(rental.status ?? 'pending').trim().toLowerCase();
+    const returnEnabledNow = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
+      statusNow
+    );
+    const returnDoneNow = ['returned', 'completed', 'cancelled'].includes(statusNow);
+    const workflowKey = `${agreementNow}:${hasPendingNow ? 1 : 0}:${returnEnabledNow ? 1 : 0}:${returnDoneNow ? 1 : 0}`;
+
+    if (workflowViewKeyRef.current === workflowKey) return;
+    workflowViewKeyRef.current = workflowKey;
+
+    if (!termsNow) {
+      setTermsExpanded(true);
+      setMeetingExpanded(false);
+      setReturnExpanded(false);
+      return;
+    }
+    if (!meetingCompletedNow) {
+      setTermsExpanded(false);
+      setMeetingExpanded(true);
+      setReturnExpanded(false);
+      return;
+    }
+    if (!returnEnabledNow) {
+      setTermsExpanded(false);
+      setMeetingExpanded(true);
+      setReturnExpanded(false);
+      return;
+    }
+    setTermsExpanded(false);
+    setMeetingExpanded(true);
+    setReturnExpanded(!returnDoneNow);
+  }, [me, rental, request?.accepted_price, request?.acceptedPrice]);
 
   if (!rentalId) {
     return (
@@ -902,9 +1137,65 @@ export default function RentalScreen() {
         : ownerConfirmed && renterConfirmed
       ? 'confirmed'
       : 'pending';
+  const termsCompleted =
+    rental.price != null || request?.accepted_price != null || request?.acceptedPrice != null;
   const relationshipSubtitle = 'Owner ↔ Renter';
   const viewerRole: 'owner' | 'renter' =
     me && me === rental.owner_user_id ? 'owner' : me && me === rental.renter_user_id ? 'renter' : 'renter';
+  const proposalActorId = String(rental.last_proposed_by ?? '').trim();
+  const hasPendingProposal = agreementStatus === 'pending' && proposalActorId.length > 0;
+  const iProposedLast = Boolean(me && proposalActorId === me);
+  const proposalByLabel =
+    proposalActorId === rental.owner_user_id ? 'owner' : proposalActorId === rental.renter_user_id ? 'renter' : null;
+  const meetingStatusText =
+    agreementStatus === 'confirmed'
+      ? 'Accepted meetup details'
+      : hasPendingProposal
+        ? proposalByLabel
+          ? `Pending approval · Proposed by ${proposalByLabel}`
+          : 'Pending approval'
+        : 'No active proposal';
+  const showMeetingAccept = hasPendingProposal && !iProposedLast;
+  const showMeetingPrimaryAction = agreementStatus !== 'confirmed' && (!hasPendingProposal || iProposedLast);
+  const showMeetingPendingPill = hasPendingProposal && iProposedLast;
+  const pickupAtIso = rental.pickup_datetime ?? rental.meetup_time;
+  const pickupAtMs = pickupAtIso ? Date.parse(pickupAtIso) : NaN;
+  const editLockedByPickupWindow = Number.isFinite(pickupAtMs) && pickupAtMs - Date.now() <= 24 * 60 * 60 * 1000;
+  const showMeetingConfirmedActions = agreementStatus === 'confirmed';
+  const canEditConfirmed = !proposalBusy && !editLockedByPickupWindow;
+  const meetingCompleted = agreementStatus === 'confirmed' && !hasPendingProposal;
+  const lifecycleStatusForLayout = String(rental.status ?? 'pending').trim().toLowerCase();
+  const returnWorkflowEnabledForLayout = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
+    lifecycleStatusForLayout
+  );
+  const returnCompletedForCard = ['returned', 'completed', 'cancelled'].includes(lifecycleStatusForLayout);
+  const termsReplacementValue = Number(rental.replacement_value ?? Math.max(finalPrice * 3, 150));
+
+  const computedDurationLabel =
+    formatDurationDays(rental.pickup_datetime ?? rental.meetup_time, rental.return_datetime ?? rental.return_time) ??
+    request?.when ??
+    rental.duration_type ??
+    '—';
+  const durationWarningEval = evaluateDurationChange({
+    baselineDurationHours: baselineDurationHoursFromRequest(request),
+    proposedDurationHours: durationHoursBetween(
+      String(rental.pickup_datetime ?? rental.meetup_time ?? ''),
+      String(rental.return_datetime ?? rental.return_time ?? '')
+    ),
+    graceHours: DURATION_GRACE_HOURS,
+  });
+  const durationWarningVisible = durationWarningEval.warningTriggered;
+  const proposalEditorRental: RentalMeetupDetails = {
+    ...rental,
+    meetup_time: rental.meetup_time ?? rental.pickup_datetime ?? null,
+    return_time: rental.return_time ?? rental.return_datetime ?? null,
+    meetup_location: rental.meetup_location ?? null,
+    return_location: rental.return_location ?? null,
+    owner_confirmed: rental.owner_confirmed ?? undefined,
+    renter_confirmed: rental.renter_confirmed ?? undefined,
+    confirmed_by_owner: Boolean(rental.confirmed_by_owner ?? rental.owner_confirmed),
+    confirmed_by_renter: Boolean(rental.confirmed_by_renter ?? rental.renter_confirmed),
+  };
   const pickupItems = viewerRole === 'owner' ? OWNER_PICKUP_ITEMS : RENTER_PICKUP_ITEMS;
   const returnItems = viewerRole === 'owner' ? OWNER_RETURN_ITEMS : RENTER_RETURN_ITEMS;
   const pickupDoneForRole = pickupChecklist[viewerRole];
@@ -929,13 +1220,9 @@ export default function RentalScreen() {
       ? 4
       : lifecyclePhase === 'active'
         ? 3
-        : agreementStatus === 'confirmed'
+        : termsCompleted
           ? 2
           : 1;
-  const threadUnread =
-    typeof rental.offer_id === 'string' && rental.offer_id.trim() !== ''
-      ? (unreadByOfferId[rental.offer_id.trim()] ?? 0)
-      : 0;
   const rentalStatus = String(rental.status ?? 'pending').trim().toLowerCase();
   const handoffCompleted = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
     rentalStatus
@@ -1161,6 +1448,17 @@ export default function RentalScreen() {
     Alert.alert('Report issue', 'In-app reporting is coming soon. For urgent issues, message your match from chat.');
   };
 
+  const openRentalChat = () => {
+    if (!rental.id) {
+      console.warn('Missing rental id');
+      return;
+    }
+    router.push({
+      pathname: '/chat/[id]',
+      params: { id: rental.id },
+    });
+  };
+
   const onConfirmPickup = () => {
     if (!allPickupItemsDone || !me) return;
     Alert.alert(
@@ -1372,32 +1670,8 @@ export default function RentalScreen() {
     router.push('/camera');
   };
 
-  const openRentalChat = () => {
-    if (!rental.id) {
-      console.warn('Missing rental id');
-      return;
-    }
-    router.push({
-      pathname: '/chat/[id]',
-      params: { id: rental.id },
-    });
-  };
-
   const actionFooter = (
     <>
-      <Pressable
-        pressOpacityFeedback={false}
-        haptic
-        style={({ pressed }) => [styles.messageSecondaryBtn, pressed && { opacity: 0.88 }]}
-        onPress={openRentalChat}
-      >
-        <Text style={styles.messageSecondaryBtnText}>Message</Text>
-        {threadUnread > 0 ? (
-          <View style={styles.threadMessageBadge}>
-            <Text style={styles.threadMessageBadgeText}>{threadUnread > 99 ? '99+' : String(threadUnread)}</Text>
-          </View>
-        ) : null}
-      </Pressable>
       <Pressable
         pressOpacityFeedback={false}
         style={({ pressed }) => [styles.reportTextHit, pressed && { opacity: 0.72 }]}
@@ -1407,10 +1681,10 @@ export default function RentalScreen() {
       </Pressable>
       <Pressable
         pressOpacityFeedback={false}
-        style={({ pressed }) => [styles.backHomeHit, pressed && { opacity: 0.65 }]}
+        style={({ pressed }) => [styles.messageSecondaryBtn, pressed && { opacity: 0.88 }]}
         onPress={() => router.replace('/(tabs)/home')}
       >
-        <Text style={styles.backHomeText}>Back To Home</Text>
+        <Text style={styles.messageSecondaryBtnText}>Home</Text>
       </Pressable>
     </>
   );
@@ -1435,6 +1709,18 @@ export default function RentalScreen() {
               title={request?.title || 'Rental Details'}
               subtitle={relationshipSubtitle}
               onBack={() => router.back()}
+              rightAccessory={
+                <Pressable
+                  pressOpacityFeedback={false}
+                  haptic
+                  accessibilityRole="button"
+                  accessibilityLabel="Open chat"
+                  onPress={openRentalChat}
+                  style={({ pressed }) => [styles.topChatIconBtn, pressed && styles.topChatIconBtnPressed]}
+                >
+                  <Ionicons name="chatbubble-ellipses-outline" size={18} color={ui.primary} />
+                </Pressable>
+              }
               style={styles.rentalBackHeader}
             />
 
@@ -1448,7 +1734,7 @@ export default function RentalScreen() {
                   const isDone = idx < currentStepIndex;
                   const isCurrent = idx === currentStepIndex;
                   return (
-                    <View key={step.key} style={styles.progressStepWrap}>
+                    <React.Fragment key={step.key}>
                       <View style={styles.progressStepCell}>
                         <View style={styles.progressItem}>
                           <Text
@@ -1482,108 +1768,251 @@ export default function RentalScreen() {
                       {idx < progressSteps.length - 1 ? (
                         <View style={[styles.progressConnector, !isTabletMargins && styles.progressConnectorPhone]} />
                       ) : null}
-                    </View>
+                    </React.Fragment>
                   );
                 })}
               </View>
             )}
 
-            <View style={[styles.agreementCard, !isTabletMargins && styles.cardPadPhone]}>
-              <View style={styles.agreementHeaderRow}>
-                <Text style={[styles.cardSectionTitle, styles.agreementTitleInHeader]}>Meeting Details</Text>
-                <View style={styles.agreementStatusInHeader}>
-                  <Text style={styles.agreementStatusMetaText}>
-                    {`${ownerConfirmed ? '✓' : '○'} Owner  ${renterConfirmed ? '✓' : '○'} Renter  · `}
-                  </Text>
-                  <View
-                    style={[
-                      styles.agreementStatusDot,
-                      agreementStatus === 'confirmed' ? styles.agreementStatusDotOk : styles.agreementStatusDotWarn,
-                    ]}
-                  />
-                  <Text style={styles.agreementStatusMetaText}>
-                    {agreementStatus === 'confirmed' ? 'Confirmed' : 'Pending'}
-                  </Text>
+            <Pressable
+              pressOpacityFeedback={false}
+              onPress={() => {
+                if (!termsExpanded) setTermsExpanded(true);
+              }}
+              style={({ pressed }) => [
+                styles.detailsCard,
+                !isTabletMargins && styles.cardPadPhone,
+                termsCompleted && !termsExpanded ? styles.completedCollapsedCard : null,
+                !termsExpanded && pressed ? styles.collapsedCardPressed : null,
+              ]}
+            >
+              <Pressable
+                pressOpacityFeedback={false}
+                onPress={() => setTermsExpanded((v) => !v)}
+                style={({ pressed }) => [styles.sectionHeaderRow, pressed && { opacity: 0.9 }]}
+              >
+                <View style={styles.sectionTitleWithCheck}>
+                  <Text style={styles.sectionTitleInline}>Agreed Terms</Text>
+                  {termsCompleted ? <Text style={styles.sectionCompleteCheck}>✓</Text> : null}
                 </View>
-              </View>
-              <View style={styles.agreementGridRow}>
-                <View style={styles.agreementGridCell}>
-                  <Text style={styles.metaLabel}>Meetup location</Text>
-                  <Text style={styles.agreementLocationValue}>
-                    {rental.meetup_location || rental.return_location || 'Not set'}
-                  </Text>
+                <View style={styles.sectionHeaderRight}>
+                  <Text style={styles.inlineRoleLabel}>{termsExpanded ? 'Collapse' : 'Expand'}</Text>
                 </View>
-                <View style={styles.agreementGridCell}>
-                  <Text style={styles.metaLabel}>Duration</Text>
-                  <Text style={styles.agreementSecondaryValue}>
-                    {request?.when || rental.duration_type || '—'}
+              </Pressable>
+              {!termsExpanded ? (
+                <Text style={styles.verificationCollapsedMeta}>
+                  {termsCompleted ? 'Confirmed pricing, protection, and preauthorization terms.' : 'Review and confirm agreed financial terms.'}
+                </Text>
+              ) : (
+                <>
+                  <View style={styles.costGridRow}>
+                    <View style={styles.costGridCell}>
+                      <Text style={styles.label}>Final agreed price</Text>
+                      <Text style={styles.valueEmphasis}>{formatUsd(finalPrice ?? 0)}</Text>
+                    </View>
+                    <View style={styles.costGridCell}>
+                      <Text style={styles.label}>Delivery method</Text>
+                      <Text style={styles.valueStandard}>{request?.deliveryMethod || 'No delivery needed'}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.costGridRow}>
+                    <View style={styles.costGridCell}>
+                      <Text style={styles.label}>Replacement value</Text>
+                      <Text style={styles.valueStandard}>{formatUsd(replacementValue)}</Text>
+                    </View>
+                    <View style={styles.costGridCell}>
+                      <Text style={styles.label}>Daily late fee</Text>
+                      <Text style={styles.valueStandard}>{`${formatUsd(lateFee)}/day`}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.costGridRow}>
+                    <View style={styles.costGridCell}>
+                      <Text style={styles.label}>Maximum late fee cap</Text>
+                      <Text style={styles.valueStandard}>{formatUsd(maxLateFeeCap)}</Text>
+                    </View>
+                    <View style={styles.costGridCell}>
+                      <Text style={styles.label}>Estimated preauthorization hold</Text>
+                      <Text style={styles.valueStandard}>{formatUsd(preauthAmount)}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.preauthHelperText}>
+                    This is a temporary authorization hold preview, not an immediate charge.
                   </Text>
-                </View>
-              </View>
-              <View style={styles.agreementGridRow}>
-                <View style={styles.agreementGridCell}>
-                  <Text style={styles.metaLabel}>Pickup</Text>
-                  <Text style={styles.agreementDatetimeValue}>
-                    {formatCompactDateTime(rental.pickup_datetime ?? rental.meetup_time)}
+                  <Text style={styles.preauthHelperText}>
+                    Preauthorization holds are temporary and are only used if the item is returned late, damaged,
+                    materially different, or not returned.
                   </Text>
+                </>
+              )}
+            </Pressable>
+
+            <Pressable
+              pressOpacityFeedback={false}
+              onPress={() => {
+                if (!meetingExpanded && termsCompleted) setMeetingExpanded(true);
+              }}
+              style={({ pressed }) => [
+                styles.agreementCard,
+                !isTabletMargins && styles.cardPadPhone,
+                meetingCompleted && !meetingExpanded ? styles.completedCollapsedCard : null,
+                !termsCompleted ? styles.phaseCardDisabled : null,
+                !meetingExpanded && termsCompleted && pressed ? styles.collapsedCardPressed : null,
+              ]}
+            >
+              <Pressable
+                pressOpacityFeedback={false}
+                disabled={!termsCompleted}
+                onPress={() => setMeetingExpanded((v) => !v)}
+                style={({ pressed }) => [styles.sectionHeaderRow, pressed && { opacity: 0.9 }]}
+              >
+                <View style={styles.sectionTitleWithCheck}>
+                  <Text style={styles.sectionTitleInline}>Meeting Details</Text>
+                  {meetingCompleted ? <Text style={styles.sectionCompleteCheck}>✓</Text> : null}
                 </View>
-                <View style={styles.agreementGridCell} />
-              </View>
-              <View style={[styles.agreementGridRow, styles.agreementGridRowLast]}>
-                <View style={styles.agreementGridCell}>
-                  <Text style={styles.metaLabel}>Return</Text>
-                  <Text style={styles.agreementDatetimeValue}>
-                    {formatCompactDateTime(rental.return_datetime ?? rental.return_time)}
-                  </Text>
+                <View style={styles.sectionHeaderRight}>
+                  <Text style={styles.inlineRoleLabel}>{meetingExpanded ? 'Collapse' : 'Expand'}</Text>
                 </View>
-                <View style={[styles.agreementGridCell, styles.agreementGridCellTimestamp]}>
-                  {rental.confirmed_at ? (
-                    <Text style={styles.confirmedAtText}>Confirmed {formatDateTime(rental.confirmed_at)}</Text>
+              </Pressable>
+              {!meetingExpanded ? (
+                <Text style={styles.verificationCollapsedMeta}>
+                  {!termsCompleted
+                    ? 'Meeting details unlock after agreed terms confirmation.'
+                    : meetingCompleted
+                      ? 'Confirmed pickup/return schedule and meetup location.'
+                      : 'Review or respond to pending meetup proposal.'}
+                </Text>
+              ) : (
+                <>
+                  <Text style={styles.meetingProposalStateText}>{meetingStatusText}</Text>
+                  {durationWarningVisible ? (
+                    <Text style={styles.durationWarningBanner}>
+                      ⚠ Duration changed ({durationWarningEval.originalLabel} to {durationWarningEval.proposedLabel}).
+                      Final price may require adjustment before acceptance.
+                    </Text>
                   ) : null}
-                </View>
-              </View>
-            </View>
+                  <View style={styles.agreementGridRow}>
+                    <View style={styles.agreementGridCell}>
+                      <Text style={styles.metaLabel}>Meetup location</Text>
+                      <Text style={styles.agreementLocationValue}>
+                        {rental.meetup_location || rental.return_location || 'Not set'}
+                      </Text>
+                    </View>
+                    <View style={styles.agreementGridCell}>
+                      <Text style={styles.metaLabel}>Duration</Text>
+                      <Text style={styles.agreementSecondaryValue}>
+                        {computedDurationLabel}
+                        {durationWarningVisible ? '  ⚠' : ''}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.agreementGridRow}>
+                    <View style={styles.agreementGridCell}>
+                      <Text style={styles.metaLabel}>Pickup</Text>
+                      <Text style={styles.agreementDatetimeValue}>
+                        {agreementStatus === 'confirmed'
+                          ? formatCompactDate(rental.pickup_datetime ?? rental.meetup_time)
+                          : formatCompactDateTime(rental.pickup_datetime ?? rental.meetup_time)}
+                      </Text>
+                    </View>
+                    <View style={styles.agreementGridCell} />
+                  </View>
+                  <View style={[styles.agreementGridRow, styles.agreementGridRowLast]}>
+                    <View style={styles.agreementGridCell}>
+                      <Text style={styles.metaLabel}>Return</Text>
+                      <Text style={styles.agreementDatetimeValue}>
+                        {agreementStatus === 'confirmed'
+                          ? formatCompactDate(rental.return_datetime ?? rental.return_time)
+                          : formatCompactDateTime(rental.return_datetime ?? rental.return_time)}
+                      </Text>
+                    </View>
+                    <View style={[styles.agreementGridCell, styles.agreementGridCellTimestamp]}>
+                      {showMeetingAccept ? (
+                        <View style={styles.meetingActionsRow}>
+                          <Pressable
+                            pressOpacityFeedback={false}
+                            haptic
+                            disabled={proposalBusy}
+                            onPress={() => void onAcceptMeetingProposal()}
+                            style={({ pressed }) => [
+                              styles.meetingPrimaryBtn,
+                              pressed && styles.meetingPrimaryBtnPressed,
+                              proposalBusy && styles.meetingBtnDisabled,
+                            ]}
+                          >
+                            <Text style={styles.meetingPrimaryBtnText}>Accept</Text>
+                          </Pressable>
+                          <Pressable
+                            pressOpacityFeedback={false}
+                            haptic
+                            disabled={proposalBusy}
+                            onPress={openMeetingProposalEditor}
+                            style={({ pressed }) => [
+                              styles.meetingSecondaryBtn,
+                              pressed && styles.meetingSecondaryBtnPressed,
+                              proposalBusy && styles.meetingBtnDisabled,
+                            ]}
+                          >
+                            <Text style={styles.meetingSecondaryBtnText}>Modify</Text>
+                          </Pressable>
+                        </View>
+                      ) : null}
+                      {showMeetingPrimaryAction ? (
+                        <View style={styles.meetingActionsRow}>
+                          {showMeetingPendingPill ? (
+                            <View style={[styles.meetingPrimaryBtn, styles.meetingPendingBtn]}>
+                              <Text style={styles.meetingPrimaryBtnText}>Pending</Text>
+                            </View>
+                          ) : null}
+                          <Pressable
+                            pressOpacityFeedback={false}
+                            haptic
+                            disabled={proposalBusy}
+                            onPress={openMeetingProposalEditor}
+                            style={({ pressed }) => [
+                              styles.meetingPrimaryBtn,
+                              pressed && styles.meetingPrimaryBtnPressed,
+                              proposalBusy && styles.meetingBtnDisabled,
+                            ]}
+                          >
+                            <Text style={styles.meetingPrimaryBtnText}>
+                              {hasPendingProposal ? 'Modify' : 'Propose Changes'}
+                            </Text>
+                          </Pressable>
+                        </View>
+                      ) : null}
+                      {showMeetingConfirmedActions ? (
+                        <View style={styles.meetingActionsRow}>
+                          <View style={[styles.meetingPrimaryBtn, styles.meetingConfirmedBtn]}>
+                            <Text style={styles.meetingPrimaryBtnText}>Confirmed</Text>
+                          </View>
+                          <Pressable
+                            pressOpacityFeedback={false}
+                            haptic
+                            disabled={!canEditConfirmed}
+                            onPress={openMeetingProposalEditor}
+                            style={({ pressed }) => [
+                              styles.meetingSecondaryBtn,
+                              pressed && styles.meetingSecondaryBtnPressed,
+                              !canEditConfirmed && styles.meetingBtnDisabled,
+                            ]}
+                          >
+                            <Text style={styles.meetingSecondaryBtnText}>Edit</Text>
+                          </Pressable>
+                        </View>
+                      ) : null}
+                      {showMeetingConfirmedActions && editLockedByPickupWindow ? (
+                        <Text style={styles.confirmedAtText}>Edit locked 24h before pickup</Text>
+                      ) : null}
+                      {rental.confirmed_at ? (
+                        <Text style={styles.confirmedAtText}>Confirmed {formatDateTime(rental.confirmed_at)}</Text>
+                      ) : null}
+                    </View>
+                  </View>
+                </>
+              )}
+            </Pressable>
 
-            <View style={[styles.detailsCard, !isTabletMargins && styles.cardPadPhone]}>
-              <Text style={styles.cardSectionTitle}>Agreed Cost Breakdown</Text>
-              <View style={styles.costGridRow}>
-                <View style={styles.costGridCell}>
-                  <Text style={styles.label}>Final agreed price</Text>
-                  <Text style={styles.valueEmphasis}>{formatUsd(finalPrice ?? 0)}</Text>
-                </View>
-                <View style={styles.costGridCell}>
-                  <Text style={styles.label}>Delivery method</Text>
-                  <Text style={styles.valueStandard}>{request?.deliveryMethod || 'No delivery needed'}</Text>
-                </View>
-              </View>
-              <View style={styles.costGridRow}>
-                <View style={styles.costGridCell}>
-                  <Text style={styles.label}>Delivery fee</Text>
-                  <Text style={styles.valueStandard}>—</Text>
-                </View>
-                <View style={styles.costGridCell}>
-                  <Text style={styles.label}>Protection plan</Text>
-                  <Text style={styles.valueStandard}>—</Text>
-                </View>
-              </View>
-              <View style={[styles.costGridRow, styles.costGridRowLast]}>
-                <View style={styles.costGridCell}>
-                  <Text style={styles.label}>Security deposit</Text>
-                  <Text style={styles.valueStandard}>—</Text>
-                </View>
-                <View style={styles.costGridCell}>
-                  <Text style={styles.label}>Estimated item value</Text>
-                  <Text style={styles.valueStandard}>—</Text>
-                </View>
-              </View>
-            </View>
-            <ProtectionSummaryCard
-              replacementValue={replacementValue}
-              dailyLateFee={lateFee}
-              maxLateFeeCap={maxLateFeeCap}
-              preauthAmount={preauthAmount}
-            />
-
+            
             {agreementStatus === 'confirmed' ? (
               <View style={[styles.checklistCard, !isTabletMargins && styles.cardPadPhone]}>
                 <Pressable
@@ -1723,40 +2152,41 @@ export default function RentalScreen() {
               </View>
             ) : null}
 
-            <View
-              style={[
+            <Pressable
+              pressOpacityFeedback={false}
+              onPress={() => {
+                if (!returnExpanded && returnWorkflowEnabled) setReturnExpanded(true);
+              }}
+              style={({ pressed }) => [
                 styles.checklistCard,
                 !isTabletMargins && styles.cardPadPhone,
                 !returnWorkflowEnabled && styles.phaseCardDisabled,
+                returnCompletedForCard && !returnExpanded ? styles.completedCollapsedCard : null,
+                !returnExpanded && returnWorkflowEnabled && pressed ? styles.collapsedCardPressed : null,
               ]}
             >
               <Pressable
                 pressOpacityFeedback={false}
                 disabled={!returnWorkflowEnabled}
                 onPress={() => setReturnExpanded((v) => !v)}
-                style={({ pressed }) => [styles.verificationTitleRow, pressed && { opacity: 0.9 }]}
+                style={({ pressed }) => [styles.sectionHeaderRow, pressed && { opacity: 0.9 }]}
               >
-                <Text style={styles.verificationSectionTitle}>Return / Drop-off Details</Text>
-                <Text style={styles.inlineRoleLabel}>
-                  {!returnWorkflowEnabled ? 'Locked' : returnExpanded ? 'Collapse' : 'View'}
-                </Text>
+                <View style={styles.sectionTitleWithCheck}>
+                  <Text style={styles.sectionTitleInline}>Return / Drop-off Details</Text>
+                  {returnCompletedForCard ? <Text style={styles.sectionCompleteCheck}>✓</Text> : null}
+                </View>
+                <View style={styles.sectionHeaderRight}>
+                  <Text style={styles.inlineRoleLabel}>{!returnWorkflowEnabled ? 'Locked' : returnExpanded ? 'Collapse' : 'Expand'}</Text>
+                </View>
               </Pressable>
               {!returnWorkflowEnabled ? (
                 <Text style={styles.verificationCollapsedMeta}>Available after handoff is confirmed.</Text>
               ) : !returnExpanded ? (
-                <>
-                  <Text style={styles.verificationCollapsedLine}>
-                    {returnCompleted ? '✓ Return workflow complete' : 'Return workflow in progress'}
-                  </Text>
-                  <Text style={styles.verificationCollapsedMeta}>
-                    {returnEvidenceDisplay.length > 0
-                      ? `· ${returnEvidenceDisplay.length} photo${returnEvidenceDisplay.length === 1 ? '' : 's'} documented`
-                      : '· No return photos uploaded yet'}
-                  </Text>
-                  <Text style={styles.verificationCollapsedMeta}>
-                    {returnCompleted ? '· Renter notes locked' : '· Renter notes active'}
-                  </Text>
-                </>
+                <Text style={styles.verificationCollapsedMeta}>
+                  {returnCompletedForCard
+                    ? 'Return workflow complete with verification evidence recorded.'
+                    : 'Track return checklist, photos, and final confirmation.'}
+                </Text>
               ) : (
                 <>
                   <VerificationPhotosSubsection
@@ -1852,150 +2282,28 @@ export default function RentalScreen() {
                   </View>
                 </>
               )}
-            </View>
+            </Pressable>
 
             <View style={[styles.actionsCard, !isTabletMargins && styles.cardPadPhone]}>
-              {lifecyclePhase === 'completed' ? (
-                <>
-                  <View style={styles.successCard}>
-                    <Text style={styles.successTitle}>Rental completed successfully</Text>
-                    <Text style={styles.successBody}>Thank you for using OurGarage.</Text>
-                  </View>
-                  <Pressable
-                    pressOpacityFeedback={false}
-                    style={({ pressed }) => [styles.leaveReviewHit, pressed && { opacity: 0.72 }]}
-                    onPress={() => Alert.alert('Leave review', 'Reviews are coming soon.')}
-                  >
-                    <Text style={styles.leaveReviewText}>Leave Review</Text>
-                  </Pressable>
-                </>
-              ) : agreementStatus === 'confirmed' && lifecyclePhase === 'pickup' ? (
-                <>
-                  <Text style={styles.nextStepsBody}>
-                    Both sides must complete pickup checklist + required photos before handoff approval.
-                  </Text>
-                  <Text style={styles.verificationCollapsedMeta}>
-                    {bilateralPickupReady
-                      ? 'Both sides ready for handoff.'
-                      : ownerPickupChecklistDone && ownerPickupPhotoRequirementMet
-                        ? 'Waiting for renter to finish verification steps.'
-                        : renterPickupChecklistDone
-                          ? 'Waiting for owner verification.'
-                          : 'Both sides still need to complete verification.'}
-                  </Text>
-                  {__DEV__ ? (
-                    <View style={styles.devReadinessBlock}>
-                      <Text style={styles.devReadinessLine}>{`Owner checklist: ${ownerPickupChecklistDone ? '✅' : '❌'}`}</Text>
-                      <Text style={styles.devReadinessLine}>{`Owner photos: ${ownerPickupPhotoRequirementMet ? '✅' : `❌ (${ownerPickupPhotos.length}/${REQUIRED_PICKUP_PHOTOS})`}`}</Text>
-                      <Text style={styles.devReadinessLine}>{`Renter checklist: ${renterPickupChecklistDone ? '✅' : '❌'}`}</Text>
-                      <Text style={styles.devReadinessLine}>{`Renter review complete: ${renterPickupChecklistDone ? '✅' : '❌'}`}</Text>
-                      <Text style={styles.devReadinessLine}>{`Can begin handoff CTA: ${canBeginHandoff ? '✅' : '❌'}`}</Text>
-                    </View>
-                  ) : null}
-                  {viewerRole === 'owner' ? (
-                    <Pressable
-                      pressOpacityFeedback={false}
-                      haptic
-                      disabled={!canBeginHandoff}
-                      onPress={onBeginHandoffApproval}
-                      style={({ pressed }) => [
-                        styles.startButton,
-                        !canBeginHandoff && styles.startButtonDisabled,
-                        pressed && canBeginHandoff && styles.startButtonPressed,
-                      ]}
-                    >
-                      <Text style={styles.startButtonText}>Begin Handoff Approval</Text>
-                    </Pressable>
-                  ) : handoffApprovalStarted && !handoffApprovedByRenter ? (
-                    <Pressable
-                      pressOpacityFeedback={false}
-                      haptic
-                      disabled={!canRenterFinalizeHandoff}
-                      onPress={() => {
-                        setAgreementConsent(false);
-                        setAgreementModalVisible(true);
-                      }}
-                      style={({ pressed }) => [
-                        styles.startButton,
-                        !canRenterFinalizeHandoff && styles.startButtonDisabled,
-                        pressed && canRenterFinalizeHandoff && styles.startButtonPressed,
-                      ]}
-                    >
-                      <Text style={styles.startButtonText}>Review & Sign Agreement</Text>
-                    </Pressable>
-                  ) : (
-                    <Text style={styles.verificationCollapsedMeta}>
-                      {handoffApprovedByRenter ? 'Agreement signed and pre-authorization completed.' : 'Waiting for owner to begin handoff approval.'}
-                    </Text>
-                  )}
-                  <PartyAckFeedback ack={pickupAck} viewerRole={viewerRole} />
-                </>
-              ) : agreementStatus === 'confirmed' && lifecyclePhase === 'active' ? (
-                <>
-                  <Text style={styles.meetupCompletedLine}>Pickup completed</Text>
-                  <Pressable
-                    pressOpacityFeedback={false}
-                    haptic
-                    style={({ pressed }) => [styles.startButton, pressed && styles.startButtonPressed]}
-                    onPress={() => void onStartReturn()}
-                  >
-                    <Text style={styles.startButtonText}>Start Return</Text>
-                  </Pressable>
-                </>
-              ) : agreementStatus === 'confirmed' && lifecyclePhase === 'return' ? (
-                <>
-                  <Text style={styles.nextStepsBody}>
-                    Both sides must complete return checklist + required photos before owner confirms return.
-                  </Text>
-                  <Pressable
-                    pressOpacityFeedback={false}
-                    haptic
-                    disabled={!returnReady || viewerRole !== 'owner'}
-                    onPress={onConfirmReturn}
-                    style={({ pressed }) => [
-                      styles.startButton,
-                      (!returnReady || viewerRole !== 'owner') && styles.startButtonDisabled,
-                      pressed && returnReady && viewerRole === 'owner' && styles.startButtonPressed,
-                    ]}
-                  >
-                    <Text style={styles.startButtonText}>{viewerRole === 'owner' ? 'Confirm Return' : 'Waiting for owner confirmation'}</Text>
-                  </Pressable>
-                  <Text style={styles.verificationCollapsedMeta}>
-                    {returnReady
-                      ? 'Both sides ready for return confirmation.'
-                      : ownerReturnChecklistDone
-                        ? 'Waiting for renter return verification.'
-                        : renterReturnChecklistDone && renterReturnPhotoRequirementMet
-                          ? 'Waiting for owner return verification.'
-                          : 'Both sides still need return verification.'}
-                  </Text>
-                  <PartyAckFeedback ack={returnAck} viewerRole={viewerRole} />
-                </>
-              ) : (
-                <>
-                  <Text style={styles.nextStepsBody}>Coordinate pickup or delivery with your match.</Text>
-                  {requestTimestamp != null ? (
-                    <Pressable
-                      pressOpacityFeedback={false}
-                      style={({ pressed }) => [styles.startButton, pressed && styles.startButtonPressed]}
-                      onPress={() => {
-                        router.push({
-                          pathname: '/handoff-confirmation',
-                          params: { requestId: String(requestTimestamp) },
-                        });
-                      }}
-                    >
-                      <Text style={styles.startButtonText}>Start Rental</Text>
-                    </Pressable>
-                  ) : (
-                    <Text style={styles.rentalStartedNote}>Rental details loaded. Request timeline unavailable.</Text>
-                  )}
-                </>
-              )}
               {actionFooter}
             </View>
+            
           </View>
         </ScrollView>
+
+        <View style={styles.proposalEditorHidden} pointerEvents="none">
+          <RentalDetailsCard
+            ref={proposalEditorRef}
+            rental={proposalEditorRental}
+            itemName={request?.title || 'Rental'}
+            durationLabel={computedDurationLabel}
+            isRenter={viewerRole === 'renter'}
+            isOwner={viewerRole === 'owner'}
+            busy={proposalBusy}
+            onConfirm={onAcceptMeetingProposal}
+            onProposeChange={onProposeRentalDetails}
+          />
+        </View>
 
         <Modal visible={photoViewerVisible} transparent animationType="fade" onRequestClose={() => setPhotoViewerVisible(false)}>
           <View style={styles.viewerBackdrop}>
@@ -2145,13 +2453,6 @@ export default function RentalScreen() {
                     <Text style={styles.agreementSummaryLabel}>Grace Period</Text>
                     <Text style={styles.agreementSummaryValue}>{`${graceHours} hours`}</Text>
                   </View>
-                  <ProtectionSummaryCard
-                    replacementValue={replacementValue}
-                    dailyLateFee={lateFee}
-                    maxLateFeeCap={maxLateFeeCap}
-                    preauthAmount={preauthAmount}
-                    compact
-                  />
                 </View>
 
                 <View style={styles.agreementSectionCard}>
@@ -2271,18 +2572,31 @@ const styles = StyleSheet.create({
   rentalBackHeader: {
     marginBottom: 6,
   },
+  topChatIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EAF2FF',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#C7D6ED',
+  },
+  topChatIconBtnPressed: {
+    opacity: 0.86,
+  },
   progressRow: {
     width: '100%',
     backgroundColor: ui.primary,
     borderRadius: ui.radiusCard,
-    paddingHorizontal: 8,
+    paddingHorizontal: 10,
     paddingVertical: 7,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
   },
   progressRowPhone: {
-    paddingHorizontal: 4,
+    paddingHorizontal: 8,
     paddingVertical: 6,
   },
   progressRowComplete: {
@@ -2295,13 +2609,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     textAlign: 'center',
     letterSpacing: 0.25,
-  },
-  progressStepWrap: {
-    flex: 1,
-    flexBasis: 0,
-    minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
   },
   progressStepCell: {
     flex: 1,
@@ -2317,13 +2624,14 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
   },
   progressConnector: {
-    flex: 1,
+    width: 14,
     height: StyleSheet.hairlineWidth,
     backgroundColor: 'rgba(255,255,255,0.22)',
-    marginHorizontal: 3,
+    marginHorizontal: 2,
   },
   progressConnectorPhone: {
-    marginHorizontal: 0,
+    width: 10,
+    marginHorizontal: 1,
   },
   progressSymbol: {
     fontSize: 10,
@@ -2468,6 +2776,64 @@ const styles = StyleSheet.create({
   agreementStatusDotWarn: {
     backgroundColor: '#EF4444',
   },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 6,
+  },
+  sectionTitleWithCheck: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 0,
+    flexShrink: 1,
+    gap: 6,
+  },
+  sectionTitleInline: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    letterSpacing: -0.12,
+  },
+  sectionCompleteCheck: {
+    fontSize: 16,
+    lineHeight: 18,
+    fontWeight: '900',
+    color: '#22A35A',
+  },
+  sectionHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  collapsedCardPressed: {
+    opacity: 0.95,
+  },
+  completedCollapsedCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#9AD2B1',
+    backgroundColor: '#F1FAF4',
+  },
+  sectionCompleteText: {
+    color: '#2E7D4F',
+  },
+  meetingProposalStateText: {
+    marginTop: -3,
+    marginBottom: 9,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '600',
+    color: ui.textSecondary,
+  },
+  durationWarningBanner: {
+    marginTop: -2,
+    marginBottom: 8,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '600',
+    color: '#9E2D2F',
+  },
   agreementGridRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -2483,7 +2849,8 @@ const styles = StyleSheet.create({
   },
   agreementGridCellTimestamp: {
     justifyContent: 'flex-end',
-    paddingTop: 14,
+    alignItems: 'flex-end',
+    paddingTop: 8,
   },
   agreementLocationValue: {
     marginTop: 3,
@@ -2519,10 +2886,88 @@ const styles = StyleSheet.create({
     color: ui.textPrimary,
   },
   confirmedAtText: {
+    marginTop: 6,
     fontSize: 10,
     color: ui.textSubtle,
     lineHeight: 13,
     textAlign: 'right',
+  },
+  meetingActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  meetingPrimaryBtn: {
+    minHeight: 30,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: ui.primary,
+  },
+  meetingPendingBtn: {
+    opacity: 0.6,
+  },
+  meetingConfirmedBtn: {
+    backgroundColor: '#2D825A',
+  },
+  meetingPrimaryBtnPressed: {
+    ...primarySolidPressed,
+  },
+  meetingPrimaryBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: ui.primaryOn,
+  },
+  meetingSecondaryBtn: {
+    minHeight: 30,
+    borderRadius: 8,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+    backgroundColor: ui.surfaceInput,
+  },
+  meetingSecondaryBtnPressed: {
+    ...primarySolidPressed,
+    opacity: 0.6,
+  },
+  meetingSecondaryBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: ui.textPrimary,
+  },
+  meetingPendingChip: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    backgroundColor: ui.surfaceInput,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+  },
+  meetingPendingChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: ui.textSecondary,
+  },
+  meetingBtnDisabled: {
+    opacity: 0.6,
+  },
+  preauthHelperText: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 16,
+    color: ui.textSecondary,
+  },
+  proposalEditorHidden: {
+    height: 0,
+    opacity: 0,
+    overflow: 'hidden',
   },
   detailsCard: {
     width: '100%',

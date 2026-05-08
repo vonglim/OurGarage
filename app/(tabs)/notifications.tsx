@@ -9,6 +9,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { cardChrome, ui } from '@/constants/appUi';
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
+import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { openChatForRequest } from '@/lib/openRequestChat';
@@ -127,6 +128,7 @@ function NotificationMessage({ text }: { text: string }) {
 export default function NotificationsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const fabBottomReserve = useMainTabFabBottomReserve();
   const list = useNotificationsList();
 
   useFocusEffect(
@@ -217,7 +219,7 @@ export default function NotificationsScreen() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingBottom: 28 + insets.bottom },
+          { paddingBottom: fabBottomReserve + insets.bottom },
           list.length === 0 && styles.scrollContentEmpty,
           list.length > 0 && styles.listCardContent,
         ]}
@@ -273,6 +275,7 @@ export default function NotificationsScreen() {
           );
         }}
       />
+      <MainTabFab />
       </KeyboardDismissScreen>
     </ScreenWrapper>
   );

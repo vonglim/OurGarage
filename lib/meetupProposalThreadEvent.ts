@@ -17,6 +17,7 @@ export function buildMeetupProposalMessageBody(input: {
   meetupTimeIso: string;
   returnTimeIso: string;
   meetupLocation: string;
+  durationWarningLine?: string | null;
 }): string {
   const pickup = formatProposalInstant(input.meetupTimeIso);
   const ret = formatProposalInstant(input.returnTimeIso);
@@ -25,6 +26,7 @@ export function buildMeetupProposalMessageBody(input: {
     `Pickup time proposed: ${pickup}`,
     `Return time proposed: ${ret}`,
     ...(loc ? [`📍 ${loc}`] : []),
+    ...(input.durationWarningLine ? [input.durationWarningLine, 'Final price may require adjustment.'] : []),
   ].join('\n');
 }
 
@@ -37,6 +39,7 @@ export async function insertMeetupProposalOfferMessage(input: {
   meetupTimeIso: string;
   returnTimeIso: string;
   meetupLocation: string;
+  durationWarningLine?: string | null;
 }): Promise<string | null> {
   const offerId = input.offerId.trim();
   const authorId = input.authorId.trim();
@@ -49,6 +52,7 @@ export async function insertMeetupProposalOfferMessage(input: {
     meetupTimeIso: input.meetupTimeIso,
     returnTimeIso: input.returnTimeIso,
     meetupLocation: input.meetupLocation,
+    durationWarningLine: input.durationWarningLine,
   });
 
   const row: Record<string, unknown> = {

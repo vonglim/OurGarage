@@ -18,7 +18,7 @@ const FAB_ACCENT_PRESSED = '#15803D';
 
 export const MAIN_TAB_FAB_SIZE = 56;
 /** Distance from screen bottom to FAB bottom edge (sits just above floating tab bar). */
-export const MAIN_TAB_FAB_BOTTOM = 95;
+export const MAIN_TAB_FAB_BOTTOM = 110;
 /** Extra scroll/list padding below last content so cards never sit under the FAB */
 export const MAIN_TAB_FAB_SCROLL_CLEARANCE = 28;
 

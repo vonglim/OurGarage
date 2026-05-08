@@ -3,7 +3,6 @@ import { useRouter } from 'expo-router';
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Pressable } from '@/components/Pressable';
-import { formatHowDisplay } from '@/lib/deliveryFormat';
 import { getRequestOwnerId } from '@/lib/requestOwnership';
 import { getPublicProfileForView } from '@/lib/publicProfiles';
 import { parseProfileAvatar } from '@/lib/profileAvatar';
@@ -15,16 +14,16 @@ import {
 import { getRequestCardUiStatus } from '@/lib/requestCardStatus';
 import { formatMilesShort, milesFromViewerToRequest } from '@/lib/requestDistance';
 import { formatUsd, getNumericTotalPrice } from '@/lib/money';
-import { cardChrome, primarySolidPressed, ui } from '@/constants/appUi';
+import { cardChrome, ui } from '@/constants/appUi';
 import { UserActivityDot } from './UserActivityDot';
 
 /** Placeholder poster avatar (until backend provides URLs). */
 const POSTER_AVATAR_SIZE = 32;
-const GAP_AFTER_TITLE = 4;
-const GAP_USER_TO_TITLE = 6;
-const GAP_PRICE_TO_DELIVERY = 8;
+const GAP_AFTER_TITLE = 2;
+const GAP_USER_TO_TITLE = 4;
+const GAP_PRICE_TO_DELIVERY = 5;
 /** Space above bottom row (distance/time [+ Offer]). */
-const BOTTOM_ROW_MARGIN_TOP = 9;
+const BOTTOM_ROW_MARGIN_TOP = 6;
 /** Reserve space so poster name / title don’t run under the absolutely positioned status badge. */
 const STATUS_BADGE_SIDE_INSET = 14;
 const STATUS_BADGE_CLEARANCE = 88;
@@ -77,8 +76,12 @@ type Props = {
 
 function displayPrice(req: Req, matched: boolean): string {
   if (matched) return formatUsd(req.acceptedPrice);
-  const total = getNumericTotalPrice(req);
-  return total != null ? formatUsd(total) : '—';
+  const rental = getNumericTotalPrice(req);
+  if (rental == null) return '—';
+  const delivery =
+    req.how === 'delivery_only' ? Number(req.deliveryFee) : 0;
+  const totalWithDelivery = rental + (Number.isFinite(delivery) ? delivery : 0);
+  return formatUsd(totalWithDelivery);
 }
 
 function priceForDisplay(req: Req, matched: boolean): string {
@@ -114,6 +117,16 @@ export function RequestListCardInner({
   const title = req.toolName?.trim() || 'No name';
   const duration = formatDurationDisplay(req);
   const price = priceForDisplay(req, matched);
+  const pickupRadius =
+    typeof req.pickupRadiusMiles === 'number' && Number.isFinite(req.pickupRadiusMiles)
+      ? Math.max(1, Math.round(req.pickupRadiusMiles))
+      : null;
+  const requestMethod = req.how === 'delivery_only' ? 'Delivered' : 'Picked up';
+  const totalWithMethodLine =
+    pickupRadius != null
+      ? `${requestMethod} · within ${pickupRadius} miles`
+      : `${requestMethod}`;
+  const deliveryNeedLine = req.how === 'delivery_only' ? 'Needs delivery' : 'Pickup / meetup';
 
   const dist = distanceCompact(req);
   const timePart =
@@ -188,7 +201,10 @@ export function RequestListCardInner({
         </Text>
 
         <Text style={styles.deliveryLine} numberOfLines={2}>
-          {formatHowDisplay(req)}
+          {deliveryNeedLine}
+        </Text>
+        <Text style={styles.totalModeLine} numberOfLines={2}>
+          {totalWithMethodLine}
         </Text>
 
         {offerAction != null ? (
@@ -199,17 +215,17 @@ export function RequestListCardInner({
             {insideParentPressable ? (
               <View
                 style={[
-                  styles.offerPill,
-                  offerAction.disabled && styles.offerPillDisabled,
+                  styles.offerActionPill,
+                  offerAction.disabled && styles.offerActionPillDisabled,
                 ]}
               >
                 <Text
                   style={[
-                    styles.offerPillText,
-                    offerAction.disabled && styles.offerPillTextDisabled,
+                    styles.offerActionText,
+                    offerAction.disabled && styles.offerActionTextDisabled,
                   ]}
                 >
-                  Send offer
+                  $ Make an offer
                 </Text>
               </View>
             ) : (
@@ -219,18 +235,18 @@ export function RequestListCardInner({
                 disabled={offerAction.disabled}
                 onPress={offerAction.onPress}
                 style={({ pressed }) => [
-                  styles.offerPill,
-                  offerAction.disabled && styles.offerPillDisabled,
-                  pressed && !offerAction.disabled && styles.offerPillPressed,
+                  styles.offerActionPill,
+                  offerAction.disabled && styles.offerActionPillDisabled,
+                  pressed && !offerAction.disabled && styles.offerActionPillPressed,
                 ]}
               >
                 <Text
                   style={[
-                    styles.offerPillText,
-                    offerAction.disabled && styles.offerPillTextDisabled,
+                    styles.offerActionText,
+                    offerAction.disabled && styles.offerActionTextDisabled,
                   ]}
                 >
-                  Send offer
+                  $ Make an offer
                 </Text>
               </Pressable>
             )}
@@ -299,7 +315,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   posterRating: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     color: ui.textPrimary,
     letterSpacing: 0.2,
@@ -311,10 +327,10 @@ const styles = StyleSheet.create({
   },
   toolName: {
     flex: 1,
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '800',
     color: ui.textPrimary,
-    lineHeight: 22,
+    lineHeight: 21,
     textAlign: 'left',
   },
   statusWrap: {
@@ -339,22 +355,30 @@ const styles = StyleSheet.create({
     textAlign: 'left',
   },
   priceEmphasis: {
-    fontSize: ui.fontPriceLarge + 4,
+    fontSize: ui.fontPriceLarge + 3,
     fontWeight: '700',
     color: ui.textPrimary,
     letterSpacing: -0.45,
   },
   durationInline: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
     color: ui.textSecondary,
   },
   deliveryLine: {
     marginTop: GAP_PRICE_TO_DELIVERY,
-    fontSize: 13,
-    fontWeight: '400',
+    fontSize: 12,
+    fontWeight: '600',
     color: ui.textSecondary,
-    lineHeight: 18,
+    lineHeight: 16,
+    textAlign: 'left',
+  },
+  totalModeLine: {
+    marginTop: 0,
+    fontSize: 12,
+    fontWeight: '500',
+    color: ui.textPrimary,
+    lineHeight: 16,
     textAlign: 'left',
   },
   bottomRow: {
@@ -370,7 +394,7 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     color: ui.textSecondary,
     textAlign: 'left',
-    marginRight: 4,
+    marginRight: 2,
     minWidth: 0,
   },
   footerLine: {
@@ -380,27 +404,30 @@ const styles = StyleSheet.create({
     color: ui.textSecondary,
     textAlign: 'left',
   },
-  offerPill: {
+  offerActionPill: {
     flexShrink: 0,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: ui.radiusInput,
-    backgroundColor: ui.primary,
+    backgroundColor: ui.surfaceTintPrimary,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(0,122,255,0.3)',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  offerPillDisabled: {
+  offerActionPillDisabled: {
     backgroundColor: ui.surfaceNeutral,
+    borderColor: ui.border,
   },
-  offerPillPressed: {
-    ...primarySolidPressed,
+  offerActionPillPressed: {
+    backgroundColor: '#E6F1FF',
   },
-  offerPillText: {
+  offerActionText: {
     fontSize: 12,
-    fontWeight: '600',
-    color: ui.primaryOn,
+    fontWeight: '700',
+    color: ui.primary,
   },
-  offerPillTextDisabled: {
+  offerActionTextDisabled: {
     color: ui.textSecondary,
   },
 });

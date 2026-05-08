@@ -1282,8 +1282,9 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: 0,
-    paddingTop: ui.padScreenH,
-    paddingBottom: ui.spaceMd,
+    alignItems: 'flex-start',
+    paddingTop: ui.spaceMd,
+    paddingBottom: 12,
     backgroundColor: ui.surfaceGrouped,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,

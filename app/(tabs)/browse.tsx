@@ -3,6 +3,7 @@ import { RootScreenHeader } from '@/components/AppHeaders';
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
 import { Pressable } from '@/components/Pressable';
+import { RequestListCardInner } from '@/components/RequestListCardInner';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { ui } from '@/constants/appUi';
@@ -22,7 +23,7 @@ import { refreshRequestsFromSupabase, useRequestsStore } from '@/store/requestsS
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Image, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, PanResponder, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 /** Dev-only: where Browse reads requests (for provenance logging). */
 const REQUESTS_STORE_MODULE = 'store/requestsStore.ts';
@@ -70,6 +71,32 @@ export default function Browse() {
   const params = useLocalSearchParams<{ query?: string | string[]; mode?: string | string[] }>();
   const fabBottomReserve = useMainTabFabBottomReserve();
   const [mode, setMode] = useState('requests');
+  const swipeTabsByDirection = useCallback(
+    (dx: number) => {
+      if (dx <= -40 && mode === 'requests') setMode('tools');
+      if (dx >= 40 && mode === 'tools') setMode('requests');
+    },
+    [mode]
+  );
+
+  const tabSwipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponderCapture: (_evt, gesture) => {
+          const absDx = Math.abs(gesture.dx);
+          const absDy = Math.abs(gesture.dy);
+          return absDx > 24 && absDx > absDy * 1.2;
+        },
+        onPanResponderRelease: (_evt, gesture) => {
+          swipeTabsByDirection(gesture.dx);
+        },
+        onPanResponderTerminate: (_evt, gesture) => {
+          swipeTabsByDirection(gesture.dx);
+        },
+      }),
+    [swipeTabsByDirection]
+  );
+
   const [searchQuery, setSearchQuery] = useState('');
 
   const listings = useListingsStore((s) => s.listings);
@@ -101,19 +128,40 @@ export default function Browse() {
       // 👇 ADD THIS
       const fetchListings = async () => {
         const { supabase } = await import('@/lib/supabase');
-  
-        const { data, error } = await supabase
-          .from('listings')
-          .select(
-            'id, title, description, daily_price, weekly_price, images, replacement_value, daily_late_fee, max_late_fee_cap, created_at'
-          )
-          .order('created_at', { ascending: false });
-  
+
+        const selectVariants: string[] = [
+          // Newest schema
+          'id, title, description, daily_price, weekly_price, images, replacement_value, daily_late_fee, max_late_fee_cap, created_at',
+          // Missing max_late_fee_cap
+          'id, title, description, daily_price, weekly_price, images, replacement_value, daily_late_fee, created_at',
+          // Missing daily_late_fee
+          'id, title, description, daily_price, weekly_price, images, replacement_value, max_late_fee_cap, created_at',
+          // Older schema, no financial-protection columns
+          'id, title, description, daily_price, weekly_price, images, created_at',
+        ];
+
+        let data: Array<Record<string, unknown>> | null = null;
+        let error: { code?: string | null } | null = null;
+
+        for (const selectClause of selectVariants) {
+          const res = await supabase
+            .from('listings')
+            .select(selectClause)
+            .order('created_at', { ascending: false });
+          if (!res.error) {
+            data = (res.data as unknown as Array<Record<string, unknown>> | null) ?? null;
+            error = null;
+            break;
+          }
+          error = res.error;
+          if (res.error.code !== '42703') break;
+        }
+
         if (error) {
           console.error('Fetch listings error:', error);
           return;
         }
-  
+
         const mapped = (data || []).map((item) => {
           const createdRaw = item.created_at;
           const createdMs =
@@ -121,15 +169,15 @@ export default function Browse() {
           const daily = Number(item.daily_price);
           const week = Number(item.weekly_price);
           const replacementValue = Number(item.replacement_value);
-          const dailyLateFee = Number(item.daily_late_fee);
+          const dailyLateFee = Number((item as { daily_late_fee?: unknown }).daily_late_fee);
           const maxLateFeeCap = Number(item.max_late_fee_cap);
           return {
-            id: item.id,
-            name: item.title,
+            id: String(item.id ?? ''),
+            name: String(item.title ?? ''),
             price: Number.isFinite(daily) ? daily : 0,
             priceUnit: 'day',
             distance: 0,
-            description: item.description,
+            description: String(item.description ?? ''),
             ownerName: '',
             rating: 0,
             createdAt: Number.isFinite(createdMs) ? createdMs : 0,
@@ -261,7 +309,7 @@ export default function Browse() {
 
   return (
     <ScreenWrapper style={styles.screenWrap}>
-      <KeyboardDismissScreen style={styles.root}>
+      <KeyboardDismissScreen style={styles.root} {...tabSwipeResponder.panHandlers}>
         <ScreenEntrance style={styles.screenInner}>
           <ScrollView
             style={styles.container}
@@ -269,9 +317,9 @@ export default function Browse() {
               styles.content,
               { paddingTop: 16, paddingBottom: fabBottomReserve },
             ]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
           <RootScreenHeader title="Browse" />
 
           <View style={styles.segment}>
@@ -319,14 +367,6 @@ export default function Browse() {
             ) : (
               requestRows.map((req, idx) => {
                 const ts = req.timestamp as number | undefined;
-                const title = String(req.toolName ?? '').trim() || 'Request';
-                const desc = String(req.description ?? '').trim();
-                const distMi = milesFromViewerToRequest(req as never);
-                const distLabel = formatMilesShort(distMi, 'Distance unknown');
-                const price = getNumericTotalPrice(req);
-                const priceLabel = price != null && Number.isFinite(price) ? formatUsd(price) : '—';
-                const duration = formatDurationDisplay(req as never);
-                const metaLine = `${priceLabel} · ${duration}. ${distLabel}`;
                 const posterId =
                   typeof (req as { posterUserId?: string }).posterUserId === 'string'
                     ? (req as { posterUserId: string }).posterUserId
@@ -337,82 +377,36 @@ export default function Browse() {
 
                 const detailsId = getRequestSupabaseRowId(req as Record<string, unknown>);
                 return (
-                  <CardPressable
+                  <View
                     key={ts ?? idx}
-                    onPress={() => {
-                      if (!detailsId) return;
-                      router.push({
-                        pathname: '/request-details',
-                        params: { requestId: detailsId },
-                      });
-                    }}
-                    disabled={!detailsId}
-                    style={({ pressed }) => [
+                    style={[
                       styles.card,
                       idx === 0 && styles.cardEdge,
                       isOwner && styles.cardOwnRequest,
-                      pressed &&
-                        detailsId != null &&
-                        (isOwner ? styles.cardOwnRequestPressed : styles.cardPressed),
                       !detailsId && styles.cardDisabled,
                     ]}
-                    accessibilityRole="button"
-                    accessibilityLabel={
-                      postedAgo != null
-                        ? isOwner
-                          ? `${title}, ${postedAgo}, ${metaLine}, your request`
-                          : `${title}, ${postedAgo}, ${metaLine}`
-                        : isOwner
-                          ? `${title}, ${metaLine}, your request`
-                          : `${title}, ${metaLine}`
-                    }
                   >
-                    <Text
-                      style={styles.cardTitle}
-                      numberOfLines={1}
-                      ellipsizeMode="tail"
-                    >
-                      {title}
-                    </Text>
-                    {postedAgo != null ? (
-                      <Text style={styles.cardPostedAgo} numberOfLines={1}>
-                        {postedAgo}
-                      </Text>
-                    ) : null}
-                    <Text
-                      style={styles.cardPriceDuration}
-                      numberOfLines={1}
-                      ellipsizeMode="tail"
-                    >
-                      <Text style={styles.cardPrice}>{priceLabel}</Text>
-                      <Text style={styles.cardMuted}> · {duration}</Text>
-                    </Text>
-                    <Text
-                      style={styles.cardDistance}
-                      numberOfLines={1}
-                      ellipsizeMode="tail"
-                    >
-                      {distLabel}
-                    </Text>
-                    {desc ? (
-                      <Text
-                        style={styles.cardDesc}
-                        numberOfLines={1}
-                        ellipsizeMode="tail"
-                      >
-                        {desc}
-                      </Text>
-                    ) : null}
-                    {isOwner ? (
-                      <Text style={styles.cardOwnRequestLabel} accessibilityRole="text">
-                        Your request
-                      </Text>
-                    ) : ts != null ? (
-                      <Text style={styles.cardMakeOfferHint} accessibilityRole="text">
-                        Tap to make an offer
-                      </Text>
-                    ) : null}
-                  </CardPressable>
+                    <RequestListCardInner
+                      req={req as never}
+                      matched={Boolean((req as { matched?: boolean }).matched)}
+                      timeAgoText={postedAgo}
+                      offerAction={
+                        !isOwner && ts != null
+                          ? {
+                              disabled: !detailsId,
+                              onPress: () => {
+                                if (!detailsId) return;
+                                router.push({
+                                  pathname: '/make-offer',
+                                  params: { requestId: detailsId },
+                                });
+                              },
+                            }
+                          : null
+                      }
+                    />
+                    {isOwner ? <Text style={styles.cardOwnRequestLabel}>Your request</Text> : null}
+                  </View>
                 );
               })
             )

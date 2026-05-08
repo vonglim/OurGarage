@@ -26,6 +26,7 @@ const THUMB_GAP = 8;
 const PHOTO_BORDER = '#D1D5DB';
 const HELPER_GRAY = '#6B7280';
 const MAKE_OFFER_WEB_FILE_INPUT_ID = 'make-offer-file-input';
+const DAILY_LATE_FEE_PENALTY_MULTIPLIER = 1.2;
 
 function firstParam(v: string | string[] | undefined): string | undefined {
   if (v == null) return undefined;
@@ -55,21 +56,52 @@ export default function MakeOfferScreen() {
 
   const dayCount = useMemo(() => (request ? billingDayCountForRequest(request) : 1), [request]);
   const listedTotal = useMemo(() => (request ? getNumericTotalPrice(request) : null), [request]);
+  const effectiveDayCount = Math.max(1, Number.isFinite(dayCount) ? Math.round(dayCount) : 1);
 
   const [priceDraft, setPriceDraft] = useState('');
   const [messageDraft, setMessageDraft] = useState('');
+  const [brandModelDraft, setBrandModelDraft] = useState('');
+  const [descriptionDraft, setDescriptionDraft] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [uploadingPhotos, setUploadingPhotos] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
-  const [termsOpen, setTermsOpen] = useState(false);
   const [replacementValueDraft, setReplacementValueDraft] = useState('');
   const [deliveryFeeDraft, setDeliveryFeeDraft] = useState('');
-  const [dailyLateFeeDraft, setDailyLateFeeDraft] = useState('');
+
+  const offerTotal = useMemo(() => {
+    const n = parseMoneyToNumber(priceDraft);
+    return n != null && Number.isFinite(n) && n > 0 ? n : null;
+  }, [priceDraft]);
+  const derivedDailyRate = useMemo(() => {
+    if (offerTotal == null) return null;
+    return offerTotal / effectiveDayCount;
+  }, [offerTotal, effectiveDayCount]);
+  const derivedDailyLateFee = useMemo(() => {
+    if (derivedDailyRate == null) return null;
+    return derivedDailyRate * DAILY_LATE_FEE_PENALTY_MULTIPLIER;
+  }, [derivedDailyRate]);
+  const draftDeliveryFeeNum = request?.how === 'delivery_only' ? parseMoneyToNumber(deliveryFeeDraft) ?? 0 : 0;
+  const totalOfferPrice = (offerTotal ?? 0) + draftDeliveryFeeNum;
 
   React.useEffect(() => {
     if (listedTotal != null && listedTotal > 0) setPriceDraft(sanitizeMoneyDigits(String(listedTotal)));
     else setPriceDraft('');
   }, [requestIdStr, listedTotal]);
+
+  React.useEffect(() => {
+    const replacement = Number((request as { replacementValue?: unknown } | undefined)?.replacementValue);
+    setReplacementValueDraft(Number.isFinite(replacement) && replacement > 0 ? sanitizeMoneyDigits(String(replacement)) : '0');
+    if (request?.how === 'delivery_only') {
+      const requestedDelivery = Number((request as { deliveryFee?: unknown }).deliveryFee);
+      setDeliveryFeeDraft(
+        Number.isFinite(requestedDelivery) && requestedDelivery >= 0
+          ? sanitizeMoneyDigits(String(requestedDelivery))
+          : '0'
+      );
+    } else {
+      setDeliveryFeeDraft('0');
+    }
+  }, [requestIdStr, request]);
 
   useFocusEffect(
     useCallback(() => {
@@ -145,10 +177,14 @@ export default function MakeOfferScreen() {
       return;
     }
 
+    const replacementValueNum = parseMoneyToNumber(replacementValueDraft) ?? 0;
+    const deliveryFeeNum = request.how === 'delivery_only' ? parseMoneyToNumber(deliveryFeeDraft) ?? 0 : 0;
     const termsSummary = [
-      replacementValueDraft.trim() ? `Replacement value: $${replacementValueDraft.trim()}` : null,
-      deliveryFeeDraft.trim() ? `Delivery fee: $${deliveryFeeDraft.trim()}` : null,
-      dailyLateFeeDraft.trim() ? `Daily late fee: $${dailyLateFeeDraft.trim()}` : null,
+      brandModelDraft.trim() ? `Brand and model: ${brandModelDraft.trim()}` : null,
+      descriptionDraft.trim() ? `Description: ${descriptionDraft.trim()}` : null,
+      `Replacement value: ${formatUsd(replacementValueNum)}`,
+      request.how === 'delivery_only' ? `Delivery fee: ${formatUsd(deliveryFeeNum)}` : null,
+      `Daily late fee (auto): ${formatUsd(derivedDailyLateFee ?? 0)} (+20% of daily rate)`,
     ]
       .filter(Boolean)
       .join('\n');
@@ -197,13 +233,57 @@ export default function MakeOfferScreen() {
               <Text style={styles.sectionTitle}>Request Summary</Text>
               <Text style={styles.summaryRow}>Requested budget: {listedTotal != null ? formatUsd(listedTotal) : '—'}</Text>
               <Text style={styles.summaryRow}>Estimated duration: {dayCount} {dayCount === 1 ? 'day' : 'days'}</Text>
+              {request.how === 'delivery_only' ? (
+                <Text style={styles.summaryRow}>
+                  Requested delivery fee: {formatUsd(Number((request as { deliveryFee?: unknown }).deliveryFee ?? 0))}
+                </Text>
+              ) : (
+                <Text style={styles.summaryRow}>Delivery: Pickup / meetup</Text>
+              )}
               {counterOfferSlots > 0 ? <Text style={styles.summaryRow}>Counter offers left: {counterOfferSlots}</Text> : null}
             </View>
 
             <View style={styles.sectionCard}>
-              <Text style={styles.label}>Your Offer</Text>
-              <Text style={styles.fieldHint}>Offer amount</Text>
+              <Text style={styles.label}>Brand and Model</Text>
+              <TextInput
+                value={brandModelDraft}
+                onChangeText={setBrandModelDraft}
+                placeholder="e.g. DeWalt DWP611"
+                placeholderTextColor={ui.textSecondary}
+                style={styles.input}
+              />
+              <Text style={[styles.label, styles.stackedFieldLabel]}>Description</Text>
+              <TextInput
+                value={descriptionDraft}
+                onChangeText={setDescriptionDraft}
+                placeholder="Describe condition, accessories, specs, and important details."
+                placeholderTextColor={ui.textSecondary}
+                style={[styles.input, styles.descriptionInput]}
+                multiline
+                textAlignVertical="top"
+              />
+            </View>
+
+            <View style={styles.sectionCard}>
+              <Text style={styles.label}>Offer Price</Text>
+              <Text style={styles.fieldHint}>Price for entire duration</Text>
               <TextInput value={priceDraft} onChangeText={(t) => setPriceDraft(sanitizeMoneyDigits(t))} keyboardType="decimal-pad" style={styles.input} {...numberPadAccessoryProps()} />
+              {offerTotal != null ? (
+                <View style={styles.breakdownBox}>
+                  <Text style={styles.breakdownTitle}>Offer Breakdown</Text>
+                  <Text style={styles.breakdownRow}>
+                    {formatUsd(offerTotal)} over {effectiveDayCount} {effectiveDayCount === 1 ? 'day' : 'days'}
+                  </Text>
+                  <Text style={styles.breakdownRow}>
+                    Daily rate: {formatUsd(derivedDailyRate ?? 0)} / day
+                  </Text>
+                  <Text style={styles.breakdownRow}>
+                    Late-fee daily rate (+20%): {formatUsd(derivedDailyLateFee ?? 0)} / day
+                  </Text>
+                </View>
+              ) : (
+                <Text style={styles.breakdownEmpty}>Enter an offer amount to preview daily rate and late-fee basis.</Text>
+              )}
             </View>
 
             <View style={styles.sectionCard}>
@@ -262,24 +342,26 @@ export default function MakeOfferScreen() {
             </View>
 
             <View style={styles.sectionCard}>
-              <Pressable style={styles.termsToggle} onPress={() => setTermsOpen((v) => !v)} pressOpacityFeedback={false}>
-                <Text style={styles.sectionTitle}>Offer Details / Terms (Optional)</Text>
-                <Ionicons name={termsOpen ? 'chevron-up' : 'chevron-down'} size={18} color={ui.textSecondary} />
-              </Pressable>
-              {termsOpen ? (
-                <View>
-                  <Text style={styles.fieldHint}>Replacement value</Text>
-                  <TextInput value={replacementValueDraft} onChangeText={(t) => setReplacementValueDraft(sanitizeMoneyDigits(t))} keyboardType="decimal-pad" style={styles.input} {...numberPadAccessoryProps()} />
-                  {request.how === 'delivery_only' ? (
-                    <>
-                      <Text style={styles.fieldHint}>Delivery fee</Text>
-                      <TextInput value={deliveryFeeDraft} onChangeText={(t) => setDeliveryFeeDraft(sanitizeMoneyDigits(t))} keyboardType="decimal-pad" style={styles.input} {...numberPadAccessoryProps()} />
-                    </>
-                  ) : null}
-                  <Text style={styles.fieldHint}>Daily late fee</Text>
-                  <TextInput value={dailyLateFeeDraft} onChangeText={(t) => setDailyLateFeeDraft(sanitizeMoneyDigits(t))} keyboardType="decimal-pad" style={styles.input} {...numberPadAccessoryProps()} />
-                </View>
-              ) : null}
+              <Text style={styles.sectionTitle}>Offer Details / Terms (Optional)</Text>
+              <View>
+                <Text style={styles.fieldHint}>Replacement value</Text>
+                <TextInput value={replacementValueDraft} onChangeText={(t) => setReplacementValueDraft(sanitizeMoneyDigits(t))} keyboardType="decimal-pad" style={styles.input} {...numberPadAccessoryProps()} />
+                {request.how === 'delivery_only' ? (
+                  <>
+                    <Text style={styles.fieldHint}>Delivery fee</Text>
+                    <TextInput value={deliveryFeeDraft} onChangeText={(t) => setDeliveryFeeDraft(sanitizeMoneyDigits(t))} keyboardType="decimal-pad" style={styles.input} {...numberPadAccessoryProps()} />
+                  </>
+                ) : null}
+                <Text style={styles.fieldHint}>Daily late fee (automatic)</Text>
+                <Text style={styles.termsInfoText}>
+                  Set automatically to {formatUsd(derivedDailyLateFee ?? 0)} per day (+20% of daily rate).
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.totalPriceRow}>
+              <Text style={styles.totalPriceLabel}>Total price</Text>
+              <Text style={styles.totalPriceValue}>{formatUsd(totalOfferPrice)}</Text>
             </View>
 
             <Pressable onPress={onSubmit} style={styles.submit}>
@@ -311,6 +393,8 @@ const styles = StyleSheet.create({
   summaryRow: { fontSize: 14, color: ui.textSecondary, marginBottom: 2 },
   label: { fontSize: 15, fontWeight: '700', color: ui.textPrimary },
   fieldHint: { marginTop: 6, marginBottom: 8, color: ui.textSecondary, fontSize: 13 },
+  stackedFieldLabel: { marginTop: 12 },
+  descriptionInput: { height: 100 },
   fieldLabel: { fontSize: 14, fontWeight: '600', color: '#111827', marginBottom: 6 },
   photoActionRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
   compactBtn: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: ui.border, backgroundColor: ui.surfaceInput },
@@ -324,6 +408,59 @@ const styles = StyleSheet.create({
   thumb: { width: THUMB, height: THUMB, borderRadius: 8, backgroundColor: '#1F2937' },
   thumbDelete: { position: 'absolute', top: -5, right: -5, width: 18, height: 18, borderRadius: 9, backgroundColor: 'rgba(17,24,39,0.92)', alignItems: 'center', justifyContent: 'center' },
   input: { borderWidth: 1, padding: 10, borderRadius: 8, marginTop: 6, borderColor: PHOTO_BORDER, color: ui.textPrimary, backgroundColor: ui.surfaceInput },
+  breakdownBox: {
+    marginTop: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+    borderRadius: 10,
+    backgroundColor: '#F8FAFC',
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+    gap: 2,
+  },
+  breakdownTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    marginBottom: 2,
+  },
+  breakdownRow: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: ui.textSecondary,
+    fontWeight: '500',
+  },
+  breakdownEmpty: {
+    marginTop: 9,
+    fontSize: 12,
+    lineHeight: 17,
+    color: ui.textSecondary,
+  },
+  termsInfoText: {
+    marginTop: 2,
+    marginBottom: 2,
+    fontSize: 12,
+    lineHeight: 17,
+    color: ui.textSecondary,
+    fontWeight: '500',
+  },
+  totalPriceRow: {
+    marginTop: 2,
+    marginBottom: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  totalPriceLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: ui.textSecondary,
+  },
+  totalPriceValue: {
+    fontSize: 19,
+    fontWeight: '700',
+    color: ui.textPrimary,
+  },
   submit: { marginTop: 20, backgroundColor: ui.primary, padding: 14, borderRadius: 10, alignItems: 'center' },
   submitText: { color: 'white', fontWeight: '700' },
   previewBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.88)', alignItems: 'center', justifyContent: 'center', padding: 20 },

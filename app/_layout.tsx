@@ -4,7 +4,7 @@ import * as Linking from 'expo-linking';
 import { Stack, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
-import { Platform, View } from 'react-native';
+import { Dimensions, Platform, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -53,6 +53,7 @@ export default function RootLayout() {
   const [loading, setLoading] = useState(true);
   const [needsCreateUsername, setNeedsCreateUsername] = useState(false);
   const didResetLocalMessagingOnStartup = useRef(false);
+  const backSwipeStartDistance = Math.round(Dimensions.get('window').width * 0.3);
 
   useEffect(() => {
     if (!__DEV__) return;
@@ -211,7 +212,9 @@ export default function RootLayout() {
                   headerShown: false,
                   animationDuration: STACK_TRANSITION_DURATION_MS,
                   gestureEnabled: !isTabsRoot,
-                  fullScreenGestureEnabled: !isTabsRoot,
+                  fullScreenGestureEnabled: false,
+                  // Require swipe to begin near the left edge (~30% of width).
+                  gestureResponseDistance: { start: backSwipeStartDistance },
                 };
               }}
             >
@@ -221,14 +224,16 @@ export default function RootLayout() {
                 name="request"
                 options={{
                   gestureEnabled: true,
-                  fullScreenGestureEnabled: true,
+                  fullScreenGestureEnabled: false,
+                  gestureResponseDistance: { start: backSwipeStartDistance },
                 }}
               />
               <Stack.Screen
                 name="rent-out"
                 options={{
                   gestureEnabled: true,
-                  fullScreenGestureEnabled: true,
+                  fullScreenGestureEnabled: false,
+                  gestureResponseDistance: { start: backSwipeStartDistance },
                 }}
               />
               <Stack.Screen name="list-my-tool" />

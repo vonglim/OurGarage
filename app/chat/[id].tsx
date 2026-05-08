@@ -6,6 +6,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   FlatList,
   Image,
   KeyboardAvoidingView,
@@ -35,6 +36,12 @@ import {
   insertMeetupProposalOfferMessage,
 } from '@/lib/meetupProposalThreadEvent';
 import { getProfileNameForUserId } from '@/lib/profileDisplayName';
+import {
+  baselineDurationHoursFromRequest,
+  DURATION_GRACE_HOURS,
+  durationHoursBetween,
+  evaluateDurationChange,
+} from '@/lib/proposalDurationChange';
 import { isUuidString } from '@/lib/requestOwnership';
 import { sendOfferThreadUserMessage } from '@/lib/sendOfferThreadMessage';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
@@ -125,6 +132,7 @@ function parseMeetupProposalLines(text: string): {
   pickup: string;
   returnAt: string;
   location: string;
+  durationWarning: string;
 } | null {
   const t = text.trim();
   if (!t) return null;
@@ -141,18 +149,28 @@ function parseMeetupProposalLines(text: string): {
       .trim() ?? '';
   const locLine = lines.find((line) => line.startsWith('📍'));
   const location = locLine?.replace(/^📍\s*/, '').trim() ?? '';
-  if (!pickup && !returnAt && !location) return null;
-  return { pickup, returnAt, location };
+  const durationWarning =
+    lines
+      .find((line) => /^⚠\s*Duration changed/i.test(line))
+      ?.replace(/^⚠\s*/i, '')
+      .trim() ?? '';
+  if (!pickup && !returnAt && !location && !durationWarning) return null;
+  return { pickup, returnAt, location, durationWarning };
 }
 
-function parseRentalUpdateMessage(text: string): { pickup: string; returnAt: string; location: string } | null {
+function parseRentalUpdateMessage(text: string): {
+  pickup: string;
+  returnAt: string;
+  location: string;
+  durationWarning: string;
+} | null {
   if (!text.startsWith('Rental details updated:')) return null;
   const lines = text.split('\n');
   const pickup = lines.find((line) => line.startsWith('📅 Pickup:'))?.replace('📅 Pickup:', '').trim() ?? '';
   const returnAt = lines.find((line) => line.startsWith('🔁 Return:'))?.replace('🔁 Return:', '').trim() ?? '';
   const location = lines.find((line) => line.startsWith('📍'))?.replace('📍', '').trim() ?? '';
   if (!pickup && !returnAt && !location) return null;
-  return { pickup, returnAt, location };
+  return { pickup, returnAt, location, durationWarning: '' };
 }
 
 function mapOfferMessageRows(
@@ -196,6 +214,7 @@ export default function ChatDetailScreen() {
   const [threadRentalId, setThreadRentalId] = useState<string | null>(null);
   const [rental, setRental] = useState<RentalMeetupDetails | null>(null);
   const [rentalTitle, setRentalTitle] = useState<string>('');
+  const [baselineDurationHours, setBaselineDurationHours] = useState<number | null>(null);
   const [rentalBusy, setRentalBusy] = useState(false);
   const [acceptingMessageId, setAcceptingMessageId] = useState<string | null>(null);
   const [acceptedMessageIds, setAcceptedMessageIds] = useState<string[]>([]);
@@ -269,6 +288,7 @@ export default function ChatDetailScreen() {
       setThreadOfferId('');
       setThreadRentalId(null);
       setRental(null);
+      setBaselineDurationHours(null);
       setMessages([]);
       setThreadReady(true);
       return;
@@ -303,17 +323,19 @@ export default function ChatDetailScreen() {
       if (cancelled) return;
       setRental(r);
       setRentalTitle('');
+      setBaselineDurationHours(null);
       setThreadOfferId(oid);
       setThreadRentalId(rid);
 
       if (r?.request_id) {
         const { data: requestRow } = await supabase
           .from('requests')
-          .select('title')
+          .select('title, duration_type, duration_value, "when"')
           .eq('id', r.request_id)
           .maybeSingle();
         if (!cancelled) {
           setRentalTitle(typeof requestRow?.title === 'string' ? requestRow.title.trim() : '');
+          setBaselineDurationHours(baselineDurationHoursFromRequest(requestRow));
         }
       }
 
@@ -625,6 +647,7 @@ export default function ChatDetailScreen() {
       meetupLocation: string;
       meetupTimeIso: string;
       returnTimeIso: string;
+      durationWarningLine?: string | null;
     }) => {
       if (!rental || !meId) return null;
       const offerId = String(rental.offer_id ?? '').trim();
@@ -646,6 +669,7 @@ export default function ChatDetailScreen() {
         meetupTimeIso: input.meetupTimeIso,
         returnTimeIso: input.returnTimeIso,
         meetupLocation: input.meetupLocation,
+        durationWarningLine: input.durationWarningLine,
       });
     },
     [rental, meId]
@@ -738,6 +762,32 @@ export default function ChatDetailScreen() {
         });
       }
       if (!rental) return false;
+      const proposedDurationHours = durationHoursBetween(input.meetupTimeIso, input.returnTimeIso);
+      const durationEval = evaluateDurationChange({
+        baselineDurationHours,
+        proposedDurationHours,
+        graceHours: DURATION_GRACE_HOURS,
+      });
+      if (durationEval.warningTriggered) {
+        const continueProposal = await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            'Duration Change Warning',
+            [
+              'The proposed meetup times change the original rental duration.',
+              '',
+              `Original duration: ${durationEval.originalLabel ?? '—'}`,
+              `Proposed duration: ${durationEval.proposedLabel ?? '—'}`,
+              '',
+              'The final rental price may change based on the agreed daily rate and requires approval from the other user.',
+            ].join('\n'),
+            [
+              { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Continue Proposal', onPress: () => resolve(true) },
+            ]
+          );
+        });
+        if (!continueProposal) return false;
+      }
       setRentalBusy(true);
       try {
         const supabase = getSupabase();
@@ -785,7 +835,10 @@ export default function ChatDetailScreen() {
           showFeedbackToast('Could not update rental details.');
           return false;
         }
-        const messageId = await insertMeetupProposalMessage(input);
+        const messageId = await insertMeetupProposalMessage({
+          ...input,
+          durationWarningLine: durationEval.warningLine,
+        });
         if (__DEV__) {
           console.log('[proposal] insertMeetupProposalMessage result', {
             rentalId: rental.id,
@@ -813,7 +866,9 @@ export default function ChatDetailScreen() {
             actorId: meId,
             recipientUserId: receiverId,
             type: 'message',
-            title: `${getProfileNameForUserId(meId)} proposed a pickup time`,
+            title: durationEval.warningTriggered
+              ? `${getProfileNameForUserId(meId)} proposed updated meetup times with a changed rental duration`
+              : `${getProfileNameForUserId(meId)} proposed a pickup time`,
             body: rentalTitle.trim()
               ? `New meetup proposal for ${rentalTitle.trim()}`
               : 'New meetup proposal',
@@ -840,7 +895,16 @@ export default function ChatDetailScreen() {
         setRentalBusy(false);
       }
     },
-    [rental, meId, insertMeetupProposalMessage, id, threadOfferId, threadRentalId, rentalTitle]
+    [
+      rental,
+      meId,
+      insertMeetupProposalMessage,
+      id,
+      threadOfferId,
+      threadRentalId,
+      rentalTitle,
+      baselineDurationHours,
+    ]
   );
 
   if (!id) {
@@ -981,6 +1045,9 @@ export default function ChatDetailScreen() {
                       const isCurrentUser = message.senderId === meId;
                       const parsedProposal = parseMeetupProposalLines(message.text);
                       const parsedLegacy = parseRentalUpdateMessage(message.text);
+                      const proposalDetails = parsedProposal ?? parsedLegacy;
+                      const isMeetupProposal = message.kind === OFFER_MEETUP_PROPOSAL_KIND;
+                      const proposerName = getProfileNameForUserId(message.senderId).trim() || 'Someone';
                       const isRentalDetailsSystem =
                         message.kind === OFFER_MEETUP_PROPOSAL_KIND ||
                         message.kind === 'system_rental_details' ||
@@ -1024,32 +1091,32 @@ export default function ChatDetailScreen() {
                               ]}
                             >
                               {isRentalDetailsSystem ? (
-                                <View>
+                                <View style={styles.systemCardBody}>
                                   <Text style={styles.systemTitle}>
-                                    {message.kind === OFFER_MEETUP_PROPOSAL_KIND
-                                      ? 'Meetup proposal'
-                                      : 'Rental updated'}
+                                    {isMeetupProposal ? `${proposerName} proposed a meetup` : 'Rental updated'}
                                   </Text>
-                                  {parsedProposal?.pickup ? (
+                                  {proposalDetails?.location ? (
                                     <Text style={styles.systemLine}>
-                                      Pickup time proposed: {parsedProposal.pickup}
+                                      <Text style={styles.systemLineLabel}>Location: </Text>
+                                      {proposalDetails.location}
                                     </Text>
-                                  ) : parsedLegacy?.pickup ? (
-                                    <Text style={styles.systemLine}>📅 Pickup: {parsedLegacy.pickup}</Text>
                                   ) : null}
-                                  {parsedProposal?.returnAt ? (
+                                  {proposalDetails?.pickup ? (
                                     <Text style={styles.systemLine}>
-                                      Return time proposed: {parsedProposal.returnAt}
-                                    </Text>
-                                  ) : parsedLegacy?.returnAt ? (
-                                    <Text style={styles.systemLine}>🔁 Return: {parsedLegacy.returnAt}</Text>
-                                  ) : null}
-                                  {parsedProposal?.location || parsedLegacy?.location ? (
-                                    <Text style={styles.systemLocation}>
-                                      📍 {parsedProposal?.location ?? parsedLegacy?.location}
+                                      <Text style={styles.systemLineLabel}>Pickup: </Text>
+                                      {proposalDetails.pickup}
                                     </Text>
                                   ) : null}
-                                  {!parsedProposal && !parsedLegacy ? (
+                                  {proposalDetails?.returnAt ? (
+                                    <Text style={styles.systemLine}>
+                                      <Text style={styles.systemLineLabel}>Return: </Text>
+                                      {proposalDetails.returnAt}
+                                    </Text>
+                                  ) : null}
+                                  {proposalDetails?.durationWarning ? (
+                                    <Text style={styles.systemWarningLine}>⚠ {proposalDetails.durationWarning}</Text>
+                                  ) : null}
+                                  {!proposalDetails ? (
                                     <Text style={styles.systemFallbackText}>{message.text}</Text>
                                   ) : null}
                                 </View>
@@ -1266,8 +1333,8 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#D5DCE6',
     borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
   },
   timestamp: {
     fontSize: 9,
@@ -1293,25 +1360,32 @@ const styles = StyleSheet.create({
   systemTitle: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#4A5568',
-    marginBottom: 4,
+    color: '#3F4D63',
+    marginBottom: 3,
+  },
+  systemCardBody: {
+    gap: 2,
   },
   systemLine: {
     fontSize: 12,
     color: '#4E5B70',
     lineHeight: 16,
   },
-  systemLocation: {
-    marginTop: 3,
-    fontSize: 12,
-    color: '#4E5B70',
-    lineHeight: 16,
-    fontWeight: '500',
+  systemLineLabel: {
+    fontWeight: '600',
+    color: '#3F4D63',
   },
   systemFallbackText: {
     fontSize: 12,
     color: '#4E5B70',
     lineHeight: 16,
+  },
+  systemWarningLine: {
+    fontSize: 12,
+    color: '#9E2D2F',
+    lineHeight: 16,
+    fontWeight: '600',
+    marginTop: 1,
   },
   imageGroup: {
     marginTop: 7,
