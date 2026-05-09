@@ -1,10 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { extensionForContentType, loadLocalImageForUpload } from '@/lib/localImageForUpload';
+import type { PickupPhotoCategory } from '@/lib/pickupVerificationPhotoBuckets';
 import {
   BUCKET,
   evidenceObjectPath,
   insertVerificationPhotoRow,
+  isMissingPickupPhotoCategoryColumnError,
+  PHOTO_UPLOAD_PICKUP_CATEGORY_SCHEMA_MESSAGE,
   type PartyRole,
   type VerificationPhase,
 } from '@/lib/rentalVerification';
@@ -23,7 +26,7 @@ export type RentalEvidenceUploadFailure = {
   ok: false;
   stage: 'read' | 'upload' | 'db';
   message: string;
-  code?: 'bucket_missing';
+  code?: 'bucket_missing' | 'pickup_category_schema_missing';
 };
 
 export type RentalEvidenceUploadSuccess = {
@@ -61,8 +64,10 @@ export async function uploadRentalEvidencePhoto(params: {
   userId: string;
   role: PartyRole;
   localUri: string;
+  /** Set for owner pickup uploads from a specific tile. */
+  pickupPhotoCategory?: PickupPhotoCategory | null;
 }): Promise<RentalEvidenceUploadResult> {
-  const { client, rentalId, phase, userId, role, localUri } = params;
+  const { client, rentalId, phase, userId, role, localUri, pickupPhotoCategory } = params;
   const fileId = randomId();
 
   let body: ArrayBuffer | Blob;
@@ -104,6 +109,9 @@ export async function uploadRentalEvidencePhoto(params: {
     console.log('[rentalEvidenceUpload] storage ok', path);
   }
 
+  const wantsPickupCategory =
+    phase === 'pickup' && role === 'owner' && pickupPhotoCategory != null && String(pickupPhotoCategory).trim() !== '';
+
   const { row: inserted, error: insertErr } = await insertVerificationPhotoRow(client, {
     rental_id: rentalId,
     phase,
@@ -111,9 +119,27 @@ export async function uploadRentalEvidencePhoto(params: {
     role,
     storage_path: path,
     public_url: '',
+    pickup_photo_category: wantsPickupCategory ? pickupPhotoCategory : null,
   });
 
   if (!inserted) {
+    if (wantsPickupCategory && insertErr != null && isMissingPickupPhotoCategoryColumnError(insertErr)) {
+      if (__DEV__) {
+        console.warn(
+          '[rentalEvidenceUpload] pickup_photo_category missing on rental_verification_photos — apply supabase/migrations/045_pickup_photo_category.sql in Supabase, then reload schema (Dashboard → API → Reload schema or wait for cache).'
+        );
+      }
+      const { error: removeErr } = await client.storage.from(BUCKET).remove([path]);
+      if (removeErr) {
+        console.warn('[rentalEvidenceUpload] orphan object cleanup failed', path, removeErr.message);
+      }
+      return {
+        ok: false,
+        stage: 'db',
+        message: PHOTO_UPLOAD_PICKUP_CATEGORY_SCHEMA_MESSAGE,
+        code: 'pickup_category_schema_missing',
+      };
+    }
     const message = insertErr?.message ?? 'Database insert failed';
     console.warn('[rentalEvidenceUpload] db insert failed', message, insertErr);
     const { error: removeErr } = await client.storage.from(BUCKET).remove([path]);

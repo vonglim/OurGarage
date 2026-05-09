@@ -26,9 +26,31 @@ export type RentalVerificationPhotoRow = {
   storage_path: string;
   public_url: string;
   created_at: string;
+  /** Owner pickup slot: item | serial | timestamp_proof | additional */
+  pickup_photo_category?: string | null;
 };
 
 export const BUCKET = 'rental-evidence';
+
+/** Shown when `pickup_photo_category` is missing from DB (migration 045 not applied / schema cache stale). */
+export const PHOTO_UPLOAD_PICKUP_CATEGORY_SCHEMA_MESSAGE =
+  'Photo uploads are temporarily unavailable. Please refresh the app.';
+
+/** PostgREST / schema cache: column not in `rental_verification_photos` yet. */
+export function isMissingPickupPhotoCategoryColumnError(error: {
+  message?: string;
+  code?: string;
+  details?: string;
+} | null | undefined): boolean {
+  if (error == null) return false;
+  const msg = String(error.message ?? '').toLowerCase();
+  if (!msg.includes('pickup_photo_category')) return false;
+  if (msg.includes('schema cache')) return true;
+  if (msg.includes('could not find')) return true;
+  if (msg.includes('does not exist')) return true;
+  if (error.code === 'PGRST204') return true;
+  return false;
+}
 const SIGNED_URL_TTL = 60 * 60 * 24 * 7; // 7 days
 
 export function evidenceObjectPath(
@@ -209,18 +231,19 @@ export async function insertVerificationPhotoRow(
   row: RentalVerificationPhotoRow | null;
   error: { message: string; code?: string; details?: string } | null;
 }> {
-  const { data, error } = await client
-    .from('rental_verification_photos')
-    .insert({
-      rental_id: row.rental_id,
-      phase: row.phase,
-      uploaded_by: row.uploaded_by,
-      role: row.role,
-      storage_path: row.storage_path,
-      public_url: row.public_url ?? '',
-    })
-    .select('*')
-    .single();
+  const insertPayload: Record<string, unknown> = {
+    rental_id: row.rental_id,
+    phase: row.phase,
+    uploaded_by: row.uploaded_by,
+    role: row.role,
+    storage_path: row.storage_path,
+    public_url: row.public_url ?? '',
+  };
+  const cat = row.pickup_photo_category;
+  if (cat != null && String(cat).trim() !== '') {
+    insertPayload.pickup_photo_category = String(cat).trim();
+  }
+  const { data, error } = await client.from('rental_verification_photos').insert(insertPayload).select('*').single();
   if (error) {
     console.warn('[rentalVerification] insertVerificationPhotoRow', error.message, error.code, error.details);
     return {

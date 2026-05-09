@@ -6,7 +6,6 @@ import {
   Alert,
   Dimensions,
   FlatList,
-  Image,
   Modal,
   Platform,
   Pressable as RNPressable,
@@ -16,7 +15,9 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Pressable } from '@/components/Pressable';
+import { AppImage } from '@/components/ui/AppImage';
 import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -1249,24 +1250,19 @@ export default function OfferDetailScreen() {
               {Array.isArray(offer.offer_images) && offer.offer_images.length > 0 ? (
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                   {offer.offer_images.map((img, i) => (
-                    <Pressable
+                    <AppImage
                       key={i}
+                      uri={img}
+                      aspect="square"
+                      width={110}
+                      rounded={10}
+                      style={{ marginRight: 10 }}
+                      accessibilityLabel={`Offer photo ${i + 1}`}
                       onPress={() => {
                         setViewerIndex(i);
                         setViewerVisible(true);
                       }}
-                      style={{ marginRight: 10 }}
-                    >
-                      <Image
-                        source={{ uri: img }}
-                        style={{
-                          width: 110,
-                          height: 110,
-                          borderRadius: 10,
-                        }}
-                        resizeMode="cover"
-                      />
-                    </Pressable>
+                    />
                   ))}
                 </ScrollView>
               ) : (
@@ -1388,24 +1384,19 @@ export default function OfferDetailScreen() {
               {Array.isArray(offer.offer_images) && offer.offer_images.length > 0 ? (
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                   {offer.offer_images.map((img, i) => (
-                    <Pressable
+                    <AppImage
                       key={i}
+                      uri={img}
+                      aspect="square"
+                      width={110}
+                      rounded={10}
+                      style={{ marginRight: 10 }}
+                      accessibilityLabel={`Offer photo ${i + 1}`}
                       onPress={() => {
                         setViewerIndex(i);
                         setViewerVisible(true);
                       }}
-                      style={{ marginRight: 10 }}
-                    >
-                      <Image
-                        source={{ uri: img }}
-                        style={{
-                          width: 110,
-                          height: 110,
-                          borderRadius: 10,
-                        }}
-                        resizeMode="cover"
-                      />
-                    </Pressable>
+                    />
                   ))}
                 </ScrollView>
               ) : (
@@ -1764,24 +1755,26 @@ export default function OfferDetailScreen() {
                 );
                 setViewerIndex(index);
               }}
-              renderItem={({ item }) => (
-                <View
-                  style={{
-                    width: Dimensions.get('window').width,
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                  }}
-                >
-                  <Image
-                    source={{ uri: item }}
+              renderItem={({ item }) => {
+                const { width: winW, height: winH } = Dimensions.get('window');
+                return (
+                  <View
                     style={{
-                      width: Dimensions.get('window').width,
-                      height: Dimensions.get('window').height * 0.8,
+                      width: winW,
+                      height: winH,
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      backgroundColor: 'black',
                     }}
-                    resizeMode="contain"
-                  />
-                </View>
-              )}
+                  >
+                    <Image
+                      source={{ uri: item }}
+                      style={{ width: winW, height: winH }}
+                      contentFit="contain"
+                    />
+                  </View>
+                );
+              }}
             />
 
             <Pressable

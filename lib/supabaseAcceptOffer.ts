@@ -5,7 +5,9 @@ export type PersistAcceptOfferInput = {
   requestRowId: string;
   acceptedOfferId: string;
   acceptedPrice: number;
+  /** Equipment owner (`rentals.owner_user_id`). */
   ownerId: string;
+  /** Borrower (`rentals.renter_user_id`). */
   renterId: string;
   /** User who completed the accept action in-app. */
   lastUpdatedBy: string;

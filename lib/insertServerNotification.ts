@@ -87,10 +87,15 @@ export function insertServerNotificationToRecipient(input: {
   })();
 }
 
-/** Renter (offer author) is notified; actor is the request owner who accepted. */
+/**
+ * Notifies the offer author that their offer was accepted.
+ * `actorId` = request creator who accepted (rental borrower). `offerRenterId` = offer author
+ * (`offers.user_id`, rental equipment owner) — param name is legacy from older naming.
+ */
 export function insertOfferAcceptedServerNotification(input: {
-  /** Request owner (must not equal {@link offerRenterId}). */
+  /** Request creator who tapped accept (must not equal {@link offerRenterId}). */
   actorId: string;
+  /** Offer author / `offers.user_id` (equipment owner); not the rental renter column semantically. */
   offerRenterId: string;
   requestRowId: string;
   offerId: string;

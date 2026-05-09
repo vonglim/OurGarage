@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Dimensions, Platform, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { FeedbackToastHost } from '@/components/FeedbackToastHost';
@@ -200,9 +201,10 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
-        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-          <View style={{ flex: 1 }}>
+      <KeyboardProvider>
+        <SafeAreaProvider>
+          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+            <View style={{ flex: 1 }}>
             <NavigationHaptics />
             <NumberPadKeyboardAccessory />
             <Stack
@@ -267,10 +269,11 @@ export default function RootLayout() {
               <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
             </Stack>
             <FeedbackToastHost />
-          </View>
-          <StatusBar style="auto" />
-        </ThemeProvider>
-      </SafeAreaProvider>
+            </View>
+            <StatusBar style="auto" />
+          </ThemeProvider>
+        </SafeAreaProvider>
+      </KeyboardProvider>
     </GestureHandlerRootView>
   );
 }

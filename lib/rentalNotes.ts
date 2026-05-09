@@ -125,6 +125,56 @@ export async function insertRentalNote(
   return { row: data as RentalNoteRow, error: null };
 }
 
+export async function updateRentalNote(
+  client: SupabaseClient,
+  input: {
+    noteId: string;
+    note: string;
+  }
+): Promise<{ error: string | null }> {
+  const text = input.note.trim();
+  if (!text) return { error: 'Note cannot be empty.' };
+  const id = input.noteId.trim();
+  if (!id) return { error: 'Invalid note id.' };
+
+  const { data, error } = await client.rpc('update_owner_pre_handoff_rental_note', {
+    p_note_id: id,
+    p_note: text,
+  });
+  if (error) {
+    console.warn('[rentalNotes] updateRentalNote', error.message);
+    return { error: error.message };
+  }
+  if (data !== true) {
+    return { error: 'Update not allowed or note not found.' };
+  }
+  if (__DEV__) {
+    console.log('[rentalNotes] update success', { noteId: id });
+  }
+  return { error: null };
+}
+
+export async function deleteRentalNote(
+  client: SupabaseClient,
+  noteId: string
+): Promise<{ error: string | null }> {
+  const id = noteId.trim();
+  if (!id) return { error: 'Invalid note id.' };
+
+  const { data, error } = await client.rpc('delete_owner_pre_handoff_rental_note', { p_note_id: id });
+  if (error) {
+    console.warn('[rentalNotes] deleteRentalNote', error.message);
+    return { error: error.message };
+  }
+  if (data !== true) {
+    return { error: 'Delete not allowed or note not found.' };
+  }
+  if (__DEV__) {
+    console.log('[rentalNotes] delete success', { noteId: id });
+  }
+  return { error: null };
+}
+
 export async function logRentalNotesTableHealthInDev(client: SupabaseClient): Promise<void> {
   if (typeof __DEV__ === 'undefined' || !__DEV__) return;
   const { error } = await client.from('rental_notes').select('id').limit(1);

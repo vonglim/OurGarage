@@ -127,7 +127,8 @@ export async function finalizeOfferAcceptance(
 
   const now = new Date().toISOString();
   const acceptedOfferId = String(offer.id);
-  const renterId = offer.renterId.trim();
+  /** `Offer.renterId` / `offers.user_id`: offer author (tool provider). Not the rental borrower. */
+  const offerAuthorUserId = offer.renterId.trim();
 
   try {
     const supabase = getSupabase();
@@ -169,7 +170,8 @@ export async function finalizeOfferAcceptance(
       return { ok: false, error: e2b.message || 'Could not update other offers' };
     }
 
-    const ownerIdForRental =
+    /** Request creator (borrower). Same as {@link getRequestOwnerId} / `requests.user_id`. */
+    const requestCreatorUserId =
       typeof rec.poster_user_id === 'string' && rec.poster_user_id.trim() !== ''
         ? rec.poster_user_id.trim()
         : typeof rec.posterUserId === 'string'
@@ -185,8 +187,8 @@ export async function finalizeOfferAcceptance(
     const rentalPayloadBase = {
       request_id: requestRowId,
       offer_id: offer.id,
-      renter_user_id: offer.renterId,
-      owner_user_id: ownerIdForRental,
+      renter_user_id: requestCreatorUserId,
+      owner_user_id: offerAuthorUserId,
       status: 'pending_meetup' as const,
       meetup_time: agreed.pickupIso,
       pickup_datetime: agreed.pickupIso,
@@ -241,7 +243,7 @@ export async function finalizeOfferAcceptance(
         : '';
     void insertOfferAcceptedServerNotification({
       actorId: me,
-      offerRenterId: renterId,
+      offerRenterId: offerAuthorUserId,
       requestRowId,
       offerId: acceptedOfferId,
       rentalId: rentalIdForNotify !== '' ? rentalIdForNotify : null,

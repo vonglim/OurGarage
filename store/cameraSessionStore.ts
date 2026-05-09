@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 
+import type { PickupPhotoCategory } from '@/lib/pickupVerificationPhotoBuckets';
 import type { VerificationPhase } from '@/lib/rentalVerification';
 
 /**
@@ -8,6 +9,8 @@ import type { VerificationPhase } from '@/lib/rentalVerification';
 export type RentalEvidenceCameraSession = {
   rentalId: string;
   phase: VerificationPhase;
+  /** Owner pickup tile; all captures in this session share this category. */
+  pickupPhotoCategory?: PickupPhotoCategory | null;
 };
 
 type CameraSessionState = {

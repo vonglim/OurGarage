@@ -118,18 +118,18 @@ export function emitAcceptMatchSideEffects(
 
   ensureChatForAcceptedOffer(requestTimestamp, acceptedOfferId);
   const accepted = getOfferById(acceptedOfferId);
-  const ownerId = getRequestOwnerId((before ?? after) as Record<string, unknown>);
+  const requestCreatorId = getRequestOwnerId((before ?? after) as Record<string, unknown>);
   if (
     accepted != null &&
-    ownerId != null &&
+    requestCreatorId != null &&
     typeof accepted.renterId === 'string' &&
     accepted.renterId.trim() !== ''
   ) {
     addRentalForAcceptedOffer({
       requestId: requestTimestamp,
       offerId: acceptedOfferId,
-      renterId: accepted.renterId.trim(),
-      ownerId,
+      renterId: requestCreatorId,
+      ownerId: accepted.renterId.trim(),
       price: Number.isFinite(acceptedPrice) ? acceptedPrice : 0,
     });
   }

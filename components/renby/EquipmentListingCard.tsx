@@ -1,10 +1,10 @@
-import { Image } from 'expo-image';
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import type { RenbyEquipmentListing } from '@/lib/renbyListings';
 import { formatRenbyDistance, formatRenbyPricePerDay } from '@/lib/renbyListings';
 import { CardPressable } from '@/components/CardPressable';
+import { AppImage } from '@/components/ui/AppImage';
 import { ui } from '@/constants/appUi';
 
 type Props = {
@@ -21,11 +21,13 @@ export function EquipmentListingCard({ listing, onPress }: Props) {
       style={styles.pressWrap}
     >
       <View style={styles.card}>
-        <Image
-          source={{ uri: listing.imageUrl }}
-          style={styles.image}
-          contentFit="cover"
-          transition={200}
+        <AppImage
+          uri={listing.imageUrl}
+          aspect="wide"
+          stretch
+          rounded={0}
+          maxWideHeight={160}
+          accessibilityLabel={listing.title}
         />
         <View style={styles.body}>
           <Text style={styles.title} numberOfLines={2}>
@@ -42,8 +44,6 @@ export function EquipmentListingCard({ listing, onPress }: Props) {
   );
 }
 
-const IMAGE_HEIGHT = 168;
-
 const styles = StyleSheet.create({
   pressWrap: {
     marginBottom: ui.spaceMd,
@@ -54,11 +54,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: ui.border,
     overflow: 'hidden',
-  },
-  image: {
-    width: '100%',
-    height: IMAGE_HEIGHT,
-    backgroundColor: ui.surfaceInput,
   },
   body: {
     paddingHorizontal: ui.padCard,

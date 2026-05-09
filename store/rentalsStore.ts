@@ -6,7 +6,9 @@ export type RentalRecord = {
   id: string;
   requestId: number;
   offerId: string;
+  /** Borrower: request creator (request marketplace). */
   renterId: string;
+  /** Equipment owner: offer author / `offers.user_id`. */
   ownerId: string;
   price: number;
   status: 'active';

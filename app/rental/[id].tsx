@@ -1,4 +1,5 @@
 import { useFocusEffect } from '@react-navigation/native';
+import type { PostgrestError } from '@supabase/supabase-js';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -8,7 +9,10 @@ import {
   Alert,
   Animated,
   ActivityIndicator,
+  Keyboard,
   KeyboardAvoidingView,
+  LayoutAnimation,
+  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -16,18 +20,22 @@ import {
   Switch,
   Text,
   TextInput,
+  UIManager,
   useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Pressable } from '@/components/Pressable';
+import { RentalEvidenceGalleryModal } from '@/components/RentalEvidenceGalleryModal';
+import { RentalEvidenceThumbnail } from '@/components/RentalEvidenceThumbnail';
 import { RentalWorkflowBanner } from '@/components/RentalWorkflowBanner';
 import {
   RentalDetailsCard,
   type RentalDetailsCardHandle,
   type RentalMeetupDetails,
 } from '@/components/RentalDetailsCard';
+import { AppKeyboardAwareScrollView } from '@/components/AppKeyboardAwareScrollView';
 import { BackHeader } from '@/components/AppHeaders';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useAuthUserId } from '@/lib/authUser';
@@ -55,10 +63,22 @@ import { isPhotoUploadWindowOpen } from '@/lib/rentalPhotoWindow';
 import { formatDurationDisplay } from '@/lib/durationFormat';
 import { calculatePreauthAmount } from '@/lib/rentalProtection';
 import { agreedScheduleIsoPairFromRequest } from '@/lib/agreedRentalScheduleFromRequest';
+import { deleteRentalEvidencePhoto } from '@/lib/deleteRentalEvidencePhoto';
+import {
+  bucketOwnerPickupPhotos,
+  normalizePickupPhotoCategory,
+  OWNER_ITEM_PHOTO_TARGET,
+  OWNER_PICKUP_REQUIRED_ITEM_MIN,
+  OWNER_PICKUP_REQUIRED_SERIAL_MIN,
+  OWNER_PICKUP_REQUIRED_TIMESTAMP_MIN,
+  OWNER_SERIAL_PHOTO_TARGET,
+  OWNER_TIMESTAMP_PROOF_TARGET,
+  ownerPickupPhotoTargetsMet,
+  type PickupPhotoCategory,
+} from '@/lib/pickupVerificationPhotoBuckets';
 import { computeRentalWorkflowBannerModel } from '@/lib/rentalWorkflowBannerModel';
 import { mapSupabaseRequestSelectRowToApp } from '@/lib/supabaseRequests';
 import {
-  deleteVerificationPhotoById,
   deriveDualConfirmation,
   ensureVerificationRows,
   fetchVerificationPhotos,
@@ -66,19 +86,28 @@ import {
   mergeChecklistMapsFromRows,
   persistChecklistState,
   persistConfirmation,
+  PHOTO_UPLOAD_PICKUP_CATEGORY_SCHEMA_MESSAGE,
   signedUrlForEvidencePath,
   type PartyRole,
   type RentalVerificationRow,
   type VerificationPhase,
 } from '@/lib/rentalVerification';
 import {
+  deleteRentalNote,
   fetchRentalNotes,
   insertRentalNote,
   logRentalNotesTableHealthInDev,
+  updateRentalNote,
   subscribeRentalNotes,
   type RentalNoteRole,
   type RentalNoteRow,
 } from '@/lib/rentalNotes';
+import {
+  computeOwnerPickupEvidenceRevision,
+  hydrateRenterPickupViewerFlagsFromEvidence,
+  saveRenterPickupViewerFlags,
+} from '@/lib/rentalPickupViewerFlags';
+import { formatSupabaseMutationFailure } from '@/lib/supabaseSchemaMismatchMessage';
 import { getSupabase } from '@/lib/supabase';
 import { getOfferById, useOffersStore } from '@/store/offersStore';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
@@ -226,15 +255,48 @@ function formatAgreementMeetingPickupReturn(
 }
 
 const OWNER_PICKUP_ITEMS = [
-  { id: 'op-verify-identity', label: 'Verify renter identity' },
-  { id: 'op-review-photos', label: 'Review pickup photos' },
-  { id: 'op-review-notes', label: 'Review pickup notes' },
+  {
+    id: 'op-upload-condition',
+    label: 'Upload condition photos',
+    required: true as const,
+    control: 'auto' as const,
+  },
+  {
+    id: 'op-upload-serial',
+    label: 'Upload serial/model photo',
+    required: true as const,
+    control: 'auto' as const,
+  },
+  {
+    id: 'op-upload-verification',
+    label: 'Upload verification photo',
+    required: true as const,
+    control: 'auto' as const,
+  },
+  {
+    id: 'op-accessories',
+    label: 'Verify all included accessories are present',
+    required: true as const,
+    control: 'manual' as const,
+  },
 ] as const;
 
 const RENTER_PICKUP_ITEMS = [
-  { id: 'rp-review-photos', label: 'Review owner photos' },
-  { id: 'rp-verify-condition', label: 'Verify item condition' },
-  { id: 'rp-review-notes', label: 'Review owner notes' },
+  {
+    id: 'rp-review-photos',
+    label: 'Review owner photos',
+    required: true as const,
+    control: 'auto' as const,
+  },
+  { id: 'rp-serial-matches', label: 'Verify serial/model matches', required: true as const, control: 'manual' as const },
+  { id: 'rp-verify-condition', label: 'Verify item condition', required: true as const, control: 'manual' as const },
+  { id: 'rp-accessories', label: 'Confirm accessories are included', required: true as const, control: 'manual' as const },
+  {
+    id: 'rp-verify-note',
+    label: 'Verify username and date on verification photo',
+    required: true as const,
+    control: 'auto' as const,
+  },
 ] as const;
 
 const OWNER_RETURN_ITEMS = [
@@ -249,7 +311,7 @@ const RENTER_RETURN_ITEMS = [
 ] as const;
 
 type ChecklistMaps = { owner: Record<string, boolean>; renter: Record<string, boolean> };
-type ChecklistItemDef = { id: string; label: string };
+type ChecklistItemDef = { id: string; label: string; required?: boolean; control?: 'manual' | 'auto' };
 type PhotoDisplay = {
   id: string;
   path?: string;
@@ -258,7 +320,119 @@ type PhotoDisplay = {
   phase?: VerificationPhase;
   userId?: string;
   createdAt?: string;
+  pickupPhotoCategory?: PickupPhotoCategory | null;
 };
+
+function buildOwnerPickupDoneEffective(
+  storedManual: Record<string, boolean>,
+  ownerPickupPhotos: PhotoDisplay[]
+): Record<string, boolean> {
+  const b = bucketOwnerPickupPhotos(ownerPickupPhotos);
+  return {
+    'op-upload-condition': b.item.length >= OWNER_PICKUP_REQUIRED_ITEM_MIN,
+    'op-upload-serial': b.serial.length >= OWNER_PICKUP_REQUIRED_SERIAL_MIN,
+    'op-upload-verification': b.timestampProof.length >= OWNER_PICKUP_REQUIRED_TIMESTAMP_MIN,
+    'op-accessories': Boolean(storedManual['op-accessories']),
+  };
+}
+
+function buildRenterPickupDoneEffective(
+  storedManual: Record<string, boolean>,
+  viewFlags: { reviewedOwnerPhotos: boolean; viewedTimestampProof: boolean },
+  pickupRenterConfirmed: boolean,
+  handoffCompleted: boolean
+): Record<string, boolean> {
+  const freezeAuto = handoffCompleted || pickupRenterConfirmed;
+  return {
+    'rp-review-photos': freezeAuto || viewFlags.reviewedOwnerPhotos,
+    'rp-serial-matches': Boolean(storedManual['rp-serial-matches']),
+    'rp-verify-condition': Boolean(storedManual['rp-verify-condition']),
+    'rp-accessories': Boolean(storedManual['rp-accessories']),
+    'rp-verify-note': freezeAuto || viewFlags.viewedTimestampProof,
+  };
+}
+
+function pickupAutoRowHelper(itemId: string, role: 'owner' | 'renter'): string | undefined {
+  if (role === 'owner') {
+    if (itemId === 'op-upload-verification') return "Include your username and today's date.";
+    return 'Completed automatically when requirements are met.';
+  }
+  if (itemId === 'rp-review-photos') return 'Automatically checked when you view owner photos';
+  if (itemId === 'rp-verify-note') return 'Automatically checked when you open the verification photo';
+  return undefined;
+}
+
+const HANDOFF_ITEM_PREVIEW_MAX = 4;
+
+function PickupHandoffItemPhotoRow({
+  photos,
+  openPickupPhotoById,
+  canDeletePhoto,
+  confirmDeletePhoto,
+}: {
+  photos: PhotoDisplay[];
+  openPickupPhotoById: (id: string) => void;
+  canDeletePhoto: (p: PhotoDisplay) => boolean;
+  confirmDeletePhoto: (p: PhotoDisplay) => void;
+}) {
+  const overlayExtra = photos.length > HANDOFF_ITEM_PREVIEW_MAX ? photos.length - HANDOFF_ITEM_PREVIEW_MAX : 0;
+  const visible = photos.slice(0, Math.min(HANDOFF_ITEM_PREVIEW_MAX, photos.length));
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.handoffEvidenceGallery}
+    >
+      {visible.map((p, i) => {
+        const showMore = overlayExtra > 0 && i === visible.length - 1;
+        return (
+          <View key={p.id} style={styles.handoffItemPreviewCell}>
+            <RentalEvidenceThumbnail
+              uri={p.signedUrl}
+              size="handoffItem"
+              category="item"
+              canDelete={canDeletePhoto(p)}
+              onPress={() => openPickupPhotoById(p.id)}
+              onDelete={() => confirmDeletePhoto(p)}
+            />
+            {showMore ? (
+              <Pressable
+                pressOpacityFeedback={false}
+                onPress={() => openPickupPhotoById(p.id)}
+                style={styles.handoffItemMoreOverlay}
+                accessibilityRole="button"
+                accessibilityLabel={`${overlayExtra} more photos, open gallery`}
+              >
+                <Text style={styles.handoffItemMoreOverlayText}>+{overlayExtra}</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+function VerificationPhotoSectionHeader({ showTrustBadge }: { showTrustBadge: boolean }) {
+  return (
+    <View style={styles.handoffTimestampSectionHeading}>
+      <View style={styles.handoffTimestampSectionTitleRow}>
+        <View style={styles.handoffVerificationHeadingTitleCluster}>
+          <Ionicons name="shield-checkmark" size={16} color="#166534" />
+          <Text style={styles.handoffEvidenceGroupLabelHeading}>Verification Photo</Text>
+        </View>
+        {showTrustBadge ? (
+          <View style={styles.handoffTimestampTrustPillWrap}>
+            <View style={styles.handoffTimestampTrustPill}>
+              <Ionicons name="shield-checkmark" size={11} color="#166534" />
+              <Text style={styles.handoffTimestampTrustPillText}>Username + date</Text>
+            </View>
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+}
 
 function emptyChecklistMaps(
   ownerItems: readonly { id: string }[],
@@ -274,6 +448,13 @@ function allItemsDone(items: readonly { id: string }[], done: Record<string, boo
   return items.every((i) => done[i.id]);
 }
 
+function allRequiredPickupItemsDone(
+  items: readonly ChecklistItemDef[],
+  done: Record<string, boolean>
+): boolean {
+  return items.filter((i) => i.required !== false).every((i) => Boolean(done[i.id]));
+}
+
 function fillDefaults(
   items: readonly { id: string }[],
   stored: Record<string, boolean>
@@ -281,6 +462,27 @@ function fillDefaults(
   const o: Record<string, boolean> = {};
   for (const it of items) {
     o[it.id] = Boolean(stored[it.id]);
+  }
+  return o;
+}
+
+function stripPickupAutoFromStored(
+  role: 'owner' | 'renter',
+  stored: Record<string, boolean>
+): Record<string, boolean> {
+  const items = role === 'owner' ? OWNER_PICKUP_ITEMS : RENTER_PICKUP_ITEMS;
+  const out = { ...stored };
+  for (const it of items) {
+    if (it.control === 'auto') delete out[it.id];
+  }
+  return out;
+}
+
+function manualPickupMapOnly(role: 'owner' | 'renter', map: Record<string, boolean>): Record<string, boolean> {
+  const items = role === 'owner' ? OWNER_PICKUP_ITEMS : RENTER_PICKUP_ITEMS;
+  const o: Record<string, boolean> = {};
+  for (const it of items) {
+    if (it.control !== 'auto') o[it.id] = Boolean(map[it.id]);
   }
   return o;
 }
@@ -301,10 +503,110 @@ function toBulletMultiline(text: string): string {
   return normalized.join('\n');
 }
 
+/** Normalize handoff link input: trim, prepend https:// if needed, validate http(s) URL. */
+function normalizeHandoffUrl(raw: string): { ok: true; url: string } | { ok: false } {
+  const t = raw.trim();
+  if (!t) return { ok: false };
+  let candidate = t;
+  if (!/^https?:\/\//i.test(candidate)) {
+    candidate = `https://${candidate}`;
+  }
+  try {
+    const u = new URL(candidate);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false };
+    if (!u.hostname) return { ok: false };
+    return { ok: true, url: u.toString() };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function linkChipLabelFromUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./i, '').toLowerCase();
+    const path = u.pathname.toLowerCase();
+    if (host.includes('youtube.com') || host === 'youtu.be') return 'YouTube Tutorial';
+    if (path.endsWith('.pdf') || path.includes('.pdf?')) return 'Manual PDF';
+    if (host.includes('notion.') || host.includes('docs.google.com') || host.includes('github.com'))
+      return 'Setup Guide';
+    const parts = host.split('.').filter((p) => p.length > 0);
+    const base = parts[0];
+    if (base && base.length > 1) return base.charAt(0).toUpperCase() + base.slice(1);
+    return 'Open link';
+  } catch {
+    return 'Open link';
+  }
+}
+
+function parseOwnerHandoffNoteContent(raw: string): { body: string; links: { url: string; label: string }[] } {
+  const lines = raw.replace(/\r\n/g, '\n').split('\n');
+  const bodyLines: string[] = [];
+  const links: { url: string; label: string }[] = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    const m = line.match(/^\s*Link:\s*(\S+)\s*$/i);
+    if (m) {
+      const norm = normalizeHandoffUrl(m[1]);
+      if (norm.ok && !seen.has(norm.url)) {
+        seen.add(norm.url);
+        links.push({ url: norm.url, label: linkChipLabelFromUrl(norm.url) });
+      } else {
+        bodyLines.push(line);
+      }
+      continue;
+    }
+    const t = line.trim();
+    if (/^https?:\/\//i.test(t) && !/\s/.test(t)) {
+      const norm = normalizeHandoffUrl(t);
+      if (norm.ok && !seen.has(norm.url)) {
+        seen.add(norm.url);
+        links.push({ url: norm.url, label: linkChipLabelFromUrl(norm.url) });
+      } else {
+        bodyLines.push(line);
+      }
+      continue;
+    }
+    bodyLines.push(line);
+  }
+  return { body: bodyLines.join('\n').trim(), links };
+}
+
+/** Rebuild stored owner instruction text with one link removed; returns null if result would be empty. */
+function rebuildOwnerHandoffNoteRemovingLink(raw: string, urlToRemove: string): string | null {
+  const parsed = parseOwnerHandoffNoteContent(raw);
+  const norm = normalizeHandoffUrl(urlToRemove.trim());
+  const target = norm.ok ? norm.url : urlToRemove.trim();
+  const links = parsed.links.filter((l) => l.url !== target);
+  const parts: string[] = [];
+  if (parsed.body.trim().length > 0) parts.push(parsed.body.trim());
+  for (const l of links) {
+    parts.push(`Link: ${l.url}`);
+  }
+  const out = parts.join('\n').trim();
+  return out.length > 0 ? out : null;
+}
+
+function tryBuildOwnerInstructionCombined(
+  noteDraft: string,
+  linkDraft: string
+): { ok: true; combined: string } | { ok: false } {
+  const noteTrim = noteDraft.trim();
+  const linkTrim = linkDraft.trim();
+  const linkNorm = linkTrim ? normalizeHandoffUrl(linkTrim) : null;
+  if (linkTrim && (!linkNorm || !linkNorm.ok)) return { ok: false };
+  if (!noteTrim && !(linkNorm && linkNorm.ok)) return { ok: false };
+  if (noteTrim && linkNorm && linkNorm.ok) return { ok: true, combined: `${noteTrim}\nLink: ${linkNorm.url}` };
+  if (noteTrim) return { ok: true, combined: noteTrim };
+  if (linkNorm && linkNorm.ok) return { ok: true, combined: `Link: ${linkNorm.url}` };
+  return { ok: false };
+}
+
 const LAYOUT_TABLET_MIN = 600;
 const CHECKLIST_TWO_COL_MIN = 768;
-const REQUIRED_PICKUP_PHOTOS = 3;
 const REQUIRED_RETURN_PHOTOS = 3;
+
+const PICKUP_VERIFICATION_EXAMPLE = require('@/assets/images/pickup-verification-example.png');
 
 function normalizeRole(raw: unknown): PartyRole | undefined {
   const val = String(raw ?? '')
@@ -329,11 +631,19 @@ function ChecklistRow({
   checked,
   onToggle,
   disabled = false,
+  readOnly = false,
+  helperText,
+  light = false,
 }: {
   label: string;
   checked: boolean;
   onToggle: () => void;
   disabled?: boolean;
+  /** System-driven row: no tap, muted label. */
+  readOnly?: boolean;
+  helperText?: string;
+  /** Lighter visual weight (e.g. renter pickup). */
+  light?: boolean;
 }) {
   const scale = useRef(new Animated.Value(1)).current;
   const pulse = () => {
@@ -342,21 +652,54 @@ function ChecklistRow({
       Animated.timing(scale, { toValue: 1, duration: 120, useNativeDriver: true }),
     ]).start();
   };
+  const inactive = disabled || readOnly;
   return (
     <Pressable
       pressOpacityFeedback={false}
-      disabled={disabled}
+      disabled={inactive}
       onPress={() => {
-        if (disabled) return;
+        if (inactive) return;
         onToggle();
         pulse();
       }}
-      style={({ pressed }) => [styles.checklistRow, disabled && styles.checklistRowDisabled, pressed && { opacity: 0.92 }]}
+      style={({ pressed }) => [
+        styles.checklistRow,
+        light && styles.checklistRowLight,
+        disabled && styles.checklistRowDisabled,
+        readOnly && !disabled && styles.checklistRowReadOnly,
+        pressed && !inactive && { opacity: 0.92 },
+      ]}
     >
-      <Animated.View style={[styles.checklistBox, checked && styles.checklistBoxChecked, { transform: [{ scale }] }]}>
-        {checked ? <Text style={styles.checklistBoxMark}>✓</Text> : null}
+      <Animated.View
+        style={[
+          styles.checklistBox,
+          light && styles.checklistBoxLight,
+          checked && styles.checklistBoxChecked,
+          readOnly && styles.checklistBoxReadOnly,
+          { transform: [{ scale }] },
+        ]}
+      >
+        {checked ? (
+          <Text style={[styles.checklistBoxMark, light && styles.checklistBoxMarkLight]}>✓</Text>
+        ) : null}
       </Animated.View>
-      <Text style={[styles.checklistLabel, checked && styles.checklistLabelChecked]}>{label}</Text>
+      <View style={styles.checklistLabelBlock}>
+        <Text
+          style={[
+            styles.checklistLabel,
+            light && styles.checklistLabelLight,
+            checked && styles.checklistLabelChecked,
+            readOnly && styles.checklistLabelReadOnly,
+          ]}
+        >
+          {label}
+        </Text>
+        {helperText ? (
+          <Text style={[styles.checklistHelperMuted, light && styles.checklistHelperLight]}>
+            {helperText}
+          </Text>
+        ) : null}
+      </View>
     </Pressable>
   );
 }
@@ -400,12 +743,19 @@ function VerificationPhotosSubsection({
   addDisabled,
   addDisabledReason,
 }: {
-  photos: { id: string; signedUrl?: string; role?: PartyRole; phase?: VerificationPhase; createdAt?: string }[];
+  photos: {
+    id: string;
+    signedUrl?: string;
+    role?: PartyRole;
+    phase?: VerificationPhase;
+    createdAt?: string;
+    userId?: string;
+  }[];
   uploading: boolean;
   onAddPress: () => void;
   onPhotoPress: (index: number) => void;
   onDeletePhoto: (photoId: string) => void;
-  canDeletePhoto: (photo: { id: string; role?: PartyRole; phase?: VerificationPhase }) => boolean;
+  canDeletePhoto: (photo: { id: string; role?: PartyRole; phase?: VerificationPhase; userId?: string }) => boolean;
   addDisabled?: boolean;
   addDisabledReason?: string | null;
 }) {
@@ -419,20 +769,15 @@ function VerificationPhotosSubsection({
         {slots.map((i) => {
           const p = photos[i];
           return p ? (
-            <View key={p.id} style={styles.photoThumbWrap}>
-              <Pressable pressOpacityFeedback={false} onPress={() => onPhotoPress(i)}>
-                <Image source={{ uri: p.signedUrl }} style={styles.photoThumb} contentFit="cover" />
-              </Pressable>
-              {canDeletePhoto(p) ? (
-                <Pressable
-                  pressOpacityFeedback={false}
-                  style={({ pressed }) => [styles.photoDeleteBtn, pressed && { opacity: 0.86 }]}
-                  onPress={() => onDeletePhoto(p.id)}
-                >
-                  <Text style={styles.photoDeleteBtnText}>✕</Text>
-                </Pressable>
-              ) : null}
-            </View>
+            <RentalEvidenceThumbnail
+              key={p.id}
+              uri={p.signedUrl}
+              size="compact"
+              category="return"
+              canDelete={canDeletePhoto(p)}
+              onPress={() => onPhotoPress(i)}
+              onDelete={() => onDeletePhoto(p.id)}
+            />
           ) : (
             <View key={`ph-${i}`} style={styles.photoTilePlaceholder}>
               <Text style={styles.photoTilePlaceholderGlyph}>◇</Text>
@@ -461,7 +806,136 @@ function VerificationPhotosSubsection({
   );
 }
 
-function NoteItem({ note }: { note: RentalNoteRow }) {
+type OwnerInstructionMenu = {
+  onEdit: () => void;
+  onDelete: () => void;
+  linkChipMenu?: {
+    onEditLink: (url: string) => void;
+    onRemoveLink: (url: string) => void;
+  };
+};
+
+function NoteItem({
+  note,
+  showLinkChips,
+  instructionMenu,
+}: {
+  note: RentalNoteRow;
+  showLinkChips?: boolean;
+  instructionMenu?: OwnerInstructionMenu;
+}) {
+  const parsed = useMemo(() => {
+    if (!showLinkChips || note.author_role !== 'owner') return null;
+    return parseOwnerHandoffNoteContent(note.note);
+  }, [showLinkChips, note.author_role, note.note]);
+
+  const openInstructionMenu = () => {
+    if (!instructionMenu) return;
+    Alert.alert('Instruction', undefined, [
+      { text: 'Edit', onPress: instructionMenu.onEdit },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          Alert.alert('Delete instruction?', 'This cannot be undone.', [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Delete', style: 'destructive', onPress: instructionMenu.onDelete },
+          ]);
+        },
+      },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
+  const openChip = async (url: string) => {
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) {
+        Alert.alert('Cannot open link', 'This link cannot be opened on your device.');
+        return;
+      }
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert('Could not open link');
+    }
+  };
+
+  if (parsed && (parsed.body.length > 0 || parsed.links.length > 0)) {
+    return (
+      <View style={styles.noteItemRow}>
+        <Text style={styles.noteBullet}>•</Text>
+        <View style={styles.noteItemBody}>
+          {parsed.body.length > 0 ? <Text style={styles.noteItemText}>{parsed.body}</Text> : null}
+          {parsed.links.length > 0 ? (
+            <View style={styles.noteLinkChipsWrap}>
+              {parsed.links.map((l, i) => (
+                <Pressable
+                  key={`${note.id}-link-${i}`}
+                  pressOpacityFeedback={false}
+                  onPress={() => void openChip(l.url)}
+                  onLongPress={
+                    instructionMenu?.linkChipMenu
+                      ? () => {
+                          const m = instructionMenu.linkChipMenu!;
+                          Alert.alert(l.label, undefined, [
+                            { text: 'Open link', onPress: () => void openChip(l.url) },
+                            { text: 'Edit in form', onPress: () => m.onEditLink(l.url) },
+                            {
+                              text: 'Remove link',
+                              style: 'destructive',
+                              onPress: () => {
+                                Alert.alert(
+                                  'Remove link?',
+                                  'The link will be removed from this instruction immediately.',
+                                  [
+                                    { text: 'Cancel', style: 'cancel' },
+                                    {
+                                      text: 'Remove',
+                                      style: 'destructive',
+                                      onPress: () => m.onRemoveLink(l.url),
+                                    },
+                                  ]
+                                );
+                              },
+                            },
+                            { text: 'Cancel', style: 'cancel' },
+                          ]);
+                        }
+                      : undefined
+                  }
+                  delayLongPress={380}
+                  style={({ pressed }) => [styles.noteLinkChip, pressed && { opacity: 0.88 }]}
+                  accessibilityRole="link"
+                  accessibilityLabel={`Open ${l.label}`}
+                >
+                  <Ionicons name="open-outline" size={15} color={ui.primary} />
+                  <Text style={styles.noteLinkChipText} numberOfLines={1}>
+                    {l.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+          <Text style={styles.noteItemMeta}>
+            {`${note.author_role === 'owner' ? 'Owner' : 'Renter'} · ${formatCompactDateTime(note.created_at)}`}
+          </Text>
+        </View>
+        {instructionMenu ? (
+          <Pressable
+            pressOpacityFeedback={false}
+            onPress={openInstructionMenu}
+            hitSlop={{ top: 10, bottom: 10, left: 8, right: 10 }}
+            style={({ pressed }) => [styles.noteItemMenuHit, pressed && styles.noteItemMenuHitPressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Instruction actions"
+          >
+            <Ionicons name="ellipsis-horizontal" size={20} color={ui.textMuted} />
+          </Pressable>
+        ) : null}
+      </View>
+    );
+  }
+
   return (
     <View style={styles.noteItemRow}>
       <Text style={styles.noteBullet}>•</Text>
@@ -471,19 +945,116 @@ function NoteItem({ note }: { note: RentalNoteRow }) {
           {`${note.author_role === 'owner' ? 'Owner' : 'Renter'} · ${formatCompactDateTime(note.created_at)}`}
         </Text>
       </View>
+      {instructionMenu ? (
+        <Pressable
+          pressOpacityFeedback={false}
+          onPress={openInstructionMenu}
+          hitSlop={{ top: 10, bottom: 10, left: 8, right: 10 }}
+          style={({ pressed }) => [styles.noteItemMenuHit, pressed && styles.noteItemMenuHitPressed]}
+          accessibilityRole="button"
+          accessibilityLabel="Instruction actions"
+        >
+          <Ionicons name="ellipsis-horizontal" size={20} color={ui.textMuted} />
+        </Pressable>
+      ) : null}
     </View>
   );
 }
 
-function NoteList({ notes }: { notes: RentalNoteRow[] }) {
+function NoteList({
+  notes,
+  emptyText,
+  showLinkChips,
+  instructionMenuForNote,
+}: {
+  notes: RentalNoteRow[];
+  emptyText?: string;
+  showLinkChips?: boolean;
+  instructionMenuForNote?: (note: RentalNoteRow) => OwnerInstructionMenu | undefined;
+}) {
   if (notes.length === 0) {
-    return <Text style={styles.notesEmptyText}>No notes yet.</Text>;
+    return <Text style={styles.notesEmptyText}>{emptyText ?? 'No notes yet.'}</Text>;
   }
   return (
     <View style={styles.noteList}>
       {notes.map((note) => (
-        <NoteItem key={note.id} note={note} />
+        <NoteItem
+          key={note.id}
+          note={note}
+          showLinkChips={showLinkChips}
+          instructionMenu={instructionMenuForNote?.(note)}
+        />
       ))}
+    </View>
+  );
+}
+
+function animateHandoffLayout() {
+  if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+    UIManager.setLayoutAnimationEnabledExperimental(true);
+  }
+  LayoutAnimation.configureNext(LayoutAnimation.create(180, LayoutAnimation.Types.easeInEaseOut, 'opacity'));
+}
+
+function HandoffOwnerNotesAccordion({
+  expanded,
+  onToggle,
+  mode,
+  title,
+  helperCollapsed,
+  childrenExpanded,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+  mode: 'owner' | 'renter';
+  title: string;
+  helperCollapsed: string;
+  childrenExpanded: React.ReactNode;
+}) {
+  const rot = useRef(new Animated.Value(expanded ? 1 : 0)).current;
+  useEffect(() => {
+    Animated.timing(rot, {
+      toValue: expanded ? 1 : 0,
+      duration: 180,
+      useNativeDriver: true,
+    }).start();
+  }, [expanded, rot]);
+  const chevronSpin = rot.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '90deg'],
+  });
+  return (
+    <View
+      style={[
+        styles.handoffNotesAccordionCard,
+        expanded && styles.handoffNotesAccordionCardExpanded,
+        mode === 'renter' && styles.handoffNotesAccordionCardRenter,
+      ]}
+    >
+      <Pressable
+        pressOpacityFeedback={false}
+        onPress={() => {
+          animateHandoffLayout();
+          onToggle();
+        }}
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        style={({ pressed }) => [
+          styles.handoffNotesAccordionHeader,
+          expanded && styles.handoffNotesAccordionHeaderExpanded,
+          pressed && styles.handoffNotesAccordionHeaderPressed,
+        ]}
+      >
+        <Ionicons name="document-text-outline" size={18} color={ui.textSecondary} />
+        <View style={styles.handoffNotesAccordionTitleBlock}>
+          <Text style={styles.handoffNotesAccordionTitle}>{title}</Text>
+          <Text style={styles.handoffNotesAccordionHelper}>{helperCollapsed}</Text>
+        </View>
+        <Animated.View style={{ transform: [{ rotate: chevronSpin }] }}>
+          <Ionicons name="chevron-forward" size={22} color="rgba(51, 65, 85, 0.88)" />
+        </Animated.View>
+      </Pressable>
+      {expanded ? <View style={styles.handoffNotesAccordionBody}>{childrenExpanded}</View> : null}
     </View>
   );
 }
@@ -496,6 +1067,7 @@ function AddNoteInput({
   disabledLabel,
   loading,
   placeholder,
+  maxLength,
 }: {
   value: string;
   onChangeText: (text: string) => void;
@@ -504,6 +1076,7 @@ function AddNoteInput({
   disabledLabel: string;
   loading: boolean;
   placeholder: string;
+  maxLength?: number;
 }) {
   return (
     <View style={styles.noteInputWrap}>
@@ -518,6 +1091,7 @@ function AddNoteInput({
           editable={!disabled}
           textAlignVertical="top"
           returnKeyType="default"
+          maxLength={maxLength}
         />
         <Pressable
           pressOpacityFeedback={false}
@@ -556,6 +1130,11 @@ export default function RentalScreen() {
   const [pickupChecklist, setPickupChecklist] = useState<ChecklistMaps>(() =>
     emptyChecklistMaps(OWNER_PICKUP_ITEMS, RENTER_PICKUP_ITEMS)
   );
+  /** Session-only: renter pickup auto-rows (not persisted). */
+  const [renterPickupViewFlags, setRenterPickupViewFlags] = useState({
+    reviewedOwnerPhotos: false,
+    viewedTimestampProof: false,
+  });
   const [returnChecklist, setReturnChecklist] = useState<ChecklistMaps>(() =>
     emptyChecklistMaps(OWNER_RETURN_ITEMS, RENTER_RETURN_ITEMS)
   );
@@ -584,7 +1163,23 @@ export default function RentalScreen() {
   const [ownerNoteDraft, setOwnerNoteDraft] = useState('');
   const [renterNoteDraft, setRenterNoteDraft] = useState('');
   const [addingOwnerNote, setAddingOwnerNote] = useState(false);
+  const [beginHandoffBusy, setBeginHandoffBusy] = useState(false);
   const [addingRenterNote, setAddingRenterNote] = useState(false);
+  const [ownerHandoffNotesExpanded, setOwnerHandoffNotesExpanded] = useState(false);
+  const [renterHandoffNotesExpanded, setRenterHandoffNotesExpanded] = useState(false);
+  const [pickupChecklistPanelExpanded, setPickupChecklistPanelExpanded] = useState(true);
+  const prevPickupPanelSatisfiedRef = useRef(false);
+  const [ownerHandoffLinkDraft, setOwnerHandoffLinkDraft] = useState('');
+  const [ownerHandoffLinkFieldError, setOwnerHandoffLinkFieldError] = useState<string | null>(null);
+  const [ownerInstructionsAddedVisible, setOwnerInstructionsAddedVisible] = useState(false);
+  const [editingOwnerInstructionId, setEditingOwnerInstructionId] = useState<string | null>(null);
+  /** Trimmed DB `note` when owner entered edit mode; used to disable Save until something changes. */
+  const [ownerInstructionEditBaseline, setOwnerInstructionEditBaseline] = useState<string | null>(null);
+  const [pickupExampleModalVisible, setPickupExampleModalVisible] = useState(false);
+  const mainScrollRef = useRef<ScrollView>(null);
+  const ownerHandoffNoteInputRef = useRef<TextInput>(null);
+  const ownerHandoffLinkInputRef = useRef<TextInput>(null);
+  const editingOwnerInstructionIdRef = useRef<string | null>(null);
   const refreshInFlightRef = useRef<Promise<void> | null>(null);
   const refreshQueuedRef = useRef(false);
   const proposalEditorRef = useRef<RentalDetailsCardHandle | null>(null);
@@ -626,7 +1221,49 @@ export default function RentalScreen() {
     setPickupEvidenceDisplay([]);
     setReturnEvidenceDisplay([]);
     setUploadingEvidence(false);
+    setPickupChecklistPanelExpanded(true);
+    prevPickupPanelSatisfiedRef.current = false;
+    setOwnerHandoffNotesExpanded(false);
+    setRenterHandoffNotesExpanded(false);
+    setOwnerHandoffLinkFieldError(null);
+    setOwnerInstructionsAddedVisible(false);
   }, [rentalId]);
+
+  useEffect(() => {
+    if (!ownerInstructionsAddedVisible) return;
+    const t = setTimeout(() => setOwnerInstructionsAddedVisible(false), 2800);
+    return () => clearTimeout(t);
+  }, [ownerInstructionsAddedVisible]);
+
+  const handoffCompletedEarly = useMemo(() => {
+    if (!rental) return false;
+    const s = String(rental.status ?? 'pending').trim().toLowerCase();
+    return ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(s);
+  }, [rental]);
+
+  const pickupHydrateAsRenter = useMemo(() => {
+    if (!me || !rental) return false;
+    return me === rental.renter_user_id;
+  }, [me, rental]);
+
+  const ownerPickupEvidenceRevision = useMemo(() => {
+    const list = pickupEvidenceDisplay.filter(
+      (p) => normalizePhase(p.phase) === 'pickup' && normalizeRole(p.role) === 'owner'
+    );
+    return computeOwnerPickupEvidenceRevision(list);
+  }, [pickupEvidenceDisplay]);
+
+  useEffect(() => {
+    if (!rentalId || !me || !pickupHydrateAsRenter) return;
+    if (handoffCompletedEarly) return;
+    let cancelled = false;
+    void hydrateRenterPickupViewerFlagsFromEvidence(rentalId, me, ownerPickupEvidenceRevision).then((flags) => {
+      if (!cancelled) setRenterPickupViewFlags(flags);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [rentalId, me, pickupHydrateAsRenter, ownerPickupEvidenceRevision, handoffCompletedEarly]);
 
   useEffect(() => {
     if (!rentalId) return;
@@ -712,8 +1349,8 @@ export default function RentalScreen() {
 
       const mergedP = mergeChecklistMapsFromRows(freshRows, 'pickup');
       setPickupChecklist({
-        owner: fillDefaults(OWNER_PICKUP_ITEMS, mergedP.owner),
-        renter: fillDefaults(RENTER_PICKUP_ITEMS, mergedP.renter),
+        owner: fillDefaults(OWNER_PICKUP_ITEMS, stripPickupAutoFromStored('owner', mergedP.owner)),
+        renter: fillDefaults(RENTER_PICKUP_ITEMS, stripPickupAutoFromStored('renter', mergedP.renter)),
       });
       const mergedR = mergeChecklistMapsFromRows(freshRows, 'return');
       setReturnChecklist({
@@ -740,6 +1377,7 @@ export default function RentalScreen() {
           const uri = await signedUrlForEvidencePath(supabase, row.storage_path);
           const role = normalizeRole(row.role);
           const phase = normalizePhase(row.phase);
+          const pickupPhotoCategory = normalizePickupPhotoCategory(row.pickup_photo_category ?? null);
           if (uri) {
             out.push({
               id: row.id,
@@ -749,6 +1387,7 @@ export default function RentalScreen() {
               phase,
               userId: row.uploaded_by,
               createdAt: row.created_at,
+              pickupPhotoCategory,
             });
           }
         }
@@ -901,6 +1540,17 @@ export default function RentalScreen() {
       const role: PartyRole =
         me === rental.owner_user_id ? 'owner' : me === rental.renter_user_id ? 'renter' : 'renter';
 
+      const pickupPhotoCategory: PickupPhotoCategory | null | undefined = sess.pickupPhotoCategory;
+      if (phase === 'pickup' && role === 'owner' && pickupPhotoCategory == null) {
+        setRentalEvidenceSession(null);
+        setCapturedPhotoUris([]);
+        Alert.alert(
+          'Category required',
+          'Open the camera from Item, Serial, Verification, or Additional so each photo is saved to the right group.'
+        );
+        return;
+      }
+
       setRentalEvidenceSession(null);
       const uris = [...capturedPhotoUris];
       setCapturedPhotoUris([]);
@@ -928,6 +1578,8 @@ export default function RentalScreen() {
               userId: me,
               role,
               localUri: uri,
+              pickupPhotoCategory:
+                phase === 'pickup' && role === 'owner' ? pickupPhotoCategory ?? null : null,
             });
             if (!res.ok) {
               failures.push({
@@ -952,8 +1604,11 @@ export default function RentalScreen() {
             void displayUri;
           }
           if (failures.length > 0) {
+            const schemaMissing = failures.some((f) => f.code === 'pickup_category_schema_missing');
             const allBucketMissing = failures.every((f) => f.code === 'bucket_missing');
-            if (allBucketMissing) {
+            if (schemaMissing) {
+              Alert.alert('Upload unavailable', PHOTO_UPLOAD_PICKUP_CATEGORY_SCHEMA_MESSAGE);
+            } else if (allBucketMissing) {
               Alert.alert('Rental evidence storage', RENTAL_EVIDENCE_BUCKET_MISSING_MESSAGE);
             } else {
               const lines = failures.map((f) => `• Photo ${f.index}: ${f.detail}`);
@@ -986,6 +1641,20 @@ export default function RentalScreen() {
   const viewerPhotos = photoViewerPhase === 'pickup' ? pickupEvidenceDisplay : returnEvidenceDisplay;
   const viewerPhoto = viewerPhotos[photoViewerIndex] ?? null;
   const viewerSourceUri = viewerPhoto?.signedUrl ?? null;
+  const viewerGallerySlideLabel = useCallback(
+    (i: number) => {
+      const list = photoViewerPhase === 'pickup' ? pickupEvidenceDisplay : returnEvidenceDisplay;
+      const p = list[i];
+      if (photoViewerPhase === 'return') return 'Return';
+      const c = normalizePickupPhotoCategory(p?.pickupPhotoCategory ?? null);
+      if (c === 'item') return 'Item';
+      if (c === 'serial') return 'Serial';
+      if (c === 'timestamp_proof') return 'Verification Photo';
+      if (c === 'additional') return 'Extra';
+      return 'Photo';
+    },
+    [photoViewerPhase, pickupEvidenceDisplay, returnEvidenceDisplay]
+  );
   useEffect(() => {
     if (!photoViewerVisible) return;
     setViewerImageError(null);
@@ -1193,6 +1862,134 @@ export default function RentalScreen() {
     setReturnExpanded(!returnDoneNow);
   }, [me, rental, request?.accepted_price, request?.acceptedPrice]);
 
+  const viewerRoleForHooks: 'owner' | 'renter' | null =
+    me && rental
+      ? me === rental.owner_user_id
+        ? 'owner'
+        : me === rental.renter_user_id
+          ? 'renter'
+          : 'renter'
+      : null;
+
+  useEffect(() => {
+    if (!photoViewerVisible || photoViewerPhase !== 'pickup') return;
+    if (viewerRoleForHooks !== 'renter') return;
+    if (!rentalId || !me) return;
+    if (handoffCompletedEarly) return;
+    const photo = pickupEvidenceDisplay[photoViewerIndex];
+    if (!photo || normalizeRole(photo.role) !== 'owner') return;
+    setRenterPickupViewFlags((f) => {
+      const reviewedOwnerPhotos = true;
+      const viewedTimestampProof =
+        f.viewedTimestampProof || normalizePickupPhotoCategory(photo.pickupPhotoCategory) === 'timestamp_proof';
+      if (f.reviewedOwnerPhotos === reviewedOwnerPhotos && f.viewedTimestampProof === viewedTimestampProof) return f;
+      const next = { reviewedOwnerPhotos, viewedTimestampProof };
+      void saveRenterPickupViewerFlags(rentalId, me, next, ownerPickupEvidenceRevision);
+      return next;
+    });
+  }, [
+    photoViewerVisible,
+    photoViewerIndex,
+    photoViewerPhase,
+    pickupEvidenceDisplay,
+    viewerRoleForHooks,
+    rentalId,
+    me,
+    handoffCompletedEarly,
+    ownerPickupEvidenceRevision,
+  ]);
+
+  const pickupChecklistCollapseModel = useMemo(() => {
+    if (!rentalId || !rental) return null;
+    const rentalStatus = String(rental.status ?? 'pending').trim().toLowerCase();
+    const handoffCompleted = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
+      rentalStatus
+    );
+    const viewerRoleForCollapse: 'owner' | 'renter' =
+      me && me === rental.owner_user_id
+        ? 'owner'
+        : me && me === rental.renter_user_id
+          ? 'renter'
+          : 'renter';
+    const ownerPickupPhotos = pickupEvidenceDisplay.filter(
+      (p) => normalizePhase(p.phase) === 'pickup' && normalizeRole(p.role) === 'owner'
+    );
+    const ownerPickupDoneEffective = buildOwnerPickupDoneEffective(pickupChecklist.owner, ownerPickupPhotos);
+    const renterPickupDoneEffective = buildRenterPickupDoneEffective(
+      pickupChecklist.renter,
+      renterPickupViewFlags,
+      pickupAck.renter,
+      handoffCompleted
+    );
+    const ownerPickupChecklistRequiredDone = allRequiredPickupItemsDone(
+      OWNER_PICKUP_ITEMS as readonly ChecklistItemDef[],
+      ownerPickupDoneEffective
+    );
+    const renterPickupChecklistRequiredDone = allRequiredPickupItemsDone(
+      RENTER_PICKUP_ITEMS as readonly ChecklistItemDef[],
+      renterPickupDoneEffective
+    );
+    const ownerPickupPhotoRequirementMet = ownerPickupPhotoTargetsMet(ownerPickupPhotos);
+    const myRow = verificationRows.find((r) => r.phase === 'pickup' && r.role === viewerRoleForCollapse);
+    const pickupConfirmedForViewer = Boolean(myRow?.confirmed) || handoffCompleted;
+    const pickupPrepOrVerificationComplete =
+      viewerRoleForCollapse === 'owner'
+        ? ownerPickupChecklistRequiredDone && ownerPickupPhotoRequirementMet
+        : renterPickupChecklistRequiredDone;
+    return { pickupConfirmedForViewer, pickupPrepOrVerificationComplete };
+  }, [
+    rentalId,
+    rental,
+    me,
+    pickupChecklist,
+    pickupEvidenceDisplay,
+    verificationRows,
+    pickupAck.renter,
+    renterPickupViewFlags,
+  ]);
+
+  useEffect(() => {
+    if (!pickupChecklistCollapseModel) return;
+    const { pickupConfirmedForViewer, pickupPrepOrVerificationComplete: satisfied } = pickupChecklistCollapseModel;
+    if (pickupConfirmedForViewer) {
+      prevPickupPanelSatisfiedRef.current = false;
+      return;
+    }
+    const prev = prevPickupPanelSatisfiedRef.current;
+    if (satisfied && !prev) {
+      animateHandoffLayout();
+      setPickupChecklistPanelExpanded(false);
+    }
+    if (!satisfied && prev) {
+      animateHandoffLayout();
+      setPickupChecklistPanelExpanded(true);
+    }
+    prevPickupPanelSatisfiedRef.current = satisfied;
+  }, [pickupChecklistCollapseModel]);
+
+  const ownerInstructionCombinedBuilt = useMemo(
+    () => tryBuildOwnerInstructionCombined(ownerNoteDraft, ownerHandoffLinkDraft),
+    [ownerNoteDraft, ownerHandoffLinkDraft]
+  );
+
+  useEffect(() => {
+    editingOwnerInstructionIdRef.current = editingOwnerInstructionId;
+  }, [editingOwnerInstructionId]);
+
+  useEffect(() => {
+    if (!editingOwnerInstructionId || !ownerHandoffNotesExpanded) return;
+    const t1 = setTimeout(() => {
+      mainScrollRef.current?.scrollToEnd({ animated: true });
+    }, 220);
+    const t2 = setTimeout(() => {
+      ownerHandoffNoteInputRef.current?.focus();
+    }, 480);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [editingOwnerInstructionId, ownerHandoffNotesExpanded]);
+
   if (!rentalId) {
     return (
       <View style={styles.centered}>
@@ -1364,9 +2161,7 @@ export default function RentalScreen() {
   };
   const pickupItems = viewerRole === 'owner' ? OWNER_PICKUP_ITEMS : RENTER_PICKUP_ITEMS;
   const returnItems = viewerRole === 'owner' ? OWNER_RETURN_ITEMS : RENTER_RETURN_ITEMS;
-  const pickupDoneForRole = pickupChecklist[viewerRole];
   const returnDoneForRole = returnChecklist[viewerRole];
-  const allPickupItemsDone = allItemsDone(pickupItems, pickupDoneForRole);
   const allReturnItemsDone = allItemsDone(returnItems, returnDoneForRole);
   const [pickupChecklistLeft, pickupChecklistRight] = splitForTwoColumns(
     pickupItems as readonly ChecklistItemDef[]
@@ -1402,22 +2197,23 @@ export default function RentalScreen() {
   const renterNotesLocked = ['returned', 'completed', 'cancelled'].includes(rentalStatus);
   const ownerInputDisabled = viewerRole !== 'owner' || ownerNotesLocked;
   const renterInputDisabled = viewerRole !== 'renter' || !renterNotesEnabled || renterNotesLocked;
+  const myPickupVerificationRow = verificationRows.find(
+    (r) => r.phase === 'pickup' && r.role === viewerRole
+  );
+  const pickupConfirmedForViewer = Boolean(myPickupVerificationRow?.confirmed) || handoffCompleted;
+  const ownerHandoffComposerLocked = ownerInputDisabled;
+  const ownerInstructionDirty =
+    !editingOwnerInstructionId ||
+    ownerInstructionEditBaseline === null ||
+    (ownerInstructionCombinedBuilt.ok &&
+      ownerInstructionCombinedBuilt.combined.trim() !== ownerInstructionEditBaseline.trim());
+  const canSubmitOwnerInstructions =
+    !ownerHandoffComposerLocked &&
+    !addingOwnerNote &&
+    ownerInstructionCombinedBuilt.ok &&
+    ownerInstructionDirty;
   const ownerNotes = rentalNotes.filter((n) => n.author_role === 'owner');
   const renterNotes = rentalNotes.filter((n) => n.author_role === 'renter');
-  const ownerPickupChecklistDone = allItemsDone(
-    OWNER_PICKUP_ITEMS,
-    fillDefaults(
-      OWNER_PICKUP_ITEMS,
-      verificationRows.find((r) => r.phase === 'pickup' && r.role === 'owner')?.checklist_state ?? {}
-    )
-  );
-  const renterPickupChecklistDone = allItemsDone(
-    RENTER_PICKUP_ITEMS,
-    fillDefaults(
-      RENTER_PICKUP_ITEMS,
-      verificationRows.find((r) => r.phase === 'pickup' && r.role === 'renter')?.checklist_state ?? {}
-    )
-  );
   const ownerReturnChecklistDone = allItemsDone(
     OWNER_RETURN_ITEMS,
     fillDefaults(
@@ -1435,23 +2231,43 @@ export default function RentalScreen() {
   const ownerPickupPhotos = pickupEvidenceDisplay.filter(
     (p) => normalizePhase(p.phase) === 'pickup' && normalizeRole(p.role) === 'owner'
   );
-  const renterPickupPhotos = pickupEvidenceDisplay.filter(
-    (p) => normalizePhase(p.phase) === 'pickup' && normalizeRole(p.role) === 'renter'
-  );
+  const ownerPickupBuckets = bucketOwnerPickupPhotos(ownerPickupPhotos);
   const renterReturnPhotos = returnEvidenceDisplay.filter(
     (p) => normalizePhase(p.phase) === 'return' && normalizeRole(p.role) === 'renter'
   );
-  const ownerPickupPhotoRequirementMet = ownerPickupPhotos.length >= REQUIRED_PICKUP_PHOTOS;
+  const ownerPickupDoneEffective = buildOwnerPickupDoneEffective(pickupChecklist.owner, ownerPickupPhotos);
+  const renterPickupDoneEffective = buildRenterPickupDoneEffective(
+    pickupChecklist.renter,
+    renterPickupViewFlags,
+    pickupAck.renter,
+    handoffCompleted
+  );
+  const pickupDoneEffectiveForViewer =
+    viewerRole === 'owner' ? ownerPickupDoneEffective : renterPickupDoneEffective;
+  const ownerPickupChecklistRequiredDone = allRequiredPickupItemsDone(
+    OWNER_PICKUP_ITEMS as readonly ChecklistItemDef[],
+    ownerPickupDoneEffective
+  );
+  const renterPickupChecklistRequiredDone = allRequiredPickupItemsDone(
+    RENTER_PICKUP_ITEMS as readonly ChecklistItemDef[],
+    renterPickupDoneEffective
+  );
+  const ownerPickupPhotoRequirementMet = ownerPickupPhotoTargetsMet(ownerPickupPhotos);
   const renterReturnPhotoRequirementMet = renterReturnPhotos.length >= REQUIRED_RETURN_PHOTOS;
-  const bilateralPickupReady = ownerPickupChecklistDone && ownerPickupPhotoRequirementMet && renterPickupChecklistDone;
+  const bilateralPickupReady =
+    ownerPickupChecklistRequiredDone &&
+    renterPickupChecklistRequiredDone &&
+    ownerPickupPhotoRequirementMet;
   const returnReady = renterReturnChecklistDone && renterReturnPhotoRequirementMet && ownerReturnChecklistDone;
   const handoffApprovalStarted = Boolean(rental.handoff_approval_started_at || rental.handoff_approved_by_owner);
   const handoffApprovedByRenter = Boolean(rental.handoff_approved_by_renter);
-  const canBeginHandoff =
+  /** Single source of truth: owner may tap "Confirm Item Ready" (starts handoff approval for renter). Renter must not be required to confirm first. */
+  const canOwnerConfirmPickupReady =
     viewerRole === 'owner' &&
     bilateralPickupReady &&
     lifecyclePhase === 'pickup' &&
-    !handoffApprovalStarted;
+    !handoffApprovalStarted &&
+    !handoffCompleted;
   const canRenterFinalizeHandoff =
     viewerRole === 'renter' &&
     lifecyclePhase === 'pickup' &&
@@ -1484,42 +2300,52 @@ export default function RentalScreen() {
     setPhotoViewerIndex(index);
     setPhotoViewerVisible(true);
   };
-  const canDeletePhoto = (photo: { role?: PartyRole; phase?: VerificationPhase }): boolean => {
-    const role = normalizeRole(photo.role);
+  const canDeletePhoto = (photo: { role?: PartyRole; phase?: VerificationPhase; userId?: string }): boolean => {
+    if (!me) return false;
+    const uploader = typeof photo.userId === 'string' ? photo.userId.trim() : '';
+    if (!uploader || uploader !== me.trim()) return false;
     const phase = normalizePhase(photo.phase);
-    if (!role || !phase) return false;
-    if (phase === 'pickup') return viewerRole === 'owner' && role === 'owner' && !handoffCompleted;
-    return viewerRole === 'renter' && role === 'renter' && !returnCompleted;
+    if (!phase) return false;
+    if (phase === 'pickup') {
+      if (handoffCompleted) return false;
+      return true;
+    }
+    if (phase === 'return') return !returnCompleted;
+    return false;
   };
-  const onDeletePhoto = async (photo: PhotoDisplay) => {
-    if (!canDeletePhoto(photo)) return;
-    Alert.alert('Delete photo', 'This evidence photo will be removed permanently.', [
+
+  const confirmDeletePhoto = (photo: PhotoDisplay) => {
+    if (!me || !canDeletePhoto(photo)) return;
+    Alert.alert('Delete this photo?', 'This action cannot be undone.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          const dbResult = await deleteVerificationPhotoById(supabase, photo.id);
-          if (!dbResult.ok) {
-            if (__DEV__) console.warn('[verification mutation] photo delete failed', { photoId: photo.id, error: dbResult.error });
-            Alert.alert('Could not delete photo', dbResult.error ?? 'Please try again.');
+          const res = await deleteRentalEvidencePhoto({
+            client: supabase,
+            photoId: photo.id,
+            uploadedByUserId: photo.userId ?? '',
+            actorUserId: me,
+            storagePath: photo.path,
+          });
+          if (!res.ok) {
+            if (__DEV__) {
+              console.warn('[verification mutation] photo delete failed', { photoId: photo.id, error: res.error });
+            }
+            Alert.alert('Could not delete photo', res.error);
             return;
           }
-          if (photo.path) {
-            const { error } = await supabase.storage.from('rental-evidence').remove([photo.path]);
-            if (__DEV__ && error) {
-              console.warn('[verification mutation] photo storage delete failed', { photoId: photo.id, error });
-            }
-          }
           if (__DEV__) console.log('[verification mutation] photo delete ok', { photoId: photo.id });
+          setPhotoViewerVisible(false);
           await refreshVerificationState();
         },
       },
     ]);
   };
 
-  const addNote = async (role: RentalNoteRole, note: string) => {
-    if (!me || !rental?.id) return;
+  const addNote = async (role: RentalNoteRole, note: string): Promise<boolean> => {
+    if (!me || !rental?.id) return false;
     const phase = role === 'owner' ? 'pre_handoff' : 'active_rental';
     const { error } = await insertRentalNote(supabase, {
       rentalId: rental.id,
@@ -1533,7 +2359,7 @@ export default function RentalScreen() {
           console.warn('[verification mutation] note insert failed', { rentalId: rental.id, role, phase, error });
         }
       Alert.alert('Could not add note', error);
-      return;
+      return false;
     }
     if (__DEV__) {
       console.log('[verification mutation] note insert ok', { rentalId: rental.id, role, phase });
@@ -1541,14 +2367,99 @@ export default function RentalScreen() {
     const rows = await fetchRentalNotes(supabase, rental.id);
     setRentalNotes(rows);
     await refreshVerificationState();
+    return true;
   };
 
-  const onAddOwnerNote = async () => {
-    if (ownerInputDisabled || ownerNoteDraft.trim() === '') return;
+  const cancelEditOwnerInstruction = () => {
+    setEditingOwnerInstructionId(null);
+    setOwnerInstructionEditBaseline(null);
+    setOwnerNoteDraft('');
+    setOwnerHandoffLinkDraft('');
+    setOwnerHandoffLinkFieldError(null);
+    setOwnerInstructionsAddedVisible(false);
+  };
+
+  const onSaveOwnerInstruction = async () => {
+    if (!canSubmitOwnerInstructions || !rental?.id) return;
+    const built = tryBuildOwnerInstructionCombined(ownerNoteDraft, ownerHandoffLinkDraft);
+    if (!built.ok) {
+      if (ownerHandoffLinkDraft.trim() !== '') {
+        setOwnerHandoffLinkFieldError('Enter a valid URL (e.g. youtube.com/…)');
+      }
+      return;
+    }
+    const combined = built.combined;
+
+    setOwnerHandoffLinkFieldError(null);
+    setOwnerInstructionsAddedVisible(false);
     setAddingOwnerNote(true);
     try {
-      await addNote('owner', ownerNoteDraft);
-      setOwnerNoteDraft('');
+      if (editingOwnerInstructionId) {
+        const { error } = await updateRentalNote(supabase, {
+          noteId: editingOwnerInstructionId,
+          note: combined,
+        });
+        if (error) {
+          Alert.alert('Could not save changes', error);
+          return;
+        }
+        if (__DEV__) {
+          console.log('[verification mutation] owner instruction update ok', {
+            rentalId: rental.id,
+            noteId: editingOwnerInstructionId,
+          });
+        }
+        Keyboard.dismiss();
+        setEditingOwnerInstructionId(null);
+        setOwnerInstructionEditBaseline(null);
+        setOwnerNoteDraft('');
+        setOwnerHandoffLinkDraft('');
+        setOwnerInstructionsAddedVisible(true);
+        const rows = await fetchRentalNotes(supabase, rental.id);
+        setRentalNotes(rows);
+        await refreshVerificationState();
+        return;
+      }
+
+      const ok = await addNote('owner', combined);
+      if (ok) {
+        Keyboard.dismiss();
+        setOwnerNoteDraft('');
+        setOwnerHandoffLinkDraft('');
+        setOwnerInstructionsAddedVisible(true);
+      }
+    } finally {
+      setAddingOwnerNote(false);
+    }
+  };
+
+  const applyRemoveLinkFromOwnerInstruction = async (noteId: string, url: string) => {
+    if (!rental?.id || ownerHandoffComposerLocked) return;
+    const note = rentalNotes.find((n) => n.id === noteId);
+    if (!note) return;
+    const next = rebuildOwnerHandoffNoteRemovingLink(note.note, url);
+    if (!next) {
+      Alert.alert('Cannot remove link', 'Add note text first, or delete the whole instruction.');
+      return;
+    }
+    setAddingOwnerNote(true);
+    try {
+      const { error } = await updateRentalNote(supabase, { noteId, note: next });
+      if (error) {
+        Alert.alert('Could not update instruction', error);
+        return;
+      }
+      animateHandoffLayout();
+      const rows = await fetchRentalNotes(supabase, rental.id);
+      setRentalNotes(rows);
+      const updated = rows.find((r) => r.id === noteId);
+      if (updated && editingOwnerInstructionIdRef.current === noteId) {
+        setOwnerInstructionEditBaseline(updated.note.trim());
+        const parsed = parseOwnerHandoffNoteContent(updated.note);
+        setOwnerNoteDraft(parsed.body.slice(0, 300));
+        setOwnerHandoffLinkDraft(parsed.links[0]?.url ?? '');
+      }
+      await refreshVerificationState();
     } finally {
       setAddingOwnerNote(false);
     }
@@ -1566,11 +2477,15 @@ export default function RentalScreen() {
   };
 
   const togglePickupItem = (id: string) => {
-    if (!me) return;
+    if (!me || handoffCompleted) return;
+    const defs = viewerRole === 'owner' ? OWNER_PICKUP_ITEMS : RENTER_PICKUP_ITEMS;
+    const def = defs.find((i) => i.id === id);
+    if (def?.control === 'auto') return;
     const nextMap = { ...pickupChecklist[viewerRole], [id]: !pickupChecklist[viewerRole][id] };
+    const toPersist = manualPickupMapOnly(viewerRole, nextMap);
     void (async () => {
       try {
-        await persistChecklistState(supabase, rental.id, 'pickup', me, nextMap);
+        await persistChecklistState(supabase, rental.id, 'pickup', me, toPersist);
         if (__DEV__) console.log('[verification mutation] pickup checklist update ok', { rentalId: rental.id, itemId: id });
         await refreshVerificationState();
       } catch (error) {
@@ -1593,10 +2508,12 @@ export default function RentalScreen() {
     })();
   };
 
-  const persistReadinessFlags = async (overrides?: Partial<RentalRow>) => {
+  const persistReadinessFlags = async (
+    overrides?: Partial<RentalRow>
+  ): Promise<{ ok: true } | { ok: false; error: PostgrestError }> => {
     const payload: Partial<RentalRow> = {
-      owner_pickup_ready: ownerPickupChecklistDone && ownerPickupPhotoRequirementMet,
-      renter_pickup_ready: renterPickupChecklistDone,
+      owner_pickup_ready: ownerPickupChecklistRequiredDone && ownerPickupPhotoRequirementMet,
+      renter_pickup_ready: renterPickupChecklistRequiredDone,
       owner_return_ready: ownerReturnChecklistDone,
       renter_return_ready: renterReturnChecklistDone && renterReturnPhotoRequirementMet,
       ...(overrides ?? {}),
@@ -1606,8 +2523,12 @@ export default function RentalScreen() {
       if (error) console.warn('[verification mutation] readiness/status update failed', { rentalId: rental.id, payload, error });
       else console.log('[verification mutation] readiness/status update ok', { rentalId: rental.id, payload });
     }
+    if (error) {
+      return { ok: false, error };
+    }
     if (data) setRental(data as RentalRow);
     await refreshVerificationState();
+    return { ok: true };
   };
 
   const onReportIssue = () => {
@@ -1626,7 +2547,8 @@ export default function RentalScreen() {
   };
 
   const onConfirmPickup = () => {
-    if (!allPickupItemsDone || !me) return;
+    if (!me) return;
+    if (!allRequiredPickupItemsDone(pickupItems, pickupDoneEffectiveForViewer)) return;
     Alert.alert(
       'Record pickup confirmation',
       'This records your side of pickup. The rental advances once both parties have confirmed.',
@@ -1674,22 +2596,49 @@ export default function RentalScreen() {
   };
 
   const onBeginHandoffApproval = async () => {
-    if (!me || viewerRole !== 'owner' || !canBeginHandoff) return;
-    const holdReplacementValue =
-      typeof rental.replacement_value === 'number' ? rental.replacement_value : Math.max(finalPrice * 3, 150);
-    const holdPreauthAmount = calculatePreauthAmount(holdReplacementValue);
-    const holdLateFee = rental.daily_late_fee ?? Math.max(10, Math.round(finalPrice * 0.1));
-    const holdMaxLateFeeCap = rental.max_late_fee_cap ?? Math.max(holdLateFee, holdLateFee * 7);
-    await persistReadinessFlags({
-      handoff_approved_by_owner: true,
-      handoff_approval_started_at: new Date().toISOString(),
-      replacement_value: holdReplacementValue,
-      preauth_amount: holdPreauthAmount,
-      preauth_status: 'pending',
-      daily_late_fee: holdLateFee,
-      max_late_fee_cap: holdMaxLateFeeCap,
-      grace_period_hours: rental.grace_period_hours ?? 2,
-    });
+    if (!me || viewerRole !== 'owner' || !canOwnerConfirmPickupReady || beginHandoffBusy) {
+      if (__DEV__) {
+        console.warn('[pickup] onBeginHandoffApproval blocked', {
+          hasMe: Boolean(me),
+          viewerRole,
+          canOwnerConfirmPickupReady,
+          beginHandoffBusy,
+          bilateralPickupReady,
+          lifecyclePhase,
+          handoffApprovalStarted,
+          handoffCompleted,
+        });
+      }
+      return;
+    }
+    setBeginHandoffBusy(true);
+    try {
+      const holdReplacementValue =
+        typeof rental.replacement_value === 'number' ? rental.replacement_value : Math.max(finalPrice * 3, 150);
+      const holdPreauthAmount = calculatePreauthAmount(holdReplacementValue);
+      const holdLateFee = rental.daily_late_fee ?? Math.max(10, Math.round(finalPrice * 0.1));
+      const holdMaxLateFeeCap = rental.max_late_fee_cap ?? Math.max(holdLateFee, holdLateFee * 7);
+      const result = await persistReadinessFlags({
+        handoff_approved_by_owner: true,
+        handoff_approval_started_at: new Date().toISOString(),
+        replacement_value: holdReplacementValue,
+        preauth_amount: holdPreauthAmount,
+        preauth_status: 'pending',
+        daily_late_fee: holdLateFee,
+        max_late_fee_cap: holdMaxLateFeeCap,
+        grace_period_hours: rental.grace_period_hours ?? 2,
+      });
+      if (!result.ok) {
+        const fmt = formatSupabaseMutationFailure(result.error, {
+          path: 'rentals.update.persistReadinessFlags.ownerConfirmReady',
+          table: 'rentals',
+        });
+        if (__DEV__) console.warn(fmt.devLog);
+        Alert.alert('Could not confirm item ready', fmt.userBody);
+      }
+    } finally {
+      setBeginHandoffBusy(false);
+    }
   };
 
   const onRenterSignAndAuthorize = async () => {
@@ -1729,7 +2678,7 @@ export default function RentalScreen() {
       Alert.alert('Could not finalize agreement', snapshot.error ?? 'Please try again.');
       return;
     }
-    await persistReadinessFlags({
+    const handoffResult = await persistReadinessFlags({
       handoff_approved_by_renter: true,
       signed_name: normalizedSignedName,
       signed_at: signedAt,
@@ -1738,6 +2687,15 @@ export default function RentalScreen() {
       preauth_authorized_at: signedAt,
       status: 'handed_off',
     });
+    if (!handoffResult.ok) {
+      const fmt = formatSupabaseMutationFailure(handoffResult.error, {
+        path: 'rentals.update.persistReadinessFlags.renterFinalizeHandoff',
+        table: 'rentals',
+      });
+      if (__DEV__) console.warn(fmt.devLog);
+      Alert.alert('Could not finalize handoff', fmt.userBody);
+      return;
+    }
     setAgreementModalVisible(false);
     setSignatureName('');
     setAgreementConsent(false);
@@ -1813,10 +2771,19 @@ export default function RentalScreen() {
     );
   };
 
-  const openEvidenceCamera = (phase: VerificationPhase) => {
+  const openEvidenceCamera = (phase: VerificationPhase, pickupCategory?: PickupPhotoCategory) => {
     if (!me) return;
-    if (phase === 'pickup' && !canUploadPickup) {
-      Alert.alert('Pickup photos locked', pickupWindow.helperText ?? 'Pickup photo upload is not available yet.');
+    if (phase === 'pickup' && viewerRole === 'renter') return;
+    if (phase === 'pickup' && viewerRole === 'owner' && !pickupCategory) {
+      return;
+    }
+    if (phase === 'pickup' && viewerRole === 'owner' && !canUploadPickup) {
+      Alert.alert(
+        'Pickup photos locked',
+        handoffCompleted
+          ? 'Pickup is complete. Evidence is read-only.'
+          : pickupWindow.helperText ?? 'Pickup photo upload is not available yet.'
+      );
       return;
     }
     if (phase === 'return' && !canUploadReturn) {
@@ -1832,9 +2799,79 @@ export default function RentalScreen() {
     }
     const st = useCameraSessionStore.getState();
     st.setCapturedPhotoUris([]);
-    st.setRentalEvidenceSession({ rentalId: rental.id, phase });
+    st.setRentalEvidenceSession({
+      rentalId: rental.id,
+      phase,
+      pickupPhotoCategory:
+        phase === 'pickup' && viewerRole === 'owner' ? pickupCategory ?? null : null,
+    });
     router.push('/camera');
   };
+
+  const pickupRequiredEntries = pickupItems.filter(
+    (i: ChecklistItemDef) => i.required !== false
+  );
+  const pickupRequiredDoneCount = pickupRequiredEntries.filter((i) => pickupDoneEffectiveForViewer[i.id]).length;
+
+  const pickupConfirmedAt = myPickupVerificationRow?.confirmed_at ?? null;
+  const { pickupPrepOrVerificationComplete } = pickupChecklistCollapseModel!;
+
+  const openPickupPhotoById = (id: string) => {
+    const idx = pickupEvidenceDisplay.findIndex((p) => p.id === id);
+    if (idx >= 0) openPhotoViewer('pickup', idx);
+  };
+
+  let pickupPrimaryLabel = '';
+  let pickupPrimaryDisabled = true;
+  let pickupPrimaryFootnote = '';
+  let pickupPrimaryOnPress: (() => void) | undefined;
+
+  if (viewerRole === 'owner') {
+    pickupPrimaryLabel = beginHandoffBusy ? 'Saving…' : 'Confirm Item Ready';
+    pickupPrimaryDisabled = !canOwnerConfirmPickupReady || beginHandoffBusy;
+    pickupPrimaryOnPress = () => void onBeginHandoffApproval();
+    const ownerPickupPrepComplete =
+      ownerPickupChecklistRequiredDone && ownerPickupPhotoRequirementMet;
+    pickupPrimaryFootnote = pickupPrimaryDisabled
+      ? !ownerPickupPrepComplete
+        ? 'Upload condition, serial, and verification photos, finish your prep checklist, then wait for the renter to confirm receipt.'
+        : !bilateralPickupReady
+          ? 'Both you and the renter must finish the pickup checklists before you can confirm.'
+          : handoffCompleted
+            ? 'Pickup is already complete for this rental.'
+            : handoffApprovalStarted
+              ? 'Handoff approval has already started — continue in chat or refresh if this looks wrong.'
+              : ''
+      : '';
+  } else if (canRenterFinalizeHandoff) {
+    pickupPrimaryLabel = 'Sign & authorize';
+    pickupPrimaryDisabled = false;
+    pickupPrimaryOnPress = () => setAgreementModalVisible(true);
+    pickupPrimaryFootnote = '';
+  } else if (!pickupAck.renter) {
+    pickupPrimaryLabel = 'Confirm Item Received';
+    const reqDone = allRequiredPickupItemsDone(pickupItems, pickupDoneEffectiveForViewer);
+    pickupPrimaryDisabled = !reqDone;
+    pickupPrimaryOnPress = () => onConfirmPickup();
+    pickupPrimaryFootnote = pickupPrimaryDisabled
+      ? 'Complete your checklist after reviewing the owner’s photos and any optional evidence note.'
+      : '';
+  } else {
+    pickupPrimaryLabel = 'Waiting for owner approval';
+    pickupPrimaryDisabled = true;
+    pickupPrimaryFootnote = 'The owner will confirm that the item is ready next.';
+    pickupPrimaryOnPress = undefined;
+  }
+
+  const showPickupEvidenceExamplePanel = !handoffCompleted && !pickupConfirmedForViewer;
+  const ownerItemPhotosComplete = ownerPickupBuckets.item.length >= 1;
+  const ownerSerialPhotoComplete = ownerPickupBuckets.serial.length >= 1;
+  const ownerTimestampPhotoComplete = ownerPickupBuckets.timestampProof.length >= 1;
+
+  const pickupRequirementsBannerText =
+    viewerRole === 'renter'
+      ? 'Skim the photos, then confirm pickup when everything looks right.'
+      : 'Upload condition, serial, and verification photos, finish your prep checklist, then wait for the renter to confirm receipt.';
 
   const actionFooter = (
     <>
@@ -1859,12 +2896,14 @@ export default function RentalScreen() {
     <View style={styles.screen}>
       <StatusBar style="dark" backgroundColor={ui.surfaceStriped} />
       <ScreenEntrance style={styles.entranceFlex}>
-        <ScrollView
+        <AppKeyboardAwareScrollView
+          ref={mainScrollRef}
           style={styles.container}
           contentContainerStyle={[
             styles.scrollContent,
             { paddingHorizontal: scrollPadH, paddingTop: insets.top + 12, paddingBottom: insets.bottom + 28 },
           ]}
+          bottomOffset={insets.bottom + 24}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           bounces
@@ -2215,105 +3254,794 @@ export default function RentalScreen() {
                 </Pressable>
                 {!pickupExpanded ? (
                   <>
-                    <Text style={styles.verificationCollapsedLine}>✓ Pickup workflow complete</Text>
-                    <Text style={styles.verificationCollapsedMeta}>
-                      {pickupEvidenceDisplay.length > 0
-                        ? `· ${pickupEvidenceDisplay.length} photo${pickupEvidenceDisplay.length === 1 ? '' : 's'} documented`
-                        : '· No photos uploaded yet'}
+                    {pickupConfirmedForViewer ? (
+                      <>
+                        <Text style={styles.verificationCollapsedLine}>✅ Pickup confirmed</Text>
+                        <Text style={styles.verificationCollapsedMeta}>
+                          {pickupConfirmedAt
+                            ? `Confirmed ${formatCompactDateTime(pickupConfirmedAt)}`
+                            : 'Your confirmation is on file'}
+                        </Text>
+                      </>
+                    ) : (
+                      <>
+                        <Text style={styles.verificationCollapsedLine}>
+                          {viewerRole === 'owner'
+                            ? 'Prepare and document the item'
+                            : 'Review and verify before accepting'}
+                        </Text>
+                        <Text style={styles.verificationCollapsedMeta}>
+                          {viewerRole === 'owner'
+                            ? ownerPickupPhotos.length > 0
+                              ? `${ownerPickupPhotos.length} owner photo${ownerPickupPhotos.length === 1 ? '' : 's'} · checklist`
+                              : 'Add photos and complete your checklist'
+                            : ownerPickupPhotos.length > 0
+                              ? `${ownerPickupPhotos.length} photo${ownerPickupPhotos.length === 1 ? '' : 's'} from owner · your checklist`
+                              : 'Waiting on owner photos — then confirm receipt'}
+                        </Text>
+                      </>
+                    )}
+                  </>
+                ) : handoffCompleted ? (
+                  <View style={styles.handoffConfirmedSummary}>
+                    <Text style={styles.handoffConfirmedTitle}>✅ Pickup confirmed</Text>
+                    <Text style={styles.handoffConfirmedMeta}>
+                      {pickupConfirmedAt ? formatCompactDateTime(pickupConfirmedAt) : 'Recorded'}
                     </Text>
-                    <Text style={styles.verificationCollapsedMeta}>· Owner notes locked</Text>
+                    <Text style={styles.handoffConfirmedLock}>Evidence and notes are locked.</Text>
+                  </View>
+                ) : viewerRole === 'owner' ? (
+                  <>
+                    <View style={styles.handoffSection}>
+                      <View style={styles.handoffSectionTitleRow}>
+                        <Ionicons name="shield-checkmark" size={18} color="#166534" />
+                        <Text style={styles.handoffSectionTitle}>Verification Photos</Text>
+                      </View>
+                      <Text style={styles.handoffSectionHelper}>
+                        Each tile saves to a fixed category so nothing gets mixed up. Preview below matches what the
+                        renter sees.
+                      </Text>
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.handoffTileScroll}
+                      >
+                        <Pressable
+                          pressOpacityFeedback={false}
+                          disabled={!canUploadPickup}
+                          onPress={() => openEvidenceCamera('pickup', 'item')}
+                          style={({ pressed }) => [
+                            styles.handoffPhotoTile,
+                            ownerItemPhotosComplete && styles.handoffPhotoTileHighlight,
+                            pressed && { opacity: 0.92 },
+                          ]}
+                        >
+                          {ownerItemPhotosComplete ? (
+                            <Ionicons name="checkmark-circle" size={24} color="#16a34a" />
+                          ) : (
+                            <Ionicons name="camera-outline" size={22} color={ui.textSecondary} />
+                          )}
+                          <Text style={styles.handoffTileLabel}>Item Photos</Text>
+                          <Text
+                            style={[
+                              styles.handoffTileCount,
+                              ownerItemPhotosComplete && styles.handoffTileCountComplete,
+                            ]}
+                          >
+                            {`${ownerPickupBuckets.item.length} / ${OWNER_ITEM_PHOTO_TARGET}${
+                              ownerItemPhotosComplete ? ' ✓' : ''
+                            }`}
+                          </Text>
+                        </Pressable>
+                        <Pressable
+                          pressOpacityFeedback={false}
+                          disabled={!canUploadPickup}
+                          onPress={() => openEvidenceCamera('pickup', 'serial')}
+                          style={({ pressed }) => [
+                            styles.handoffPhotoTile,
+                            ownerSerialPhotoComplete && styles.handoffPhotoTileHighlight,
+                            pressed && { opacity: 0.92 },
+                          ]}
+                        >
+                          {ownerSerialPhotoComplete ? (
+                            <Ionicons name="checkmark-circle" size={24} color="#16a34a" />
+                          ) : (
+                            <Ionicons name="barcode-outline" size={22} color={ui.textSecondary} />
+                          )}
+                          <Text style={styles.handoffTileLabel}>Serial/Model</Text>
+                          <Text
+                            style={[
+                              styles.handoffTileCount,
+                              ownerSerialPhotoComplete && styles.handoffTileCountComplete,
+                            ]}
+                          >
+                            {`${ownerPickupBuckets.serial.length} / ${OWNER_SERIAL_PHOTO_TARGET}${
+                              ownerSerialPhotoComplete ? ' ✓' : ''
+                            }`}
+                          </Text>
+                        </Pressable>
+                        <Pressable
+                          pressOpacityFeedback={false}
+                          disabled={!canUploadPickup}
+                          onPress={() => openEvidenceCamera('pickup', 'timestamp_proof')}
+                          style={({ pressed }) => [
+                            styles.handoffPhotoTile,
+                            ownerTimestampPhotoComplete && styles.handoffPhotoTileHighlight,
+                            pressed && { opacity: 0.92 },
+                          ]}
+                        >
+                          {ownerTimestampPhotoComplete ? (
+                            <Ionicons name="checkmark-circle" size={24} color="#16a34a" />
+                          ) : (
+                            <Ionicons name="shield-checkmark" size={22} color="#166534" />
+                          )}
+                          <Text style={styles.handoffTileLabel}>Verification Photo</Text>
+                          <Text
+                            style={[
+                              styles.handoffTileCount,
+                              ownerTimestampPhotoComplete && styles.handoffTileCountComplete,
+                            ]}
+                          >
+                            {`${ownerPickupBuckets.timestampProof.length} / ${OWNER_TIMESTAMP_PROOF_TARGET}${
+                              ownerTimestampPhotoComplete ? ' ✓' : ''
+                            }`}
+                          </Text>
+                        </Pressable>
+                        <Pressable
+                          pressOpacityFeedback={false}
+                          disabled={!canUploadPickup}
+                          onPress={() => openEvidenceCamera('pickup', 'additional')}
+                          style={({ pressed }) => [styles.handoffPhotoTile, pressed && { opacity: 0.92 }]}
+                        >
+                          <Ionicons name="add" size={26} color={ui.textSecondary} />
+                          <Text style={styles.handoffTileLabel}>Additional Photos</Text>
+                          <Text style={styles.handoffTileCount}>
+                            {ownerPickupBuckets.additional.length > 0
+                              ? `${ownerPickupBuckets.additional.length} extra`
+                              : ' '}
+                          </Text>
+                        </Pressable>
+                      </ScrollView>
+
+                      {showPickupEvidenceExamplePanel ? (
+                        <View style={styles.handoffExamplePanel}>
+                          <View style={styles.handoffExampleLeft}>
+                            <Text style={styles.handoffExampleTitle}>Verification photo required</Text>
+                            <Text style={styles.handoffExampleBody}>
+                              Include a handwritten note showing your username and today&apos;s date next to the item.
+                            </Text>
+                            <Text style={styles.handoffExampleMuted}>
+                              This helps confirm the photo was taken for this rental and protects both parties in case of
+                              disputes.
+                            </Text>
+                          </View>
+                          <Pressable
+                            pressOpacityFeedback={false}
+                            onPress={() => setPickupExampleModalVisible(true)}
+                            style={({ pressed }) => [
+                              styles.handoffExampleImageWrap,
+                              pressed && styles.handoffExampleImageWrapPressed,
+                            ]}
+                            accessibilityRole="button"
+                            accessibilityLabel="View enlarged verification photo example"
+                          >
+                            <Image
+                              source={PICKUP_VERIFICATION_EXAMPLE}
+                              style={styles.handoffExampleImage}
+                              contentFit="cover"
+                            />
+                            <View style={styles.handoffExampleBadge}>
+                              <Text style={styles.handoffExampleBadgeText}>EXAMPLE</Text>
+                            </View>
+                            <View style={styles.handoffExampleExpandHint} pointerEvents="none">
+                              <Ionicons name="expand-outline" size={15} color="#FFFFFF" />
+                            </View>
+                          </Pressable>
+                        </View>
+                      ) : null}
+
+                      <Text style={styles.handoffOwnerPreviewHead}>Preview</Text>
+                      <Text style={styles.handoffOwnerPreviewSub}>
+                        Same sections and order as the renter&apos;s &quot;Owner Pickup Evidence&quot; — item,
+                        serial/model, verification photo, then any additional photos.
+                      </Text>
+
+                      <Text style={styles.handoffEvidenceGroupLabel}>Item Photos</Text>
+                      {ownerPickupBuckets.item.length > 0 ? (
+                        <PickupHandoffItemPhotoRow
+                          photos={ownerPickupBuckets.item}
+                          openPickupPhotoById={openPickupPhotoById}
+                          canDeletePhoto={canDeletePhoto}
+                          confirmDeletePhoto={confirmDeletePhoto}
+                        />
+                      ) : (
+                        <View style={styles.handoffEvidenceEmptyBlock}>
+                          <Text style={styles.handoffEvidenceEmptyTitle}>No item photos yet</Text>
+                          <Text style={styles.handoffEvidenceEmptyBody}>
+                            Use the Item Photos tile above. They stay in Item Photos here and for the renter — order of
+                            upload does not move them to another group.
+                          </Text>
+                        </View>
+                      )}
+
+                      <Text style={styles.handoffEvidenceGroupLabel}>Serial/Model</Text>
+                      {ownerPickupBuckets.serial.length > 0 ? (
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator={false}
+                          contentContainerStyle={styles.handoffEvidenceGallery}
+                        >
+                          {ownerPickupBuckets.serial.map((p) => (
+                            <RentalEvidenceThumbnail
+                              key={p.id}
+                              uri={p.signedUrl}
+                              size="handoffWideHero"
+                              category="serial"
+                              canDelete={canDeletePhoto(p)}
+                              onPress={() => openPickupPhotoById(p.id)}
+                              onDelete={() => confirmDeletePhoto(p)}
+                            />
+                          ))}
+                        </ScrollView>
+                      ) : (
+                        <View style={styles.handoffEvidenceEmptyBlock}>
+                          <Text style={styles.handoffEvidenceEmptyTitle}>No serial/model photo yet</Text>
+                          <Text style={styles.handoffEvidenceEmptyBody}>
+                            Use the Serial/Model tile above. You can upload this before item photos — it still appears only
+                            under Serial/Model for you and the renter.
+                          </Text>
+                        </View>
+                      )}
+
+                      <VerificationPhotoSectionHeader showTrustBadge={ownerPickupBuckets.timestampProof.length > 0} />
+                      {ownerPickupBuckets.timestampProof.length > 0 ? (
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator={false}
+                          contentContainerStyle={styles.handoffEvidenceGallery}
+                        >
+                          {ownerPickupBuckets.timestampProof.map((p) => (
+                            <RentalEvidenceThumbnail
+                              key={p.id}
+                              uri={p.signedUrl}
+                              size="handoffWideHero"
+                              category="timestamp_proof"
+                              canDelete={canDeletePhoto(p)}
+                              onPress={() => openPickupPhotoById(p.id)}
+                              onDelete={() => confirmDeletePhoto(p)}
+                            />
+                          ))}
+                        </ScrollView>
+                      ) : (
+                        <View style={styles.handoffEvidenceEmptyBlock}>
+                          <Text style={styles.handoffEvidenceEmptyTitle}>No verification photo yet</Text>
+                          <Text style={styles.handoffEvidenceEmptyBody}>
+                            Use the Verification Photo tile (required). It stays in this section regardless of when you
+                            uploaded it.
+                          </Text>
+                        </View>
+                      )}
+
+                      {ownerPickupBuckets.additional.length > 0 ? (
+                        <>
+                          <Text style={styles.handoffEvidenceGroupLabel}>Additional Photos</Text>
+                          <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={styles.handoffEvidenceGallery}
+                          >
+                            {ownerPickupBuckets.additional.map((p) => (
+                              <RentalEvidenceThumbnail
+                                key={p.id}
+                                uri={p.signedUrl}
+                                size="handoffSquare"
+                                category="additional"
+                                canDelete={canDeletePhoto(p)}
+                                onPress={() => openPickupPhotoById(p.id)}
+                                onDelete={() => confirmDeletePhoto(p)}
+                              />
+                            ))}
+                          </ScrollView>
+                        </>
+                      ) : null}
+
+                      <Text style={styles.handoffPrivacyHint}>Photos are only visible to participants in this rental.</Text>
+                      {!handoffCompleted && pickupWindow.helperText ? (
+                        <Text style={styles.photoWindowHelper}>{pickupWindow.helperText}</Text>
+                      ) : null}
+                    </View>
+
+                    <View style={styles.handoffSection}>
+                      <HandoffOwnerNotesAccordion
+                        expanded={ownerHandoffNotesExpanded}
+                        onToggle={() => setOwnerHandoffNotesExpanded((v) => !v)}
+                        mode="owner"
+                        title="Owner Notes (Optional)"
+                        helperCollapsed="Tap to add pickup instructions or reminders"
+                        childrenExpanded={
+                          <>
+                            <NoteList
+                              notes={ownerNotes}
+                              showLinkChips
+                              instructionMenuForNote={
+                                ownerHandoffComposerLocked
+                                  ? undefined
+                                  : (note) =>
+                                      note.phase === 'pre_handoff' && note.author_role === 'owner'
+                                        ? {
+                                            onEdit: () => {
+                                              const parsed = parseOwnerHandoffNoteContent(note.note);
+                                              setEditingOwnerInstructionId(note.id);
+                                              setOwnerInstructionEditBaseline(note.note.trim());
+                                              setOwnerNoteDraft(parsed.body.slice(0, 300));
+                                              setOwnerHandoffLinkDraft(parsed.links[0]?.url ?? '');
+                                              setOwnerHandoffLinkFieldError(null);
+                                              setOwnerInstructionsAddedVisible(false);
+                                            },
+                                            onDelete: () => {
+                                              void (async () => {
+                                                if (!rental?.id) return;
+                                                setAddingOwnerNote(true);
+                                                try {
+                                                  const { error } = await deleteRentalNote(supabase, note.id);
+                                                  if (error) {
+                                                    Alert.alert('Could not delete', error);
+                                                    return;
+                                                  }
+                                                  if (__DEV__) {
+                                                    console.log('[verification mutation] owner instruction delete ok', {
+                                                      rentalId: rental.id,
+                                                      noteId: note.id,
+                                                    });
+                                                  }
+                                                  animateHandoffLayout();
+                                                  if (editingOwnerInstructionId === note.id) {
+                                                    setEditingOwnerInstructionId(null);
+                                                    setOwnerInstructionEditBaseline(null);
+                                                    setOwnerNoteDraft('');
+                                                    setOwnerHandoffLinkDraft('');
+                                                  }
+                                                  const rows = await fetchRentalNotes(supabase, rental.id);
+                                                  setRentalNotes(rows);
+                                                  await refreshVerificationState();
+                                                } finally {
+                                                  setAddingOwnerNote(false);
+                                                }
+                                              })();
+                                            },
+                                            linkChipMenu: {
+                                              onEditLink: (url: string) => {
+                                                const parsed = parseOwnerHandoffNoteContent(note.note);
+                                                setEditingOwnerInstructionId(note.id);
+                                                setOwnerInstructionEditBaseline(note.note.trim());
+                                                setOwnerNoteDraft(parsed.body.slice(0, 300));
+                                                setOwnerHandoffLinkDraft(url);
+                                                setOwnerHandoffLinkFieldError(null);
+                                                setOwnerInstructionsAddedVisible(false);
+                                                setTimeout(() => ownerHandoffLinkInputRef.current?.focus(), 500);
+                                              },
+                                              onRemoveLink: (url: string) => {
+                                                void applyRemoveLinkFromOwnerInstruction(note.id, url);
+                                              },
+                                            },
+                                          }
+                                        : undefined
+                              }
+                            />
+                            <View style={styles.handoffInstructionsComposer}>
+                              {editingOwnerInstructionId && !ownerHandoffComposerLocked ? (
+                                <Text style={styles.handoffEditingInstructionHint}>Editing instruction</Text>
+                              ) : null}
+                              <TextInput
+                                ref={ownerHandoffNoteInputRef}
+                                style={styles.handoffNotesTextareaInComposer}
+                                value={ownerNoteDraft}
+                                onChangeText={(t) => {
+                                  setOwnerNoteDraft(t.slice(0, 300));
+                                  if (ownerInstructionsAddedVisible) setOwnerInstructionsAddedVisible(false);
+                                  if (ownerHandoffLinkFieldError) setOwnerHandoffLinkFieldError(null);
+                                }}
+                                placeholder="e.g. Hold trigger 2s before starting…"
+                                placeholderTextColor={ui.textMuted}
+                                multiline
+                                editable={!ownerHandoffComposerLocked}
+                                maxLength={300}
+                                textAlignVertical="top"
+                              />
+                              <Text style={styles.handoffCharCountInComposer}>{`${ownerNoteDraft.length} / 300`}</Text>
+                              <View style={styles.handoffLinkRowInComposer}>
+                                <Ionicons name="link-outline" size={18} color={ui.textMuted} style={styles.handoffLinkIcon} />
+                                <TextInput
+                                  ref={ownerHandoffLinkInputRef}
+                                  style={styles.handoffLinkInput}
+                                  value={ownerHandoffLinkDraft}
+                                  onChangeText={(t) => {
+                                    setOwnerHandoffLinkDraft(t);
+                                    if (ownerInstructionsAddedVisible) setOwnerInstructionsAddedVisible(false);
+                                    if (ownerHandoffLinkFieldError) setOwnerHandoffLinkFieldError(null);
+                                  }}
+                                  placeholder="https:// or paste a link (optional)"
+                                  placeholderTextColor={ui.textMuted}
+                                  editable={!ownerHandoffComposerLocked}
+                                  autoCapitalize="none"
+                                  autoCorrect={false}
+                                  keyboardType="url"
+                                />
+                              </View>
+                              <Text style={styles.handoffLinkHintInComposer}>
+                                Optional link — saved with your note as one instruction.
+                              </Text>
+                              {ownerHandoffLinkFieldError ? (
+                                <Text style={styles.handoffLinkFieldError}>{ownerHandoffLinkFieldError}</Text>
+                              ) : null}
+                              {ownerInstructionsAddedVisible ? (
+                                <Text style={styles.handoffInstructionsAddedHint}>Instructions added</Text>
+                              ) : null}
+                              <Pressable
+                                pressOpacityFeedback={false}
+                                haptic
+                                onPress={() => void onSaveOwnerInstruction()}
+                                disabled={!canSubmitOwnerInstructions}
+                                style={({ pressed }) => [
+                                  styles.handoffAddInstructionsBtn,
+                                  !canSubmitOwnerInstructions && styles.handoffAddNoteBtnDisabled,
+                                  pressed && canSubmitOwnerInstructions && styles.startButtonPressed,
+                                ]}
+                              >
+                                <Text style={styles.handoffAddNoteBtnText}>
+                                  {addingOwnerNote
+                                    ? '…'
+                                    : editingOwnerInstructionId
+                                      ? 'Save changes'
+                                      : 'Add instructions'}
+                                </Text>
+                              </Pressable>
+                              {editingOwnerInstructionId && !ownerHandoffComposerLocked ? (
+                                <Pressable
+                                  pressOpacityFeedback={false}
+                                  onPress={cancelEditOwnerInstruction}
+                                  style={({ pressed }) => [
+                                    styles.handoffEditInstructionCancelWrap,
+                                    pressed && { opacity: 0.75 },
+                                  ]}
+                                >
+                                  <Text style={styles.handoffEditInstructionCancelText}>Cancel</Text>
+                                </Pressable>
+                              ) : null}
+                            </View>
+                          </>
+                        }
+                      />
+                    </View>
+
+                    <View style={styles.handoffSection}>
+                      {pickupPrepOrVerificationComplete && !pickupChecklistPanelExpanded ? (
+                        <Pressable
+                          pressOpacityFeedback={false}
+                          onPress={() => {
+                            animateHandoffLayout();
+                            setPickupChecklistPanelExpanded(true);
+                          }}
+                          style={({ pressed }) => [
+                            styles.pickupChecklistCompleteCard,
+                            pressed && styles.pickupChecklistCompleteCardPressed,
+                          ]}
+                          accessibilityRole="button"
+                          accessibilityState={{ expanded: false }}
+                        >
+                          <Text style={styles.pickupChecklistCompleteTitle}>✅ Pickup prep complete</Text>
+                          <Text style={styles.pickupChecklistCompleteSub}>
+                            Your evidence and checklist are ready for renter confirmation.
+                          </Text>
+                        </Pressable>
+                      ) : (
+                        <>
+                          <View style={styles.handoffRespHeader}>
+                            <View style={styles.handoffRespTitleRow}>
+                              <Ionicons name="list-outline" size={18} color={ui.textSecondary} />
+                              <Text style={styles.handoffSectionTitle}>Your Responsibilities</Text>
+                            </View>
+                            <Text style={styles.handoffProgressPill}>
+                              {`${pickupRequiredDoneCount} / ${pickupRequiredEntries.length} completed`}
+                            </Text>
+                          </View>
+                          {pickupItems.map((item) => (
+                            <ChecklistRow
+                              key={item.id}
+                              label={item.label}
+                              checked={Boolean(pickupDoneEffectiveForViewer[item.id])}
+                              onToggle={() => togglePickupItem(item.id)}
+                              readOnly={item.control === 'auto'}
+                              helperText={
+                                item.control === 'auto' ? pickupAutoRowHelper(item.id, viewerRole) : undefined
+                              }
+                              disabled={handoffCompleted}
+                            />
+                          ))}
+                        </>
+                      )}
+                    </View>
+
+                    <View style={styles.handoffInfoBanner}>
+                      <Ionicons name="information-circle-outline" size={18} color="rgba(37, 99, 235, 0.78)" />
+                      <Text style={styles.handoffInfoBannerText}>{pickupRequirementsBannerText}</Text>
+                    </View>
+
+                    {pickupPrimaryOnPress ? (
+                      <Pressable
+                        pressOpacityFeedback={false}
+                        haptic
+                        disabled={pickupPrimaryDisabled}
+                        onPress={pickupPrimaryOnPress}
+                        style={({ pressed }) => [
+                          styles.handoffPrimaryBtn,
+                          pickupPrimaryDisabled && styles.handoffPrimaryBtnDisabled,
+                          pressed && !pickupPrimaryDisabled && styles.startButtonPressed,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.handoffPrimaryBtnText,
+                            pickupPrimaryDisabled && styles.handoffPrimaryBtnTextDisabled,
+                          ]}
+                        >
+                          {pickupPrimaryLabel}
+                        </Text>
+                      </Pressable>
+                    ) : (
+                      <View style={[styles.handoffPrimaryBtn, styles.handoffPrimaryBtnDisabled]}>
+                        <Text style={[styles.handoffPrimaryBtnText, styles.handoffPrimaryBtnTextDisabled]}>
+                          {pickupPrimaryLabel}
+                        </Text>
+                      </View>
+                    )}
+                    {pickupPrimaryFootnote ? (
+                      <Text style={styles.handoffPrimaryFootnote}>{pickupPrimaryFootnote}</Text>
+                    ) : null}
                   </>
                 ) : (
                   <>
-                    <VerificationPhotosSubsection
-                      photos={pickupEvidenceDisplay}
-                      uploading={uploadingEvidence}
-                      onAddPress={() => openEvidenceCamera('pickup')}
-                      onPhotoPress={(idx) => openPhotoViewer('pickup', idx)}
-                      onDeletePhoto={(photoId) => {
-                        const photo = pickupEvidenceDisplay.find((p) => p.id === photoId);
-                        if (photo) void onDeletePhoto(photo);
-                      }}
-                      canDeletePhoto={(photo) => canDeletePhoto(photo)}
-                      addDisabled={!canUploadPickup}
-                      addDisabledReason={!canUploadPickup ? pickupWindow.helperText : null}
-                    />
-                    <Text style={styles.photoWindowHelper}>
-                      {handoffCompleted
-                        ? 'Pickup evidence is locked after handoff approval is completed.'
-                        : 'Pickup evidence remains editable until handoff approval is completed.'}
-                    </Text>
-                    <View style={styles.verificationSubheadRow}>
-                      <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Your responsibilities</Text>
-                      <Pressable
-                        pressOpacityFeedback={false}
-                        disabled={handoffCompleted}
-                        onPress={() => {
-                          const allTrue = Object.fromEntries(pickupItems.map((item) => [item.id, true]));
-                          if (!me) return;
-                          void (async () => {
-                            try {
-                              await persistChecklistState(supabase, rental.id, 'pickup', me, allTrue);
-                              if (__DEV__) console.log('[verification mutation] pickup mark-all ok', { rentalId: rental.id });
-                              await refreshVerificationState();
-                            } catch (error) {
-                              if (__DEV__) console.warn('[verification mutation] pickup mark-all failed', { rentalId: rental.id, error });
-                            }
-                          })();
-                        }}
-                      >
-                        <Text style={[styles.markAllText, handoffCompleted && styles.markAllTextDisabled]}>Check All</Text>
-                      </Pressable>
-                    </View>
-                    {checklistTwoColumns ? (
-                      <View style={styles.checklistTwoColWrap}>
-                        <View style={styles.checklistCol}>
-                          {pickupChecklistLeft.map((item) => (
-                            <ChecklistRow
-                              key={item.id}
-                              label={item.label}
-                              checked={Boolean(pickupDoneForRole[item.id])}
-                              onToggle={() => togglePickupItem(item.id)}
-                              disabled={handoffCompleted}
-                            />
-                          ))}
-                        </View>
-                        <View style={styles.checklistCol}>
-                          {pickupChecklistRight.map((item) => (
-                            <ChecklistRow
-                              key={item.id}
-                              label={item.label}
-                              checked={Boolean(pickupDoneForRole[item.id])}
-                              onToggle={() => togglePickupItem(item.id)}
-                              disabled={handoffCompleted}
-                            />
-                          ))}
-                        </View>
+                    <View style={styles.handoffSection}>
+                      <View style={styles.handoffSectionTitleRow}>
+                        <Ionicons name="images-outline" size={18} color={ui.primary} />
+                        <Text style={styles.handoffSectionTitle}>Owner Pickup Evidence</Text>
                       </View>
-                    ) : (
-                      pickupItems.map((item) => (
-                        <ChecklistRow
-                          key={item.id}
-                          label={item.label}
-                          checked={Boolean(pickupDoneForRole[item.id])}
-                          onToggle={() => togglePickupItem(item.id)}
-                          disabled={handoffCompleted}
+                      <Text style={styles.handoffSectionHelper}>
+                        Quick review — confirm pickup when you&apos;re satisfied with the evidence.
+                      </Text>
+
+                      {showPickupEvidenceExamplePanel ? (
+                        <View style={styles.handoffExampleRenterCompact}>
+                          <View style={styles.handoffExampleRenterCompactIcon}>
+                            <Ionicons name="shield-checkmark" size={22} color="#166534" />
+                          </View>
+                          <View style={styles.handoffExampleRenterCompactTextCol}>
+                            <Text style={styles.handoffExampleRenterCompactTitle}>Verification photo included</Text>
+                            <Text style={styles.handoffExampleRenterCompactBody} numberOfLines={2}>
+                              Verify the username and date match this rental before confirming receipt.
+                            </Text>
+                          </View>
+                          <Pressable
+                            pressOpacityFeedback={false}
+                            onPress={() => setPickupExampleModalVisible(true)}
+                            style={({ pressed }) => [
+                              styles.handoffExampleRenterCompactThumb,
+                              pressed && styles.handoffExampleRenterCompactThumbPressed,
+                            ]}
+                            accessibilityRole="button"
+                            accessibilityLabel="View enlarged verification photo example"
+                          >
+                            <Image
+                              source={PICKUP_VERIFICATION_EXAMPLE}
+                              style={styles.handoffExampleRenterCompactThumbImg}
+                              contentFit="cover"
+                            />
+                            <View style={styles.handoffExampleRenterCompactExpandHint} pointerEvents="none">
+                              <Ionicons name="expand-outline" size={12} color="#FFFFFF" />
+                            </View>
+                          </Pressable>
+                        </View>
+                      ) : null}
+
+                      <VerificationPhotoSectionHeader showTrustBadge={ownerPickupBuckets.timestampProof.length > 0} />
+                      {ownerPickupBuckets.timestampProof.length > 0 ? (
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator={false}
+                          contentContainerStyle={styles.handoffEvidenceGallery}
+                        >
+                          {ownerPickupBuckets.timestampProof.map((p) => (
+                            <RentalEvidenceThumbnail
+                              key={p.id}
+                              uri={p.signedUrl}
+                              size="handoffWideHero"
+                              category="timestamp_proof"
+                              canDelete={canDeletePhoto(p)}
+                              onPress={() => openPickupPhotoById(p.id)}
+                              onDelete={() => confirmDeletePhoto(p)}
+                            />
+                          ))}
+                        </ScrollView>
+                      ) : (
+                        <View style={styles.handoffEvidenceEmptyBlock}>
+                          <Text style={styles.handoffEvidenceEmptyTitle}>Waiting for verification photo</Text>
+                          <Text style={styles.handoffEvidenceEmptyBody}>
+                            The owner must upload a verification photo (username and date visible) before pickup can be
+                            confirmed.
+                          </Text>
+                        </View>
+                      )}
+
+                      <Text style={styles.handoffEvidenceGroupLabel}>Item Photos</Text>
+                      {ownerPickupBuckets.item.length > 0 ? (
+                        <PickupHandoffItemPhotoRow
+                          photos={ownerPickupBuckets.item}
+                          openPickupPhotoById={openPickupPhotoById}
+                          canDeletePhoto={canDeletePhoto}
+                          confirmDeletePhoto={confirmDeletePhoto}
                         />
-                      ))
-                    )}
-                    <View style={styles.notesGroup}>
-                      <Text style={styles.notesGroupTitle}>Owner Notes</Text>
-                      <NoteList notes={ownerNotes} />
-                      <AddNoteInput
-                        value={ownerNoteDraft}
-                        onChangeText={setOwnerNoteDraft}
-                        onAdd={onAddOwnerNote}
-                        disabled={ownerInputDisabled}
-                        disabledLabel="Owner Notes Locked 🔒"
-                        loading={addingOwnerNote}
-                        placeholder="Add owner note before handoff…"
+                      ) : (
+                        <View style={styles.handoffEvidenceEmptyBlock}>
+                          <Text style={styles.handoffEvidenceEmptyTitle}>Waiting for owner uploads</Text>
+                          <Text style={styles.handoffEvidenceEmptyBody}>
+                            The owner must upload condition, serial, and verification photos before pickup can be
+                            confirmed.
+                          </Text>
+                        </View>
+                      )}
+
+                      <Text style={styles.handoffEvidenceGroupLabel}>Serial/Model</Text>
+                      {ownerPickupBuckets.serial.length > 0 ? (
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator={false}
+                          contentContainerStyle={styles.handoffEvidenceGallery}
+                        >
+                          {ownerPickupBuckets.serial.map((p) => (
+                            <RentalEvidenceThumbnail
+                              key={p.id}
+                              uri={p.signedUrl}
+                              size="handoffWideHero"
+                              category="serial"
+                              canDelete={canDeletePhoto(p)}
+                              onPress={() => openPickupPhotoById(p.id)}
+                              onDelete={() => confirmDeletePhoto(p)}
+                            />
+                          ))}
+                        </ScrollView>
+                      ) : (
+                        <View style={styles.handoffEvidenceEmptyBlock}>
+                          <Text style={styles.handoffEvidenceEmptyTitle}>Waiting for serial photo</Text>
+                          <Text style={styles.handoffEvidenceEmptyBody}>
+                            The owner must upload a clear serial or model photo before pickup can be confirmed.
+                          </Text>
+                        </View>
+                      )}
+
+                      {ownerPickupBuckets.additional.length > 0 ? (
+                        <>
+                          <Text style={styles.handoffEvidenceGroupLabel}>Additional Photos</Text>
+                          <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={styles.handoffEvidenceGallery}
+                          >
+                            {ownerPickupBuckets.additional.map((p) => (
+                              <RentalEvidenceThumbnail
+                                key={p.id}
+                                uri={p.signedUrl}
+                                size="handoffSquare"
+                                category="additional"
+                                canDelete={canDeletePhoto(p)}
+                                onPress={() => openPickupPhotoById(p.id)}
+                                onDelete={() => confirmDeletePhoto(p)}
+                              />
+                            ))}
+                          </ScrollView>
+                        </>
+                      ) : null}
+
+                      <Text style={styles.handoffPrivacyHint}>Photos are only visible to participants in this rental.</Text>
+                    </View>
+
+                    <View style={styles.handoffSection}>
+                      <HandoffOwnerNotesAccordion
+                        expanded={renterHandoffNotesExpanded}
+                        onToggle={() => setRenterHandoffNotesExpanded((v) => !v)}
+                        mode="renter"
+                        title="Owner instructions"
+                        helperCollapsed="Tap to view owner instructions"
+                        childrenExpanded={
+                          <NoteList notes={ownerNotes} showLinkChips emptyText="No pickup instructions added." />
+                        }
                       />
                     </View>
+
+                    <View style={styles.handoffSection}>
+                      {pickupPrepOrVerificationComplete && !pickupChecklistPanelExpanded ? (
+                        <Pressable
+                          pressOpacityFeedback={false}
+                          onPress={() => {
+                            animateHandoffLayout();
+                            setPickupChecklistPanelExpanded(true);
+                          }}
+                          style={({ pressed }) => [
+                            styles.pickupChecklistCompleteCard,
+                            pressed && styles.pickupChecklistCompleteCardPressed,
+                          ]}
+                          accessibilityRole="button"
+                          accessibilityState={{ expanded: false }}
+                        >
+                          <Text style={styles.pickupChecklistCompleteTitle}>✅ Pickup verification complete</Text>
+                          <Text style={styles.pickupChecklistCompleteSub}>
+                            You reviewed the owner&apos;s evidence and confirmed the item.
+                          </Text>
+                        </Pressable>
+                      ) : (
+                        <>
+                          <View style={styles.handoffRespHeader}>
+                            <View style={styles.handoffRespTitleRow}>
+                              <Ionicons name="list-outline" size={18} color={ui.textSecondary} />
+                              <Text style={styles.handoffSectionTitle}>Your Responsibilities</Text>
+                            </View>
+                            <Text style={styles.handoffProgressPill}>
+                              {`${pickupRequiredDoneCount} / ${pickupRequiredEntries.length} completed`}
+                            </Text>
+                          </View>
+                          {pickupItems.map((item) => (
+                            <ChecklistRow
+                              key={item.id}
+                              label={item.label}
+                              checked={Boolean(pickupDoneEffectiveForViewer[item.id])}
+                              onToggle={() => togglePickupItem(item.id)}
+                              readOnly={item.control === 'auto'}
+                              helperText={
+                                item.control === 'auto' ? pickupAutoRowHelper(item.id, viewerRole) : undefined
+                              }
+                              disabled={handoffCompleted}
+                              light
+                            />
+                          ))}
+                        </>
+                      )}
+                    </View>
+
+                    <View style={[styles.handoffInfoBanner, styles.handoffInfoBannerRenter]}>
+                      <Ionicons name="information-circle-outline" size={18} color="rgba(37, 99, 235, 0.75)" />
+                      <Text style={styles.handoffInfoBannerTextRenter}>{pickupRequirementsBannerText}</Text>
+                    </View>
+
+                    {pickupPrimaryOnPress ? (
+                      <Pressable
+                        pressOpacityFeedback={false}
+                        haptic
+                        disabled={pickupPrimaryDisabled}
+                        onPress={pickupPrimaryOnPress}
+                        style={({ pressed }) => [
+                          styles.handoffPrimaryBtn,
+                          pickupPrimaryDisabled && styles.handoffPrimaryBtnDisabled,
+                          pressed && !pickupPrimaryDisabled && styles.startButtonPressed,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.handoffPrimaryBtnText,
+                            pickupPrimaryDisabled && styles.handoffPrimaryBtnTextDisabled,
+                          ]}
+                        >
+                          {pickupPrimaryLabel}
+                        </Text>
+                      </Pressable>
+                    ) : (
+                      <View style={[styles.handoffPrimaryBtn, styles.handoffPrimaryBtnDisabled]}>
+                        <Text style={[styles.handoffPrimaryBtnText, styles.handoffPrimaryBtnTextDisabled]}>
+                          {pickupPrimaryLabel}
+                        </Text>
+                      </View>
+                    )}
+                    {pickupPrimaryFootnote ? (
+                      <Text style={styles.handoffPrimaryFootnote}>{pickupPrimaryFootnote}</Text>
+                    ) : null}
                   </>
                 )}
               </View>
@@ -2386,7 +4114,7 @@ export default function RentalScreen() {
                     onPhotoPress={(idx) => openPhotoViewer('return', idx)}
                     onDeletePhoto={(photoId) => {
                       const photo = returnEvidenceDisplay.find((p) => p.id === photoId);
-                      if (photo) void onDeletePhoto(photo);
+                      if (photo) confirmDeletePhoto(photo);
                     }}
                     canDeletePhoto={(photo) => canDeletePhoto(photo)}
                     addDisabled={!canUploadReturn}
@@ -2479,7 +4207,7 @@ export default function RentalScreen() {
             </View>
             
           </View>
-        </ScrollView>
+        </AppKeyboardAwareScrollView>
 
         <View style={styles.proposalEditorHidden} pointerEvents="none">
           <RentalDetailsCard
@@ -2496,102 +4224,81 @@ export default function RentalScreen() {
           />
         </View>
 
-        <Modal visible={photoViewerVisible} transparent animationType="fade" onRequestClose={() => setPhotoViewerVisible(false)}>
-          <View style={styles.viewerBackdrop}>
-            <View style={styles.viewerHeader}>
-              <Pressable pressOpacityFeedback={false} onPress={() => setPhotoViewerVisible(false)}>
+        <RentalEvidenceGalleryModal
+          visible={photoViewerVisible}
+          onClose={() => setPhotoViewerVisible(false)}
+          phase={photoViewerPhase}
+          photos={viewerPhotos}
+          index={photoViewerIndex}
+          onIndexChange={setPhotoViewerIndex}
+          slideLabel={viewerGallerySlideLabel}
+          metaLine={
+            viewerPhoto
+              ? `${viewerPhoto.role === 'owner' ? 'Owner' : 'Renter'} · ${
+                  viewerPhoto.phase === 'return' ? 'Return' : 'Pickup'
+                } · ${formatCompactDateTime(viewerPhoto.createdAt ?? null)}`
+              : ''
+          }
+          canDelete={viewerPhoto != null && canDeletePhoto(viewerPhoto)}
+          onDelete={() => {
+            if (viewerPhoto) confirmDeletePhoto(viewerPhoto);
+          }}
+          imageRetryKey={viewerImageRetryKey}
+          loading={viewerImageLoading}
+          error={viewerImageError}
+          onRetry={() => {
+            setViewerImageError(null);
+            setViewerImageLoading(true);
+            setViewerImageRetryKey((k) => k + 1);
+          }}
+          onImageLoadStart={() => {
+            setViewerImageLoading(true);
+            setViewerImageError(null);
+          }}
+          onImageLoad={() => setViewerImageLoading(false)}
+          onImageError={(msg) => {
+            setViewerImageLoading(false);
+            setViewerImageError(msg);
+            if (__DEV__ && viewerPhoto) {
+              console.warn('[verification viewer image error]', {
+                photoId: viewerPhoto.id,
+                uri: viewerSourceUri,
+                error: msg,
+              });
+            }
+          }}
+        />
+
+        <Modal
+          visible={pickupExampleModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setPickupExampleModalVisible(false)}
+        >
+          <View style={styles.exampleModalBackdrop}>
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={() => setPickupExampleModalVisible(false)}
+            />
+            <View style={styles.exampleModalInner} pointerEvents="box-none">
+              <Pressable
+                pressOpacityFeedback={false}
+                onPress={() => setPickupExampleModalVisible(false)}
+                style={styles.exampleModalCloseRow}
+              >
                 <Text style={styles.viewerCloseText}>Close</Text>
               </Pressable>
-            </View>
-            <View style={styles.viewerBody}>
-              <Pressable
-                pressOpacityFeedback={false}
-                disabled={photoViewerIndex <= 0}
-                onPress={() => setPhotoViewerIndex((i) => Math.max(0, i - 1))}
-              >
-                <Text style={[styles.viewerNavText, photoViewerIndex <= 0 && styles.viewerNavTextDisabled]}>‹</Text>
-              </Pressable>
-              {viewerPhoto ? (
-                <ScrollView
-                  style={styles.viewerImageZoomWrap}
-                  contentContainerStyle={styles.viewerImageZoomContent}
-                  maximumZoomScale={3}
-                  minimumZoomScale={1}
-                  bouncesZoom
-                  centerContent
-                >
-                  {viewerSourceUri ? (
-                    <Image
-                      key={`${viewerPhoto.id}:${viewerImageRetryKey}`}
-                      source={{ uri: viewerSourceUri }}
-                      style={styles.viewerImage}
-                      contentFit="contain"
-                      onLoadStart={() => {
-                        setViewerImageLoading(true);
-                        setViewerImageError(null);
-                      }}
-                      onLoad={() => {
-                        setViewerImageLoading(false);
-                      }}
-                      onError={(event) => {
-                        setViewerImageLoading(false);
-                        setViewerImageError(event.error ?? 'Could not load image');
-                        if (__DEV__) {
-                          console.warn('[verification viewer image error]', {
-                            photoId: viewerPhoto.id,
-                            uri: viewerSourceUri,
-                            error: event.error ?? 'unknown',
-                          });
-                        }
-                      }}
-                    />
-                  ) : (
-                    <View style={styles.viewerFallbackBox}>
-                      <Text style={styles.viewerFallbackText}>Image unavailable for this photo.</Text>
-                    </View>
-                  )}
-                  {viewerImageLoading ? (
-                    <View style={styles.viewerLoadingOverlay}>
-                      <ActivityIndicator color="#FFFFFF" />
-                    </View>
-                  ) : null}
-                  {viewerImageError ? (
-                    <View style={styles.viewerErrorOverlay}>
-                      <Text style={styles.viewerErrorText}>{viewerImageError}</Text>
-                      <Pressable
-                        pressOpacityFeedback={false}
-                        style={({ pressed }) => [styles.viewerRetryBtn, pressed && { opacity: 0.85 }]}
-                        onPress={() => {
-                          setViewerImageError(null);
-                          setViewerImageLoading(true);
-                          setViewerImageRetryKey((k) => k + 1);
-                        }}
-                      >
-                        <Text style={styles.viewerRetryBtnText}>Retry</Text>
-                      </Pressable>
-                    </View>
-                  ) : null}
-                </ScrollView>
-              ) : null}
-              <Pressable
-                pressOpacityFeedback={false}
-                disabled={photoViewerIndex >= viewerPhotos.length - 1}
-                onPress={() => setPhotoViewerIndex((i) => Math.min(viewerPhotos.length - 1, i + 1))}
-              >
-                <Text
-                  style={[styles.viewerNavText, photoViewerIndex >= viewerPhotos.length - 1 && styles.viewerNavTextDisabled]}
-                >
-                  ›
-                </Text>
-              </Pressable>
-            </View>
-            {viewerPhoto ? (
-              <Text style={styles.viewerMetaText}>
-                {`${viewerPhoto.role === 'owner' ? 'Owner' : 'Renter'} · ${viewerPhoto.phase === 'return' ? 'Return' : 'Pickup'} · ${formatCompactDateTime(
-                  viewerPhoto.createdAt ?? null
-                )}`}
+              <Image
+                source={PICKUP_VERIFICATION_EXAMPLE}
+                style={styles.exampleModalImage}
+                contentFit="contain"
+              />
+              <Text style={styles.exampleModalCaption}>
+                {viewerRole === 'owner'
+                  ? "Include a handwritten note showing your username and today's date next to the item. Save it as your Verification Photo. This helps confirm the photo was taken for this rental and protects both parties in case of disputes."
+                  : 'Confirm the username and date look reasonable and match what you expect from this rental before you sign off.'}
               </Text>
-            ) : null}
+            </View>
           </View>
         </Modal>
 
@@ -3416,6 +5123,21 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  noteItemMenuHit: {
+    minWidth: 44,
+    minHeight: 40,
+    paddingLeft: 10,
+    paddingRight: 4,
+    paddingVertical: 6,
+    marginLeft: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  noteItemMenuHitPressed: {
+    opacity: 0.72,
+    backgroundColor: 'rgba(15, 23, 42, 0.06)',
+    borderRadius: 10,
+  },
   noteItemText: {
     fontSize: 13,
     color: ui.textPrimary,
@@ -3425,6 +5147,30 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: ui.textMuted,
     marginTop: 1,
+  },
+  noteLinkChipsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+  },
+  noteLinkChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 7,
+    paddingHorizontal: 11,
+    borderRadius: 10,
+    backgroundColor: 'rgba(37, 99, 235, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(37, 99, 235, 0.2)',
+    maxWidth: '100%',
+  },
+  noteLinkChipText: {
+    flexShrink: 1,
+    fontSize: 13,
+    fontWeight: '600',
+    color: ui.primary,
   },
   noteInputWrap: {
     marginTop: 6,
@@ -3477,111 +5223,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: ui.border,
   },
-  viewerBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.92)',
-    paddingTop: 40,
-    paddingHorizontal: 12,
-    paddingBottom: 26,
-    justifyContent: 'center',
-  },
-  viewerHeader: {
-    position: 'absolute',
-    top: 40,
-    right: 16,
-    zIndex: 10,
-  },
   viewerCloseText: {
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '700',
-  },
-  viewerBody: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  viewerImage: {
-    width: '100%',
-    height: 380,
-    borderRadius: 8,
-    backgroundColor: '#000000',
-  },
-  viewerImageZoomWrap: {
-    flex: 1,
-    height: 380,
-  },
-  viewerImageZoomContent: {
-    flexGrow: 1,
-    width: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  viewerFallbackBox: {
-    width: '100%',
-    height: 380,
-    borderRadius: 8,
-    backgroundColor: '#111827',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 12,
-  },
-  viewerFallbackText: {
-    color: '#D1D5DB',
-    fontSize: 12,
-    textAlign: 'center',
-  },
-  viewerLoadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.28)',
-    borderRadius: 8,
-  },
-  viewerErrorOverlay: {
-    position: 'absolute',
-    left: 8,
-    right: 8,
-    bottom: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: 'rgba(17,24,39,0.85)',
-    alignItems: 'center',
-    gap: 6,
-  },
-  viewerErrorText: {
-    color: '#F3F4F6',
-    fontSize: 11,
-    textAlign: 'center',
-  },
-  viewerRetryBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 7,
-    backgroundColor: '#FFFFFF',
-  },
-  viewerRetryBtnText: {
-    color: '#111827',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  viewerNavText: {
-    color: '#FFFFFF',
-    fontSize: 28,
-    fontWeight: '700',
-    width: 24,
-    textAlign: 'center',
-  },
-  viewerNavTextDisabled: {
-    opacity: 0.35,
-  },
-  viewerMetaText: {
-    marginTop: 10,
-    color: '#D7DDEA',
-    fontSize: 12,
-    textAlign: 'center',
   },
   agreementModalBackdrop: {
     flex: 1,
@@ -3772,12 +5417,19 @@ const styles = StyleSheet.create({
   checklistRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingVertical: 5,
-    marginBottom: 1,
+    gap: 7,
+    paddingVertical: 4,
+    marginBottom: 0,
   },
   checklistRowDisabled: {
     opacity: 0.55,
+  },
+  checklistRowReadOnly: {
+    opacity: 0.9,
+  },
+  checklistLabelBlock: {
+    flex: 1,
+    gap: 0,
   },
   checklistBox: {
     width: 19,
@@ -3793,13 +5445,15 @@ const styles = StyleSheet.create({
     borderColor: ui.primary,
     backgroundColor: ui.primary,
   },
+  checklistBoxReadOnly: {
+    borderColor: 'rgba(26,43,74,0.2)',
+  },
   checklistBoxMark: {
     color: ui.primaryOn,
     fontSize: 11,
     fontWeight: '800',
   },
   checklistLabel: {
-    flex: 1,
     fontSize: 13,
     lineHeight: 17,
     color: ui.textPrimary,
@@ -3807,6 +5461,41 @@ const styles = StyleSheet.create({
   },
   checklistLabelChecked: {
     color: ui.textMuted,
+  },
+  checklistLabelReadOnly: {
+    color: ui.textSecondary,
+  },
+  checklistHelperMuted: {
+    fontSize: 10,
+    lineHeight: 13,
+    color: 'rgba(100, 116, 139, 0.82)',
+    fontWeight: '500',
+  },
+  checklistRowLight: {
+    paddingVertical: 3,
+    marginBottom: 0,
+  },
+  checklistBoxLight: {
+    width: 16,
+    height: 16,
+    borderRadius: 4,
+    borderWidth: 1.15,
+    borderColor: 'rgba(26,43,74,0.22)',
+  },
+  checklistBoxMarkLight: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  checklistLabelLight: {
+    fontSize: 12.5,
+    lineHeight: 16,
+    fontWeight: '400',
+  },
+  checklistHelperLight: {
+    fontSize: 9,
+    lineHeight: 11,
+    color: 'rgba(100, 116, 139, 0.68)',
+    fontWeight: '400',
   },
   meetupCompletedLine: {
     fontSize: 12,
@@ -4015,5 +5704,754 @@ const styles = StyleSheet.create({
     color: ui.textSubtle,
     textAlign: 'center',
     lineHeight: 22,
+  },
+  handoffConfirmedSummary: {
+    paddingVertical: 8,
+    gap: 6,
+  },
+  handoffConfirmedTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: ui.textPrimary,
+  },
+  handoffConfirmedMeta: {
+    fontSize: 14,
+    color: ui.textSecondary,
+  },
+  handoffConfirmedLock: {
+    fontSize: 13,
+    color: ui.textMuted,
+    marginTop: 4,
+  },
+  handoffSection: {
+    marginTop: 10,
+  },
+  handoffSectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  handoffSectionTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: ui.textPrimary,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  handoffSectionTitlePlain: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    marginBottom: 8,
+  },
+  handoffSectionHelper: {
+    fontSize: 13,
+    color: ui.textMuted,
+    marginTop: 3,
+    lineHeight: 17,
+  },
+  handoffSectionHelperPad: {
+    fontSize: 13,
+    color: ui.textMuted,
+    marginTop: 3,
+    marginBottom: 8,
+    lineHeight: 18,
+  },
+  handoffTileScroll: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingVertical: 9,
+    paddingRight: 4,
+  },
+  handoffPhotoTile: {
+    width: 108,
+    minHeight: 112,
+    borderRadius: ui.radiusButton,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: ui.border,
+    backgroundColor: ui.surfaceNeutral,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 12,
+  },
+  handoffPhotoTileHighlight: {
+    backgroundColor: 'rgba(34, 197, 94, 0.12)',
+    borderColor: 'rgba(34, 197, 94, 0.55)',
+    borderStyle: 'solid',
+  },
+  handoffTileCountComplete: {
+    color: '#15803d',
+  },
+  handoffPrivacyHint: {
+    fontSize: 12,
+    color: ui.textMuted,
+    lineHeight: 17,
+    marginTop: 3,
+    marginBottom: 2,
+  },
+  handoffOwnerPreviewHead: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    marginTop: 10,
+  },
+  handoffOwnerPreviewSub: {
+    fontSize: 12,
+    color: ui.textMuted,
+    lineHeight: 17,
+    marginTop: 3,
+    marginBottom: 4,
+  },
+  handoffOwnerPreviewEmpty: {
+    fontSize: 13,
+    color: ui.textMuted,
+    lineHeight: 18,
+    fontStyle: 'italic',
+    marginBottom: 6,
+  },
+  handoffEvidenceGroupLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    marginTop: 9,
+    marginBottom: 4,
+  },
+  handoffEvidenceGroupLabelHeading: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    minWidth: 0,
+  },
+  handoffVerificationHeadingTitleCluster: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minWidth: 0,
+  },
+  handoffTimestampSectionHeading: {
+    marginTop: 9,
+    marginBottom: 5,
+  },
+  handoffTimestampSectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    width: '100%',
+  },
+  handoffTimestampTrustPillWrap: {
+    flexShrink: 0,
+    maxWidth: '48%',
+  },
+  handoffTimestampTrustPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: 'rgba(22, 101, 52, 0.09)',
+    borderWidth: 1,
+    borderColor: 'rgba(22, 101, 52, 0.16)',
+  },
+  handoffTimestampTrustPillText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#166534',
+    letterSpacing: 0.55,
+  },
+  handoffItemPreviewCell: {
+    position: 'relative',
+  },
+  handoffItemMoreOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 12,
+    backgroundColor: 'rgba(15, 23, 42, 0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  handoffItemMoreOverlayText: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '800',
+  },
+  handoffExampleRenterCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 72,
+    maxHeight: 90,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginTop: 2,
+    marginBottom: 6,
+    borderRadius: ui.radiusCard,
+    backgroundColor: 'rgba(37, 99, 235, 0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(37, 99, 235, 0.2)',
+  },
+  handoffExampleRenterCompactIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: 'rgba(37, 99, 235, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  handoffExampleRenterCompactTextCol: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  handoffExampleRenterCompactTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: ui.textPrimary,
+  },
+  handoffExampleRenterCompactBody: {
+    fontSize: 12,
+    color: ui.textSecondary,
+    lineHeight: 16,
+  },
+  handoffExampleRenterCompactLink: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: ui.primary,
+    marginTop: 1,
+  },
+  handoffExampleRenterCompactThumb: {
+    width: 52,
+    height: 52,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(37, 99, 235, 0.32)',
+    position: 'relative',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0f172a',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.14,
+        shadowRadius: 3,
+      },
+      android: { elevation: 2 },
+      default: {},
+    }),
+  },
+  handoffExampleRenterCompactThumbPressed: {
+    opacity: 0.9,
+  },
+  handoffExampleRenterCompactExpandHint: {
+    position: 'absolute',
+    right: 3,
+    bottom: 3,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(15, 23, 42, 0.52)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  handoffExampleRenterCompactThumbImg: {
+    width: '100%',
+    height: '100%',
+  },
+  handoffEvidenceGallery: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 10,
+    paddingBottom: 2,
+  },
+  handoffEvidenceThumbWrap: {
+    borderRadius: ui.radiusButton,
+    overflow: 'hidden',
+    backgroundColor: ui.surfaceNeutral,
+  },
+  handoffEvidenceThumb: {
+    width: 96,
+    height: 96,
+    borderRadius: ui.radiusButton,
+    backgroundColor: ui.surfaceNeutral,
+  },
+  handoffEvidenceThumbWide: {
+    width: '100%',
+    maxWidth: 280,
+    height: 120,
+    borderRadius: ui.radiusButton,
+    backgroundColor: ui.surfaceNeutral,
+  },
+  handoffEvidenceThumbPlaceholder: {
+    borderWidth: 1,
+    borderColor: ui.border,
+  },
+  handoffEvidenceEmpty: {
+    fontSize: 13,
+    color: ui.textMuted,
+    lineHeight: 18,
+    marginBottom: 4,
+  },
+  handoffEvidenceEmptyBlock: {
+    paddingVertical: 11,
+    paddingHorizontal: 12,
+    borderRadius: ui.radiusCard,
+    backgroundColor: ui.surfaceNeutral,
+    borderWidth: 1,
+    borderColor: ui.border,
+    marginBottom: 4,
+    gap: 5,
+  },
+  handoffEvidenceEmptyTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: ui.textPrimary,
+  },
+  handoffEvidenceEmptyBody: {
+    fontSize: 13,
+    color: ui.textSecondary,
+    lineHeight: 19,
+  },
+  handoffTileLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: ui.textSecondary,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  handoffTileCount: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    marginTop: 4,
+  },
+  handoffExamplePanel: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+    paddingVertical: 10,
+    paddingHorizontal: 11,
+    borderRadius: ui.radiusCard,
+    backgroundColor: 'rgba(34, 197, 94, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.35)',
+  },
+  handoffExamplePanelRenter: {
+    backgroundColor: 'rgba(37, 99, 235, 0.06)',
+    borderColor: 'rgba(37, 99, 235, 0.28)',
+    marginBottom: 4,
+  },
+  handoffExampleLeft: {
+    flex: 1,
+    minWidth: 0,
+  },
+  handoffExampleTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    marginBottom: 6,
+  },
+  handoffExampleBody: {
+    fontSize: 12,
+    color: ui.textSecondary,
+    lineHeight: 16,
+    marginBottom: 4,
+  },
+  handoffExampleMuted: {
+    fontSize: 11,
+    color: ui.textMuted,
+    lineHeight: 15,
+    marginBottom: 6,
+  },
+  handoffExampleLinkHit: {
+    alignSelf: 'flex-start',
+    paddingVertical: 4,
+  },
+  handoffExampleLink: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: ui.primary,
+  },
+  handoffExampleImageWrap: {
+    width: 96,
+    borderRadius: 10,
+    overflow: 'hidden',
+    position: 'relative',
+    borderWidth: 1,
+    borderColor: 'rgba(22, 101, 52, 0.35)',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0f172a',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.18,
+        shadowRadius: 5,
+      },
+      android: { elevation: 3 },
+      default: {},
+    }),
+  },
+  handoffExampleImageWrapPressed: {
+    opacity: 0.9,
+  },
+  handoffExampleExpandHint: {
+    position: 'absolute',
+    right: 5,
+    bottom: 5,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(15, 23, 42, 0.52)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  handoffExampleImage: {
+    width: '100%',
+    height: 96,
+    borderRadius: 10,
+  },
+  handoffExampleBadge: {
+    position: 'absolute',
+    top: 6,
+    left: 6,
+    backgroundColor: 'rgba(34, 197, 94, 0.95)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  handoffExampleBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+  handoffNotesAccordionCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(15, 23, 42, 0.1)',
+    backgroundColor: 'rgba(248, 250, 252, 0.92)',
+    overflow: 'hidden',
+  },
+  handoffNotesAccordionCardRenter: {
+    backgroundColor: 'rgba(241, 245, 249, 0.88)',
+  },
+  handoffNotesAccordionCardExpanded: {
+    borderColor: 'rgba(15, 23, 42, 0.16)',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0f172a',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.07,
+        shadowRadius: 8,
+      },
+      android: { elevation: 2 },
+      default: {},
+    }),
+  },
+  handoffNotesAccordionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 13,
+    paddingHorizontal: 12,
+    minHeight: 52,
+  },
+  handoffNotesAccordionHeaderExpanded: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(15, 23, 42, 0.09)',
+  },
+  handoffNotesAccordionHeaderPressed: {
+    backgroundColor: 'rgba(15, 23, 42, 0.045)',
+  },
+  handoffNotesAccordionTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  handoffNotesAccordionTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: ui.textPrimary,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  handoffNotesAccordionHelper: {
+    fontSize: 12,
+    color: ui.textMuted,
+    lineHeight: 16,
+    fontWeight: '500',
+  },
+  handoffNotesAccordionBody: {
+    paddingHorizontal: 12,
+    paddingTop: 4,
+    paddingBottom: 12,
+  },
+  pickupChecklistCompleteCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(22, 101, 52, 0.18)',
+    backgroundColor: 'rgba(240, 253, 244, 0.65)',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+  },
+  pickupChecklistCompleteCardPressed: {
+    backgroundColor: 'rgba(220, 252, 231, 0.85)',
+  },
+  pickupChecklistCompleteTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    marginBottom: 4,
+  },
+  pickupChecklistCompleteSub: {
+    fontSize: 12,
+    color: ui.textSecondary,
+    lineHeight: 16,
+    fontWeight: '500',
+  },
+  handoffNotesTextarea: {
+    borderWidth: 1,
+    borderColor: ui.border,
+    borderRadius: ui.radiusButton,
+    padding: 12,
+    minHeight: 88,
+    fontSize: 15,
+    color: ui.textPrimary,
+    backgroundColor: ui.surfaceStriped,
+    marginTop: 8,
+  },
+  handoffEditingInstructionHint: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: ui.primary,
+    marginBottom: 6,
+    letterSpacing: 0.2,
+  },
+  handoffInstructionsComposer: {
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: 'rgba(248, 250, 252, 0.95)',
+    borderWidth: 1,
+    borderColor: 'rgba(15, 23, 42, 0.08)',
+  },
+  handoffNotesTextareaInComposer: {
+    borderWidth: 1,
+    borderColor: ui.border,
+    borderRadius: ui.radiusButton,
+    padding: 12,
+    minHeight: 88,
+    fontSize: 15,
+    color: ui.textPrimary,
+    backgroundColor: ui.surfaceStriped,
+    marginTop: 0,
+  },
+  handoffCharCount: {
+    alignSelf: 'flex-end',
+    fontSize: 12,
+    color: ui.textMuted,
+    marginTop: 4,
+  },
+  handoffCharCountInComposer: {
+    alignSelf: 'flex-end',
+    fontSize: 12,
+    color: ui.textMuted,
+    marginTop: 4,
+  },
+  handoffLinkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: ui.border,
+    borderRadius: ui.radiusButton,
+    backgroundColor: ui.surfaceStriped,
+    marginTop: 10,
+    paddingHorizontal: 10,
+  },
+  handoffLinkRowInComposer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: ui.border,
+    borderRadius: ui.radiusButton,
+    backgroundColor: ui.surfaceStriped,
+    marginTop: 8,
+    paddingHorizontal: 10,
+  },
+  handoffLinkIcon: {
+    marginRight: 6,
+  },
+  handoffLinkInput: {
+    flex: 1,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: ui.textPrimary,
+  },
+  handoffLinkHint: {
+    fontSize: 12,
+    color: ui.textMuted,
+    marginTop: 6,
+  },
+  handoffLinkHintInComposer: {
+    fontSize: 11,
+    color: ui.textMuted,
+    marginTop: 6,
+    lineHeight: 15,
+  },
+  handoffLinkFieldError: {
+    fontSize: 12,
+    color: '#B91C1C',
+    marginTop: 8,
+    fontWeight: '500',
+  },
+  handoffInstructionsAddedHint: {
+    fontSize: 12,
+    color: '#15803D',
+    marginTop: 8,
+    fontWeight: '600',
+  },
+  handoffEditInstructionCancelWrap: {
+    alignSelf: 'center',
+    marginTop: 10,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  handoffEditInstructionCancelText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: ui.primary,
+  },
+  handoffAddNoteBtn: {
+    alignSelf: 'flex-start',
+    marginTop: 12,
+    backgroundColor: ui.primary,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: ui.radiusButton,
+  },
+  handoffAddInstructionsBtn: {
+    alignSelf: 'stretch',
+    marginTop: 12,
+    backgroundColor: ui.primary,
+    paddingVertical: 11,
+    paddingHorizontal: 18,
+    borderRadius: ui.radiusButton,
+    alignItems: 'center',
+  },
+  handoffAddNoteBtnDisabled: {
+    opacity: 0.45,
+  },
+  handoffAddNoteBtnText: {
+    color: ui.primaryOn,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  handoffRespHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    gap: 8,
+  },
+  handoffRespTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+    minWidth: 0,
+  },
+  handoffProgressPill: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: ui.textMuted,
+  },
+  handoffInfoBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 11,
+    paddingVertical: 8,
+    paddingHorizontal: 9,
+    borderRadius: ui.radiusButton,
+    backgroundColor: 'rgba(37, 99, 235, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(37, 99, 235, 0.12)',
+  },
+  handoffInfoBannerRenter: {
+    marginTop: 10,
+    paddingVertical: 7,
+    paddingHorizontal: 9,
+    backgroundColor: 'rgba(37, 99, 235, 0.035)',
+    borderColor: 'rgba(37, 99, 235, 0.1)',
+    gap: 7,
+  },
+  handoffInfoBannerText: {
+    flex: 1,
+    fontSize: 12.5,
+    color: ui.textSecondary,
+    lineHeight: 17,
+  },
+  handoffInfoBannerTextRenter: {
+    flex: 1,
+    fontSize: 11.5,
+    color: 'rgba(71, 85, 105, 0.9)',
+    lineHeight: 15,
+    fontWeight: '400',
+  },
+  handoffPrimaryBtn: {
+    marginTop: 11,
+    backgroundColor: '#22C55E',
+    paddingVertical: 13,
+    borderRadius: ui.radiusButton,
+    alignItems: 'center',
+  },
+  handoffPrimaryBtnDisabled: {
+    backgroundColor: '#94C9A3',
+    opacity: 0.85,
+  },
+  handoffPrimaryBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  handoffPrimaryBtnTextDisabled: {
+    color: 'rgba(255,255,255,0.92)',
+  },
+  handoffPrimaryFootnote: {
+    fontSize: 12,
+    color: ui.textMuted,
+    textAlign: 'center',
+    marginTop: 8,
+    lineHeight: 17,
+  },
+  exampleModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  exampleModalInner: {
+    backgroundColor: ui.surfaceStriped,
+    borderRadius: ui.radiusCard,
+    padding: 16,
+    maxHeight: '88%',
+  },
+  exampleModalCloseRow: {
+    alignSelf: 'flex-end',
+    marginBottom: 8,
+  },
+  exampleModalImage: {
+    width: '100%',
+    height: 360,
+    borderRadius: 10,
+    backgroundColor: ui.surfaceNeutral,
+  },
+  exampleModalCaption: {
+    fontSize: 12,
+    color: ui.textMuted,
+    textAlign: 'center',
+    marginTop: 10,
+    lineHeight: 16,
   },
 });
