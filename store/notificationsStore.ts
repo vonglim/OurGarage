@@ -3,8 +3,9 @@ import { useMemo } from 'react';
 import { create } from 'zustand';
 
 import { getAuthUserIdSync, useAuthUserId } from '@/lib/authUser';
-import { shouldBlockSelfNotificationToUserId } from '@/lib/notificationRecipientGuard';
 import { nextLocalId } from '@/lib/idFactory';
+import { shouldBlockSelfNotificationToUserId } from '@/lib/notificationRecipientGuard';
+import { isUuidString } from '@/lib/requestOwnership';
 
 const STORAGE_KEY = '@ourgarage/notifications_v1';
 
@@ -32,6 +33,8 @@ export type AppNotification = {
   offerId: string | null;
   /** Chat route id (`req-…`) for message notifications */
   chatId: string | null;
+  /** `rentals.id` when the workflow lives in the rental workspace (post-accept / meetup / lifecycle). */
+  rentalId: string | null;
   /**
    * If set, this notification is only shown to this user (e.g. incoming chat for recipient).
    * Omit for broadcast/system rows (offers, etc.).
@@ -81,10 +84,13 @@ function normalizeLoaded(raw: unknown): AppNotification[] {
     const offerId =
       typeof r.offerId === 'string' && r.offerId.length > 0 ? r.offerId : null;
     const chatId = typeof r.chatId === 'string' && r.chatId.length > 0 ? r.chatId : null;
+    const rawRent = r.rentalId;
+    const rentalId =
+      typeof rawRent === 'string' && isUuidString(rawRent.trim()) ? rawRent.trim() : null;
     const forUserId =
       typeof r.forUserId === 'string' && r.forUserId.length > 0 ? r.forUserId : null;
     if (!id || !timestamp) continue;
-    out.push({ id, type, message, timestamp, read, requestId, offerId, chatId, forUserId });
+    out.push({ id, type, message, timestamp, read, requestId, offerId, chatId, rentalId, forUserId });
   }
   return out;
 }
@@ -131,10 +137,12 @@ function filterStaleNotifications(list: AppNotification[]): AppNotification[] {
       n.type === 'offer_accepted' ||
       n.type === 'declined'
     ) {
+      if (typeof n.rentalId === 'string' && isUuidString(n.rentalId)) return true;
       if (n.requestId == null) return false;
       return resolveRequestFromRouteId(n.requestId) != null;
     }
     if (n.type === 'message') {
+      if (typeof n.rentalId === 'string' && isUuidString(n.rentalId)) return true;
       if (n.requestId != null && resolveRequestFromRouteId(n.requestId) != null) {
         return true;
       }
@@ -153,6 +161,7 @@ type AddNotificationInput = {
   requestId?: string | number | null;
   offerId?: string | null;
   chatId?: string | null;
+  rentalId?: string | null;
   forUserId?: string | null;
 };
 
@@ -225,6 +234,10 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
       requestId: entry.requestId ?? null,
       offerId: entry.offerId ?? null,
       chatId: entry.chatId ?? null,
+      rentalId:
+        entry.rentalId != null && isUuidString(String(entry.rentalId).trim())
+          ? String(entry.rentalId).trim()
+          : null,
       forUserId: target ?? null,
     };
     set((state) => ({

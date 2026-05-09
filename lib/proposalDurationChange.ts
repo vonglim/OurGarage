@@ -1,4 +1,15 @@
+import { agreedScheduleIsoPairFromRequest } from '@/lib/agreedRentalScheduleFromRequest';
+
 export const DURATION_GRACE_HOURS = 4;
+
+export type RentalScheduleBaselineLike = {
+  agreed_pickup_datetime?: string | null;
+  agreed_return_datetime?: string | null;
+  pickup_datetime?: string | null;
+  meetup_time?: string | null;
+  return_datetime?: string | null;
+  return_time?: string | null;
+} | null | undefined;
 
 const MS_PER_HOUR = 60 * 60 * 1000;
 
@@ -32,6 +43,11 @@ function parseDurationHoursFromText(raw: unknown): number | null {
 export function baselineDurationHoursFromRequest(requestLike: unknown): number | null {
   if (!requestLike || typeof requestLike !== 'object') return null;
   const row = requestLike as Record<string, unknown>;
+  const fromSchedule = agreedScheduleIsoPairFromRequest(row);
+  if (fromSchedule.pickupIso && fromSchedule.returnIso) {
+    const spanHours = durationHoursBetween(fromSchedule.pickupIso, fromSchedule.returnIso);
+    if (spanHours != null && Number.isFinite(spanHours) && spanHours > 0) return spanHours;
+  }
   const type = normalizeDurationType(row.duration_type ?? row.durationType);
   const value = parseNumeric(row.duration_value ?? row.durationValue);
 
@@ -48,6 +64,34 @@ export function baselineDurationHoursFromRequest(requestLike: unknown): number |
 
   if (value != null) return value * 24;
   return parseDurationHoursFromText(row.when ?? row.duration);
+}
+
+/**
+ * Baseline rental duration for warnings: `agreed_*` columns first, then legacy operational
+ * fields, then a one-time derivation from the request record.
+ */
+export function resolveAgreementBaselineDurationHours(
+  rentalLike: RentalScheduleBaselineLike,
+  requestLike: unknown
+): number | null {
+  const ap = String(rentalLike?.agreed_pickup_datetime ?? '').trim();
+  const ar = String(rentalLike?.agreed_return_datetime ?? '').trim();
+  if (ap !== '' && ar !== '') {
+    const h = durationHoursBetween(ap, ar);
+    if (h != null && Number.isFinite(h) && h > 0) return h;
+  }
+  const op = String(rentalLike?.pickup_datetime ?? rentalLike?.meetup_time ?? '').trim();
+  const or = String(rentalLike?.return_datetime ?? rentalLike?.return_time ?? '').trim();
+  if (op !== '' && or !== '') {
+    const h = durationHoursBetween(op, or);
+    if (h != null && Number.isFinite(h) && h > 0) return h;
+  }
+  const fromRequest = agreedScheduleIsoPairFromRequest(requestLike);
+  if (fromRequest.pickupIso && fromRequest.returnIso) {
+    const h = durationHoursBetween(fromRequest.pickupIso, fromRequest.returnIso);
+    if (h != null && Number.isFinite(h) && h > 0) return h;
+  }
+  return baselineDurationHoursFromRequest(requestLike);
 }
 
 export function durationHoursBetween(startIso: string, endIso: string): number | null {
@@ -101,7 +145,7 @@ export function evaluateDurationChange(input: {
   const originalLabel = formatDurationHours(baselineHours);
   const proposedLabel = formatDurationHours(proposedHours);
   const warningLine = warningTriggered
-    ? `⚠ Duration changed from ${originalLabel} to ${proposedLabel}.`
+    ? 'You are proposing a rental duration different from the original agreement. The other party must approve this change. Pricing and rental terms may change based on the updated duration.'
     : null;
   return { warningTriggered, differenceHours, warningLine, originalLabel, proposedLabel };
 }

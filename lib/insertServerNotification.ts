@@ -15,11 +15,13 @@ export type ServerNotificationType =
 
 function dataPayload(
   requestId: string | null,
-  offerId: string | null
+  offerId: string | null,
+  rentalId: string | null
 ): Record<string, string> {
   const o: Record<string, string> = {};
   if (requestId) o.requestId = requestId;
   if (offerId) o.offerId = offerId;
+  if (rentalId) o.rentalId = rentalId;
   return o;
 }
 
@@ -35,6 +37,8 @@ export function insertServerNotificationToRecipient(input: {
   body: string;
   requestId: string | null;
   offerId: string | null;
+  /** When set, clients route opens into the rental workspace (meetup / active rental). */
+  rentalId?: string | null;
 }): void {
   if (!isSupabaseConfigured()) return;
 
@@ -60,7 +64,11 @@ export function insertServerNotificationToRecipient(input: {
 
   const requestId = input.requestId && isUuidString(input.requestId) ? input.requestId : null;
   const offerId = input.offerId && isUuidString(input.offerId) ? input.offerId : null;
-  const data = dataPayload(requestId, offerId);
+  const rentalId =
+    input.rentalId != null && isUuidString(String(input.rentalId).trim())
+      ? String(input.rentalId).trim()
+      : null;
+  const data = dataPayload(requestId, offerId, rentalId);
   const supabase = getSupabase();
   void (async () => {
     const { error } = await supabase.from('notifications').insert({
@@ -86,6 +94,7 @@ export function insertOfferAcceptedServerNotification(input: {
   offerRenterId: string;
   requestRowId: string;
   offerId: string;
+  rentalId?: string | null;
 }): void {
   const a = String(input.actorId).trim();
   const renter = String(input.offerRenterId).trim();
@@ -100,6 +109,10 @@ export function insertOfferAcceptedServerNotification(input: {
     }
     return;
   }
+  const rentId =
+    input.rentalId != null && isUuidString(String(input.rentalId).trim())
+      ? String(input.rentalId).trim()
+      : null;
   insertServerNotificationToRecipient({
     actorId: a,
     recipientUserId: renter,
@@ -108,5 +121,6 @@ export function insertOfferAcceptedServerNotification(input: {
     body: 'Your offer was accepted',
     requestId: reqId,
     offerId: offId,
+    rentalId: rentId,
   });
 }

@@ -37,13 +37,14 @@ import {
 } from '@/lib/meetupProposalThreadEvent';
 import { getProfileNameForUserId } from '@/lib/profileDisplayName';
 import {
-  baselineDurationHoursFromRequest,
   DURATION_GRACE_HOURS,
   durationHoursBetween,
   evaluateDurationChange,
+  resolveAgreementBaselineDurationHours,
 } from '@/lib/proposalDurationChange';
 import { isUuidString } from '@/lib/requestOwnership';
 import { sendOfferThreadUserMessage } from '@/lib/sendOfferThreadMessage';
+import { decodeDescriptionExtras } from '@/lib/supabaseRequests';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { useMessageUnreadStore } from '@/store/messageUnreadStore';
@@ -214,7 +215,7 @@ export default function ChatDetailScreen() {
   const [threadRentalId, setThreadRentalId] = useState<string | null>(null);
   const [rental, setRental] = useState<RentalMeetupDetails | null>(null);
   const [rentalTitle, setRentalTitle] = useState<string>('');
-  const [baselineDurationHours, setBaselineDurationHours] = useState<number | null>(null);
+  const [requestSchedulingMeta, setRequestSchedulingMeta] = useState<Record<string, unknown> | null>(null);
   const [rentalBusy, setRentalBusy] = useState(false);
   const [acceptingMessageId, setAcceptingMessageId] = useState<string | null>(null);
   const [acceptedMessageIds, setAcceptedMessageIds] = useState<string[]>([]);
@@ -288,7 +289,7 @@ export default function ChatDetailScreen() {
       setThreadOfferId('');
       setThreadRentalId(null);
       setRental(null);
-      setBaselineDurationHours(null);
+      setRequestSchedulingMeta(null);
       setMessages([]);
       setThreadReady(true);
       return;
@@ -323,20 +324,31 @@ export default function ChatDetailScreen() {
       if (cancelled) return;
       setRental(r);
       setRentalTitle('');
-      setBaselineDurationHours(null);
+      setRequestSchedulingMeta(null);
       setThreadOfferId(oid);
       setThreadRentalId(rid);
 
       if (r?.request_id) {
         const { data: requestRow } = await supabase
           .from('requests')
-          .select('title, duration_type, duration_value, "when"')
+          .select('title, description, duration_type, duration_value')
           .eq('id', r.request_id)
           .maybeSingle();
         if (!cancelled) {
           setRentalTitle(typeof requestRow?.title === 'string' ? requestRow.title.trim() : '');
-          setBaselineDurationHours(baselineDurationHoursFromRequest(requestRow));
+          const decoded = decodeDescriptionExtras(
+            typeof requestRow?.description === 'string' ? requestRow.description : null
+          );
+          const dbRow = requestRow as Record<string, unknown> | undefined;
+          setRequestSchedulingMeta({
+            ...decoded,
+            duration_type: dbRow?.duration_type ?? decoded.durationType,
+            duration_value: dbRow?.duration_value ?? decoded.durationValue,
+            when: decoded.when,
+          });
         }
+      } else if (!cancelled) {
+        setRequestSchedulingMeta(null);
       }
 
       await loadMessages(id, oid, rid);
@@ -353,6 +365,11 @@ export default function ChatDetailScreen() {
   useEffect(() => {
     threadRef.current = { routeId: id, offerId: threadOfferId, rentalId: threadRentalId };
   }, [id, threadOfferId, threadRentalId]);
+
+  const agreementBaselineDurationHours = useMemo(
+    () => resolveAgreementBaselineDurationHours(rental, requestSchedulingMeta),
+    [rental, requestSchedulingMeta]
+  );
 
   useFocusEffect(
     React.useCallback(() => {
@@ -762,23 +779,24 @@ export default function ChatDetailScreen() {
         });
       }
       if (!rental) return false;
+      const baselineHours = resolveAgreementBaselineDurationHours(rental, requestSchedulingMeta);
       const proposedDurationHours = durationHoursBetween(input.meetupTimeIso, input.returnTimeIso);
       const durationEval = evaluateDurationChange({
-        baselineDurationHours,
+        baselineDurationHours: baselineHours,
         proposedDurationHours,
         graceHours: DURATION_GRACE_HOURS,
       });
       if (durationEval.warningTriggered) {
         const continueProposal = await new Promise<boolean>((resolve) => {
           Alert.alert(
-            'Duration Change Warning',
+            'Duration change',
             [
-              'The proposed meetup times change the original rental duration.',
+              'You are proposing a rental duration different from the original agreement.',
               '',
               `Original duration: ${durationEval.originalLabel ?? '—'}`,
               `Proposed duration: ${durationEval.proposedLabel ?? '—'}`,
               '',
-              'The final rental price may change based on the agreed daily rate and requires approval from the other user.',
+              'The other party must approve this change. Pricing and rental terms may change based on the updated duration.',
             ].join('\n'),
             [
               { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
@@ -874,6 +892,7 @@ export default function ChatDetailScreen() {
               : 'New meetup proposal',
             requestId: reqUuid,
             offerId: offerUuid,
+            rentalId: rental.id,
           });
         }
         if (messageId && hasCol('latest_proposal_message_id')) {
@@ -903,7 +922,7 @@ export default function ChatDetailScreen() {
       threadOfferId,
       threadRentalId,
       rentalTitle,
-      baselineDurationHours,
+      requestSchedulingMeta,
     ]
   );
 
@@ -966,6 +985,7 @@ export default function ChatDetailScreen() {
                   <RentalDetailsCard
                     rental={rental}
                     headerTitle={rentalTitle ? `Rental: ${rentalTitle}` : 'Rental'}
+                    agreementBaselineDurationHours={agreementBaselineDurationHours}
                     headerLeftAccessory={
                       <ScreenBackButton
                         onPress={() => router.back()}

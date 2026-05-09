@@ -1,3 +1,8 @@
+import {
+  normalizeDecodedRequestScheduleFields,
+  resolveScheduleFieldsForPersistence,
+  validateRequestPayloadSchedule,
+} from '@/lib/requestSchedulePersistence';
 import { fetchAndMergeProfileNames } from '@/lib/remoteProfileCache';
 import { getSupabase } from '@/lib/supabase';
 
@@ -12,9 +17,12 @@ export type SupabaseRequestRow = {
   created_at: string;
 };
 
-type RequestPayload = {
+export type RequestPayload = {
   toolName: string;
-  when: string | null;
+  /**
+   * In-memory / legacy UI only — not written into `requests.description` JSON (use pickupDate).
+   */
+  when?: string | null;
   how: string;
   pickupRadiusMiles: number | null;
   durationType: string;
@@ -26,12 +34,17 @@ type RequestPayload = {
   requestLng: number | null;
   pickupDate?: string | null;
   returnDate?: string | null;
+  beginAtIso?: string | null;
+  returnAtIso?: string | null;
 };
 
 /** Extra fields not in dedicated DB columns (single-table MVP). */
 function encodeDescriptionExtras(payload: RequestPayload): string {
   const meta = {
-    when: payload.when,
+    pickupDate: payload.pickupDate ?? null,
+    returnDate: payload.returnDate ?? null,
+    beginAtIso: payload.beginAtIso ?? null,
+    returnAtIso: payload.returnAtIso ?? null,
     how: payload.how,
     pickupRadiusMiles: payload.pickupRadiusMiles,
     durationType: payload.durationType,
@@ -40,17 +53,15 @@ function encodeDescriptionExtras(payload: RequestPayload): string {
     location: payload.location,
     requestLat: payload.requestLat,
     requestLng: payload.requestLng,
-    pickupDate: payload.pickupDate ?? null,
-    returnDate: payload.returnDate ?? null,
   };
   return JSON.stringify(meta);
 }
 
-function decodeDescriptionExtras(description: string | null): Partial<RequestPayload> {
+export function decodeDescriptionExtras(description: string | null): Partial<RequestPayload> {
   if (description == null || description.trim() === '') return {};
   try {
     const o = JSON.parse(description) as Record<string, unknown>;
-    return {
+    const base: Record<string, unknown> = {
       when: typeof o.when === 'string' ? o.when : null,
       how:
         typeof o.how === 'string'
@@ -84,14 +95,28 @@ function decodeDescriptionExtras(description: string | null): Partial<RequestPay
           ? o.pickupDate
           : typeof o.beginAtIso === 'string'
             ? o.beginAtIso.slice(0, 10)
-            : null,
+            : typeof o.when === 'string'
+              ? o.when
+              : null,
       returnDate:
         typeof o.returnDate === 'string'
           ? o.returnDate
           : typeof o.returnAtIso === 'string'
             ? o.returnAtIso.slice(0, 10)
             : null,
+      beginAtIso: typeof o.beginAtIso === 'string' ? o.beginAtIso : null,
+      returnAtIso: typeof o.returnAtIso === 'string' ? o.returnAtIso : null,
     };
+    const normalized = normalizeDecodedRequestScheduleFields(base) as Record<string, unknown>;
+    const pickup =
+      typeof normalized.pickupDate === 'string' && normalized.pickupDate.trim() !== ''
+        ? normalized.pickupDate.trim()
+        : null;
+    const legacyWhen = typeof base.when === 'string' && base.when.trim() !== '' ? base.when.trim() : null;
+    return {
+      ...normalized,
+      when: pickup ?? legacyWhen,
+    } as Partial<RequestPayload>;
   } catch {
     return {};
   }
@@ -99,6 +124,16 @@ function decodeDescriptionExtras(description: string | null): Partial<RequestPay
 
 export function mapSupabaseRowToAppRequest(row: SupabaseRequestRow): Record<string, unknown> {
   const extras = decodeDescriptionExtras(row.description);
+  if (__DEV__) {
+    console.log('[Supabase requests] hydrate — decoded schedule from description', {
+      requestId: row.id,
+      pickupDate: extras.pickupDate,
+      returnDate: extras.returnDate,
+      beginAtIso: extras.beginAtIso,
+      returnAtIso: extras.returnAtIso,
+      when: extras.when,
+    });
+  }
   const ts = new Date(row.created_at).getTime();
   const expiresAt = ts + 7 * MS_PER_DAY;
   return {
@@ -220,6 +255,76 @@ export async function fetchRemoteRequestsMerged(
   return rows.map((r) => mergePreservingLocalRental(mapSupabaseRequestSelectRowToApp(r), localRows));
 }
 
+export function appRequestRowToPayload(row: Record<string, unknown>): RequestPayload {
+  const sched = resolveScheduleFieldsForPersistence(row);
+  return {
+    toolName: String(row.toolName ?? '').trim(),
+    when: sched.pickupDate,
+    how: String(row.how ?? 'pickup_nearby'),
+    pickupRadiusMiles:
+      typeof row.pickupRadiusMiles === 'number' && Number.isFinite(row.pickupRadiusMiles)
+        ? row.pickupRadiusMiles
+        : null,
+    durationType: String(row.durationType ?? 'multiDay'),
+    durationValue:
+      typeof row.durationValue === 'number' && Number.isFinite(row.durationValue)
+        ? row.durationValue
+        : null,
+    totalPrice:
+      typeof row.totalPrice === 'number' && Number.isFinite(row.totalPrice) ? row.totalPrice : 0,
+    deliveryFee:
+      typeof row.deliveryFee === 'number' && Number.isFinite(row.deliveryFee) ? row.deliveryFee : null,
+    location: String(row.location ?? '').trim(),
+    requestLat:
+      typeof row.requestLat === 'number' && Number.isFinite(row.requestLat) ? row.requestLat : null,
+    requestLng:
+      typeof row.requestLng === 'number' && Number.isFinite(row.requestLng) ? row.requestLng : null,
+    pickupDate: sched.pickupDate,
+    returnDate: sched.returnDate,
+    beginAtIso: sched.beginAtIso,
+    returnAtIso: sched.returnAtIso,
+  };
+}
+
+export async function updateRequestInSupabase(requestRowId: string, payload: RequestPayload): Promise<boolean> {
+  const sb = getSupabase();
+  if (!sb) return false;
+
+  const scheduleErr = validateRequestPayloadSchedule(payload);
+  if (scheduleErr != null) {
+    if (__DEV__) console.warn('[Supabase requests] update blocked — invalid schedule:', scheduleErr);
+    return false;
+  }
+
+  const descriptionJson = encodeDescriptionExtras(payload);
+  if (__DEV__) {
+    console.log('[Supabase requests] update — RequestPayload before write', {
+      pickupDate: payload.pickupDate,
+      returnDate: payload.returnDate,
+      beginAtIso: payload.beginAtIso,
+      returnAtIso: payload.returnAtIso,
+      durationType: payload.durationType,
+      durationValue: payload.durationValue,
+    });
+    console.log('[Supabase requests] update — description JSON string', descriptionJson);
+  }
+
+  const { error } = await sb
+    .from('requests')
+    .update({
+      title: payload.toolName.trim(),
+      description: descriptionJson,
+      price: payload.totalPrice,
+    })
+    .eq('id', requestRowId);
+
+  if (error) {
+    if (__DEV__) console.warn('[Supabase requests] update error:', error.message);
+    return false;
+  }
+  return true;
+}
+
 export async function insertRequestToSupabase(
   payload: RequestPayload,
   ownerId: string
@@ -227,9 +332,28 @@ export async function insertRequestToSupabase(
   const sb = getSupabase();
   if (!sb) return null;
 
+  const scheduleErr = validateRequestPayloadSchedule(payload);
+  if (scheduleErr != null) {
+    if (__DEV__) console.warn('[Supabase requests] insert blocked — invalid schedule:', scheduleErr);
+    return null;
+  }
+
+  const descriptionJson = encodeDescriptionExtras(payload);
+  if (__DEV__) {
+    console.log('[Supabase requests] insert — RequestPayload before write', {
+      pickupDate: payload.pickupDate,
+      returnDate: payload.returnDate,
+      beginAtIso: payload.beginAtIso,
+      returnAtIso: payload.returnAtIso,
+      durationType: payload.durationType,
+      durationValue: payload.durationValue,
+    });
+    console.log('[Supabase requests] insert — description JSON string', descriptionJson);
+  }
+
   const insert = {
     title: payload.toolName.trim(),
-    description: encodeDescriptionExtras(payload),
+    description: descriptionJson,
     price: payload.totalPrice,
     user_id: ownerId,
   };
@@ -239,6 +363,22 @@ export async function insertRequestToSupabase(
   if (error) {
     if (__DEV__) console.warn('[Supabase requests] insert error:', error.message);
     return null;
+  }
+
+  if (__DEV__ && data != null) {
+    const dr = data as { description?: string | null };
+    console.log('[Supabase requests] insert — row.description returned from DB', dr.description);
+    try {
+      const parsed = JSON.parse(String(dr.description ?? '')) as Record<string, unknown>;
+      console.log('[Supabase requests] insert — parsed schedule keys from DB', {
+        pickupDate: parsed.pickupDate,
+        returnDate: parsed.returnDate,
+        beginAtIso: parsed.beginAtIso,
+        returnAtIso: parsed.returnAtIso,
+      });
+    } catch {
+      /* noop */
+    }
   }
 
   return mapSupabaseRowToAppRequest(data as SupabaseRequestRow);

@@ -11,6 +11,8 @@ export type UnifiedRentalRow = {
   offer_id: string | null;
   listing_id: string | null;
   rental_request_id: string | null;
+  agreed_pickup_datetime?: string | null;
+  agreed_return_datetime?: string | null;
   pickup_datetime?: string | null;
   return_datetime?: string | null;
   meetup_location?: string | null;

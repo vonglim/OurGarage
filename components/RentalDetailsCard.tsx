@@ -1,4 +1,5 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { Ionicons } from '@expo/vector-icons';
 import React, { forwardRef, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -23,6 +24,11 @@ import {
   SCHEDULING_QUARTER_HOUR_INTERVAL,
   snapDateTimeToQuarterHour,
 } from '@/lib/dateTimeScheduling';
+import {
+  DURATION_GRACE_HOURS,
+  durationHoursBetween,
+  evaluateDurationChange,
+} from '@/lib/proposalDurationChange';
 
 export type RentalMeetupDetails = {
   id: string;
@@ -30,6 +36,9 @@ export type RentalMeetupDetails = {
   request_id: string | null;
   renter_user_id: string;
   owner_user_id: string;
+  /** Canonical accepted-request schedule (persisted on rental row). */
+  agreed_pickup_datetime?: string | null;
+  agreed_return_datetime?: string | null;
   meetup_time: string | null;
   pickup_datetime?: string | null;
   meetup_location: string | null;
@@ -55,6 +64,8 @@ type Props = {
   showHeaderEditAction?: boolean;
   itemName: string;
   durationLabel: string;
+  /** Agreed rental span (hours); drives non-blocking duration change hint in the proposal modal. */
+  agreementBaselineDurationHours?: number | null;
   isRenter: boolean;
   isOwner: boolean;
   busy?: boolean;
@@ -134,6 +145,7 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
     showHeaderEditAction = false,
     itemName: _itemName,
     durationLabel,
+    agreementBaselineDurationHours = null,
     isRenter,
     isOwner,
     busy = false,
@@ -144,12 +156,16 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
   ref
 ) {
   const [proposeOpen, setProposeOpen] = useState(false);
+  const pickupSeedIso =
+    rental.agreed_pickup_datetime ?? rental.pickup_datetime ?? rental.meetup_time ?? null;
+  const returnSeedIso =
+    rental.agreed_return_datetime ?? rental.return_datetime ?? rental.return_time ?? null;
   const [meetupDraft, setMeetupDraft] = useState<Date>(() =>
-    snapDateTimeToQuarterHour(initialDraftDate(rental.meetup_time))
+    snapDateTimeToQuarterHour(initialDraftDate(pickupSeedIso))
   );
   const [returnDraft, setReturnDraft] = useState<Date>(() => {
-    const pickup = snapDateTimeToQuarterHour(initialDraftDate(rental.meetup_time));
-    return snapDateTimeToQuarterHour(initialReturnDraft(rental.return_time ?? null, pickup));
+    const pickup = snapDateTimeToQuarterHour(initialDraftDate(pickupSeedIso));
+    return snapDateTimeToQuarterHour(initialReturnDraft(returnSeedIso ?? null, pickup));
   });
   const [meetupLocation, setMeetupLocation] = useState(
     (rental.meetup_location || rental.return_location || '').trim() || ''
@@ -169,14 +185,36 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
     rental.agreement_status === 'confirmed' || (isOwnerConfirmed && isRenterConfirmed);
   const confirmAnim = useRef(new Animated.Value(bothConfirmed ? 1 : 0)).current;
   const sharedRentalLocation = (rental.meetup_location || rental.return_location || '').trim();
-  const pickupIso = rental.pickup_datetime ?? rental.meetup_time;
-  const returnIso = rental.return_datetime ?? rental.return_time ?? null;
+  const pickupIso =
+    rental.agreed_pickup_datetime ?? rental.pickup_datetime ?? rental.meetup_time ?? null;
+  const returnIso =
+    rental.agreed_return_datetime ?? rental.return_datetime ?? rental.return_time ?? null;
   const canConfirm = Boolean(
     rental.meetup_time && sharedRentalLocation !== '' && rental.return_time
   );
   React.useEffect(() => {
     setMeetupLocation((rental.meetup_location || rental.return_location || '').trim() || '');
   }, [rental]);
+
+  React.useEffect(() => {
+    if (proposeOpen) return;
+    const pIso = rental.agreed_pickup_datetime ?? rental.pickup_datetime ?? rental.meetup_time;
+    const rIso = rental.agreed_return_datetime ?? rental.return_datetime ?? rental.return_time;
+    const pickup = snapDateTimeToQuarterHour(initialDraftDate(pIso));
+    const ret = snapDateTimeToQuarterHour(initialReturnDraft(rIso ?? null, pickup));
+    pickupReturnDateLinkedRef.current = isReturnDefaultNextCalendarDayAfterPickup(pickup, ret);
+    setMeetupDraft(pickup);
+    setReturnDraft(ret);
+  }, [
+    proposeOpen,
+    rental.id,
+    rental.agreed_pickup_datetime,
+    rental.agreed_return_datetime,
+    rental.pickup_datetime,
+    rental.meetup_time,
+    rental.return_datetime,
+    rental.return_time,
+  ]);
 
   const openPropose = () => {
     if (__DEV__) {
@@ -190,8 +228,12 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
         showHeaderEditAction,
       });
     }
-    const pickup = snapDateTimeToQuarterHour(initialDraftDate(rental.meetup_time));
-    const ret = snapDateTimeToQuarterHour(initialReturnDraft(rental.return_time ?? null, pickup));
+    const pickup = snapDateTimeToQuarterHour(
+      initialDraftDate(rental.pickup_datetime ?? rental.meetup_time)
+    );
+    const ret = snapDateTimeToQuarterHour(
+      initialReturnDraft(rental.return_datetime ?? rental.return_time ?? null, pickup)
+    );
     pickupReturnDateLinkedRef.current = isReturnDefaultNextCalendarDayAfterPickup(pickup, ret);
     setMeetupDraft(pickup);
     setReturnDraft(ret);
@@ -371,6 +413,16 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
     activePicker === 'pickupDate' || activePicker === 'pickupTime' ? meetupDraft : returnDraft;
   const embeddedPickerIsDate =
     activePicker === 'pickupDate' || activePicker === 'returnDate';
+
+  const durationChangeDraftEval = useMemo(() => {
+    const meet = snapDateTimeToQuarterHour(meetupDraft);
+    const ret = snapDateTimeToQuarterHour(returnDraft);
+    return evaluateDurationChange({
+      baselineDurationHours: agreementBaselineDurationHours,
+      proposedDurationHours: durationHoursBetween(meet.toISOString(), ret.toISOString()),
+      graceHours: DURATION_GRACE_HOURS,
+    });
+  }, [agreementBaselineDurationHours, meetupDraft, returnDraft]);
 
   return (
     <View style={styles.card}>
@@ -554,11 +606,29 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
                   <Pressable
                     pressOpacityFeedback={false}
                     onPress={() => openPicker('returnTime')}
-                    style={({ pressed }) => [styles.pickerValueCell, pressed && styles.secondaryBtnPressed]}
+                    style={({ pressed }) => [
+                      styles.pickerValueCell,
+                      durationChangeDraftEval.warningTriggered ? styles.pickerValueCellWarning : null,
+                      pressed && styles.secondaryBtnPressed,
+                    ]}
                   >
-                    <Text style={styles.pickerValueText}>{formatPickedTime(returnDraft)}</Text>
+                    <View style={styles.pickerValueInnerRow}>
+                      <Text style={styles.pickerValueText}>{formatPickedTime(returnDraft)}</Text>
+                      {durationChangeDraftEval.warningTriggered ? (
+                        <Ionicons name="warning-outline" size={18} color="#B45309" />
+                      ) : null}
+                    </View>
                   </Pressable>
                 </View>
+                {durationChangeDraftEval.warningTriggered ? (
+                  <View style={styles.durationWarningBanner}>
+                    <Ionicons name="warning-outline" size={18} color="#B45309" />
+                    <Text style={styles.durationWarningBannerText}>
+                      You are proposing a rental duration different from the original agreement. The other party must
+                      approve this change. Pricing and rental terms may change based on the updated duration.
+                    </Text>
+                  </View>
+                ) : null}
               </ScrollView>
 
               {useEmbeddedPickers && activePicker ? (
@@ -900,6 +970,34 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: ui.textPrimary,
     textAlign: 'center',
+  },
+  pickerValueInnerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  pickerValueCellWarning: {
+    borderColor: 'rgba(180, 83, 9, 0.45)',
+    backgroundColor: '#FFFBEB',
+  },
+  durationWarningBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 10,
+    backgroundColor: '#FFFBEB',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(180, 83, 9, 0.35)',
+  },
+  durationWarningBannerText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#92400E',
+    lineHeight: 18,
   },
   doneChip: {
     alignSelf: 'flex-end',

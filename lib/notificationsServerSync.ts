@@ -85,10 +85,13 @@ export function mapSupabaseNotificationToApp(
   const offerId = typeof off === 'string' && off.trim() !== '' ? off.trim() : null;
 
   let chatId: string | null = null;
+  let rentalId: string | null = null;
   const data = record.data;
   if (data && typeof data === 'object' && !Array.isArray(data)) {
     const d = data as Record<string, unknown>;
     if (typeof d.chatId === 'string' && d.chatId.trim() !== '') chatId = d.chatId.trim();
+    const rId = d.rentalId ?? d.rental_id;
+    if (typeof rId === 'string' && rId.trim() !== '') rentalId = rId.trim();
   }
 
   return {
@@ -100,6 +103,7 @@ export function mapSupabaseNotificationToApp(
     requestId: requestId as string | number | null,
     offerId,
     chatId,
+    rentalId,
     forUserId: (forUserId || '').trim() || null,
   };
 }

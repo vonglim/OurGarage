@@ -39,6 +39,7 @@ export async function sendOfferThreadUserMessage(input: {
     body: 'You received a new message',
     requestId: input.requestRowId ?? null,
     offerId,
+    rentalId: input.rentalId ?? null,
   });
 
   return { messageId: res.data.id, error: null };

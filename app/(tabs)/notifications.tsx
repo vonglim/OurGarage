@@ -149,12 +149,35 @@ export default function NotificationsScreen() {
         requestId: n.requestId,
         offerId: n.offerId,
         chatId: n.chatId,
+        rentalId: n.rentalId,
       });
     }
     if (n.type === 'review') {
       router.push('/reviews');
       return;
     }
+
+    const rentalRouteId =
+      typeof n.rentalId === 'string' && n.rentalId.trim() !== '' ? n.rentalId.trim() : null;
+    if (rentalRouteId) {
+      const openRentalWorkspace =
+        n.type === 'message' ||
+        n.type === 'offer_accepted' ||
+        n.type === 'accepted' ||
+        n.type === 'started' ||
+        n.type === 'completed';
+      if (openRentalWorkspace) {
+        if (__DEV__) {
+          console.log('[notifications] navigate -> rental workspace', { rentalId: rentalRouteId });
+        }
+        router.push({
+          pathname: '/rental/[id]',
+          params: { id: rentalRouteId },
+        });
+        return;
+      }
+    }
+
     if (n.type === 'message') {
       if (n.offerId != null && String(n.offerId).trim() !== '') {
         router.push({
@@ -180,8 +203,6 @@ export default function NotificationsScreen() {
       (n.type === 'new_offer' ||
         n.type === 'counter_offer' ||
         n.type === 'agreement_pending' ||
-        n.type === 'offer_accepted' ||
-        n.type === 'accepted' ||
         n.type === 'declined') &&
       n.offerId != null &&
       String(n.offerId).trim() !== ''
@@ -193,6 +214,31 @@ export default function NotificationsScreen() {
           : undefined;
       if (__DEV__) {
         console.log('[notifications] navigate -> offer-detail', { requestId, offerId });
+      }
+      router.push({
+        pathname: '/offer-detail',
+        params: {
+          offerId,
+          ...(requestId ? { requestId } : {}),
+        },
+      });
+      return;
+    }
+    if (
+      (n.type === 'offer_accepted' || n.type === 'accepted') &&
+      n.offerId != null &&
+      String(n.offerId).trim() !== ''
+    ) {
+      const offerId = String(n.offerId).trim();
+      const requestId =
+        n.requestId != null && String(n.requestId).trim() !== ''
+          ? String(n.requestId).trim()
+          : undefined;
+      if (__DEV__) {
+        console.log('[notifications] navigate -> offer-detail (legacy, no rental id)', {
+          requestId,
+          offerId,
+        });
       }
       router.push({
         pathname: '/offer-detail',

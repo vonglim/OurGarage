@@ -4,7 +4,13 @@ import type { HowKey } from '@/lib/deliveryFormat';
 import type { DurationType } from '@/lib/durationFormat';
 import { needsDeliveryFee } from '@/lib/deliveryFormat';
 import { isSupabaseConfigured } from '@/lib/supabase';
-import { fetchRemoteRequestsMerged, insertRequestToSupabase } from '@/lib/supabaseRequests';
+import { logRequestScheduleDebug } from '@/lib/requestSchedulePersistence';
+import {
+  appRequestRowToPayload,
+  fetchRemoteRequestsMerged,
+  insertRequestToSupabase,
+  updateRequestInSupabase,
+} from '@/lib/supabaseRequests';
 import { getRequestOwnerId, getRequestSupabaseRowId, isUuidString } from '@/lib/requestOwnership';
 import { getAuthUserIdSync } from '@/lib/authUser';
 import { getProfile, touchLastActive } from './profileStore';
@@ -185,42 +191,9 @@ export async function addRequest(request: any): Promise<void> {
   delete copy.budget;
   const posterUserId = getAuthUserIdSync();
 
-  const inserted = await insertRequestToSupabase(
-    {
-      toolName: String(copy.toolName ?? '').trim(),
-      when: (copy.when as string | null) ?? null,
-      how: String(copy.how ?? 'pickup_nearby'),
-      pickupRadiusMiles:
-        typeof copy.pickupRadiusMiles === 'number' && Number.isFinite(copy.pickupRadiusMiles)
-          ? copy.pickupRadiusMiles
-          : null,
-      durationType: String(copy.durationType ?? 'multiDay'),
-      durationValue:
-        typeof copy.durationValue === 'number' && Number.isFinite(copy.durationValue)
-          ? copy.durationValue
-          : null,
-      totalPrice:
-        typeof copy.totalPrice === 'number' && Number.isFinite(copy.totalPrice)
-          ? copy.totalPrice
-          : 0,
-      deliveryFee:
-        typeof copy.deliveryFee === 'number' && Number.isFinite(copy.deliveryFee)
-          ? copy.deliveryFee
-          : null,
-      location: String(copy.location ?? '').trim(),
-      requestLat:
-        typeof copy.requestLat === 'number' && Number.isFinite(copy.requestLat)
-          ? copy.requestLat
-          : null,
-      requestLng:
-        typeof copy.requestLng === 'number' && Number.isFinite(copy.requestLng)
-          ? copy.requestLng
-          : null,
-      pickupDate: typeof copy.pickupDate === 'string' ? copy.pickupDate : null,
-      returnDate: typeof copy.returnDate === 'string' ? copy.returnDate : null,
-    },
-    posterUserId
-  );
+  logRequestScheduleDebug('addRequest (incoming)', copy as Record<string, unknown>);
+
+  const inserted = await insertRequestToSupabase(appRequestRowToPayload(copy as Record<string, unknown>), posterUserId);
 
   if (inserted) {
     useRequestsStore.setState((s) => ({
@@ -266,11 +239,10 @@ export function clearAllRequests(): void {
   setRequests([]);
 }
 
-export function updateRequest(
+export async function updateRequest(
   timestamp: number,
   patch: {
     toolName: string;
-    when: string | null;
     how: HowKey;
     pickupRadiusMiles?: number | null;
     durationType: DurationType;
@@ -282,17 +254,34 @@ export function updateRequest(
     requestLng: number | null;
     pickupDate?: string | null;
     returnDate?: string | null;
+    beginAtIso?: string | null;
+    returnAtIso?: string | null;
   }
-) {
+): Promise<void> {
+  const prev = getRequestByTimestamp(timestamp);
+  if (prev == null) return;
+
+  const nextRow = { ...prev, ...patch };
+  delete (nextRow as { duration?: unknown }).duration;
+  delete (nextRow as { budget?: unknown }).budget;
+  if (!needsDeliveryFee(patch.how)) {
+    nextRow.deliveryFee = null;
+  }
+
+  logRequestScheduleDebug('updateRequest (merged)', nextRow as Record<string, unknown>);
+
+  const remoteId = getRequestSupabaseRowId(prev as Record<string, unknown>);
+  if (remoteId != null && isSupabaseConfigured()) {
+    const ok = await updateRequestInSupabase(remoteId, appRequestRowToPayload(nextRow as Record<string, unknown>));
+    if (!ok) {
+      throw new Error('Supabase request update failed');
+    }
+  }
+
   const next = useRequestsStore.getState().requests.map((r) => {
     if (r.timestamp !== timestamp) return r;
-    const nextRow = { ...r, ...patch };
-    delete nextRow.duration;
-    delete nextRow.budget;
-    if (!needsDeliveryFee(patch.how)) {
-      nextRow.deliveryFee = null;
-    }
     return nextRow;
   });
   setRequests(next);
+  touchLastActive();
 }

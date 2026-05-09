@@ -22,6 +22,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Pressable } from '@/components/Pressable';
+import { RentalWorkflowBanner } from '@/components/RentalWorkflowBanner';
 import {
   RentalDetailsCard,
   type RentalDetailsCardHandle,
@@ -39,10 +40,10 @@ import { negotiatedDeliveryForOffer, type RequestPricingContext } from '@/lib/ne
 import { formatUsd } from '@/lib/money';
 import { getProfileNameForUserId } from '@/lib/profileDisplayName';
 import {
-  baselineDurationHoursFromRequest,
   DURATION_GRACE_HOURS,
   durationHoursBetween,
   evaluateDurationChange,
+  resolveAgreementBaselineDurationHours,
 } from '@/lib/proposalDurationChange';
 import { isUuidString } from '@/lib/requestOwnership';
 import { insertRentalAgreementSnapshot } from '@/lib/rentalAgreement';
@@ -53,6 +54,8 @@ import {
 import { isPhotoUploadWindowOpen } from '@/lib/rentalPhotoWindow';
 import { formatDurationDisplay } from '@/lib/durationFormat';
 import { calculatePreauthAmount } from '@/lib/rentalProtection';
+import { agreedScheduleIsoPairFromRequest } from '@/lib/agreedRentalScheduleFromRequest';
+import { computeRentalWorkflowBannerModel } from '@/lib/rentalWorkflowBannerModel';
 import { mapSupabaseRequestSelectRowToApp } from '@/lib/supabaseRequests';
 import {
   deleteVerificationPhotoById,
@@ -123,6 +126,8 @@ type RentalRow = {
   max_late_fee_cap?: number | null;
   grace_period_hours?: number | null;
   replacement_value?: number | null;
+  agreed_pickup_datetime?: string | null;
+  agreed_return_datetime?: string | null;
 };
 
 function firstParam(v: string | string[] | undefined): string | undefined {
@@ -990,7 +995,7 @@ export default function RentalScreen() {
   const onProposeRentalDetails = useCallback(
     async (input: { meetupTimeIso: string; returnTimeIso: string; meetupLocation: string }): Promise<boolean> => {
       if (!rental || !me) return false;
-      const baselineDurationHours = baselineDurationHoursFromRequest(request);
+      const baselineDurationHours = resolveAgreementBaselineDurationHours(rental, request);
       const proposedDurationHours = durationHoursBetween(input.meetupTimeIso, input.returnTimeIso);
       const durationEval = evaluateDurationChange({
         baselineDurationHours,
@@ -1000,14 +1005,14 @@ export default function RentalScreen() {
       if (durationEval.warningTriggered) {
         const continueProposal = await new Promise<boolean>((resolve) => {
           Alert.alert(
-            'Duration Change Warning',
+            'Duration change',
             [
-              'The proposed meetup times change the original rental duration.',
+              'You are proposing a rental duration different from the original agreement.',
               '',
               `Original duration: ${durationEval.originalLabel ?? '—'}`,
               `Proposed duration: ${durationEval.proposedLabel ?? '—'}`,
               '',
-              'The final rental price may change based on the agreed daily rate and requires approval from the other user.',
+              'The other party must approve this change. Pricing and rental terms may change based on the updated duration.',
             ].join('\n'),
             [
               { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
@@ -1085,6 +1090,7 @@ export default function RentalScreen() {
               : 'A meetup time was proposed.',
             offerId,
             requestId: requestRowId,
+            rentalId: rental.id,
           });
         }
 
@@ -1267,21 +1273,56 @@ export default function RentalScreen() {
 
   const { pickupMs: requestPickupFallbackMs, returnMs: requestReturnFallbackMs } =
     requestPickupReturnFallbackMs(request);
-  const meetingPickupDisplay = formatAgreementMeetingPickupReturn(
-    agreementStatus === 'confirmed',
-    rental.pickup_datetime ?? rental.meetup_time,
-    requestPickupFallbackMs
-  );
-  const meetingReturnDisplay = formatAgreementMeetingPickupReturn(
-    agreementStatus === 'confirmed',
-    rental.return_datetime ?? rental.return_time,
-    requestReturnFallbackMs
-  );
+  const requestDerivedAgreed = request ? agreedScheduleIsoPairFromRequest(request) : { pickupIso: null, returnIso: null };
+  const meetingPickupIso =
+    rental.agreed_pickup_datetime ??
+    rental.pickup_datetime ??
+    rental.meetup_time ??
+    requestDerivedAgreed.pickupIso;
+  const meetingReturnIso =
+    rental.agreed_return_datetime ??
+    rental.return_datetime ??
+    rental.return_time ??
+    requestDerivedAgreed.returnIso;
+  const meetingPickupDisplay =
+    meetingPickupIso != null &&
+    String(meetingPickupIso).trim() !== '' &&
+    Number.isFinite(Date.parse(String(meetingPickupIso)))
+      ? formatCompactDateTime(meetingPickupIso)
+      : formatAgreementMeetingPickupReturn(
+          agreementStatus === 'confirmed',
+          null,
+          requestPickupFallbackMs
+        );
+  const meetingReturnDisplay =
+    meetingReturnIso != null &&
+    String(meetingReturnIso).trim() !== '' &&
+    Number.isFinite(Date.parse(String(meetingReturnIso)))
+      ? formatCompactDateTime(meetingReturnIso)
+      : formatAgreementMeetingPickupReturn(
+          agreementStatus === 'confirmed',
+          null,
+          requestReturnFallbackMs
+        );
   const meetupLocationTrimmed = (rental.meetup_location || rental.return_location || '').trim();
 
+  const workflowBannerModel = computeRentalWorkflowBannerModel({
+    lifecyclePhase,
+    termsCompleted,
+    meetingCompleted,
+    hasPendingProposal,
+    iProposedLast,
+    meetupLocation: meetupLocationTrimmed,
+    pickupIso: rental.pickup_datetime ?? rental.meetup_time ?? rental.agreed_pickup_datetime,
+  });
+
+  const agreementBaselineDurationHoursForProposals = resolveAgreementBaselineDurationHours(rental, request);
+
   let computedDurationLabel =
-    formatDurationDays(rental.pickup_datetime ?? rental.meetup_time, rental.return_datetime ?? rental.return_time) ??
-    null;
+    formatDurationDays(
+      rental.agreed_pickup_datetime ?? rental.pickup_datetime ?? rental.meetup_time,
+      rental.agreed_return_datetime ?? rental.return_datetime ?? rental.return_time
+    ) ?? null;
   if (!computedDurationLabel && request) {
     const fd = formatDurationDisplay({
       durationType: (request as { durationType?: string }).durationType,
@@ -1302,7 +1343,7 @@ export default function RentalScreen() {
   }
   computedDurationLabel = computedDurationLabel ?? '—';
   const durationWarningEval = evaluateDurationChange({
-    baselineDurationHours: baselineDurationHoursFromRequest(request),
+    baselineDurationHours: resolveAgreementBaselineDurationHours(rental, request),
     proposedDurationHours: durationHoursBetween(
       String(rental.pickup_datetime ?? rental.meetup_time ?? ''),
       String(rental.return_datetime ?? rental.return_time ?? '')
@@ -1908,6 +1949,8 @@ export default function RentalScreen() {
               </View>
             )}
 
+            <RentalWorkflowBanner model={workflowBannerModel} onOpenMessages={openRentalChat} />
+
             <Pressable
               pressOpacityFeedback={false}
               onPress={() => {
@@ -2444,6 +2487,7 @@ export default function RentalScreen() {
             rental={proposalEditorRental}
             itemName={request?.title || 'Rental'}
             durationLabel={computedDurationLabel}
+            agreementBaselineDurationHours={agreementBaselineDurationHoursForProposals}
             isRenter={viewerRole === 'renter'}
             isOwner={viewerRole === 'owner'}
             busy={proposalBusy}

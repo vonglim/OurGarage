@@ -17,6 +17,11 @@ import { type DurationType } from '@/lib/durationFormat';
 import { getRequestEditFormValues } from '@/lib/getRequestEditFormValues';
 import { calculateDailyLateFee } from '@/lib/dailyLateFee';
 import { formatUsd, parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
+import {
+  logRequestScheduleDebug,
+  persistedScheduleFromCalendarDates,
+  validateCalendarReturnAfterPickup,
+} from '@/lib/requestSchedulePersistence';
 import { coordinatesFromLocationField } from '@/lib/zipCoordinates';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { addRequest, getRequestByTimestamp, updateRequest } from '@/store/requestsStore';
@@ -70,6 +75,7 @@ export default function RequestAToolScreen() {
   const [locationInput, setLocationInput] = useState('');
 
   const [editingTimestamp, setEditingTimestamp] = useState<number | null>(null);
+  const [scheduleFieldError, setScheduleFieldError] = useState('');
 
   const refToolName = useRef<TextInput>(null);
   const refLocation = useRef<TextInput>(null);
@@ -324,7 +330,10 @@ export default function RequestAToolScreen() {
           placeholder="Enter days"
           placeholderTextColor={ui.textSecondary}
           value={durationDaysInput}
-          onChangeText={(t) => setDurationDaysInput(t.replace(/\D/g, '').slice(0, 2))}
+          onChangeText={(t) => {
+            setScheduleFieldError('');
+            setDurationDaysInput(t.replace(/\D/g, '').slice(0, 2));
+          }}
           style={styles.input}
           keyboardType="number-pad"
           {...numberPadAccessoryProps()}
@@ -342,7 +351,10 @@ export default function RequestAToolScreen() {
           placeholder="MM/DD/YYYY"
           placeholderTextColor={ui.textSecondary}
           value={pickupDateInput}
-          onChangeText={(t) => setPickupDateInput(formatDateDigits(t))}
+          onChangeText={(t) => {
+            setScheduleFieldError('');
+            setPickupDateInput(formatDateDigits(t));
+          }}
           style={[styles.input, !durationDaysInput.trim() && styles.inputDisabled]}
           keyboardType="number-pad"
           {...numberPadAccessoryProps()}
@@ -366,6 +378,7 @@ export default function RequestAToolScreen() {
             </Text>
           </View>
         ) : null}
+        {scheduleFieldError ? <Text style={styles.fieldScheduleError}>{scheduleFieldError}</Text> : null}
       </View>
 
       <View style={styles.section}>
@@ -480,6 +493,14 @@ export default function RequestAToolScreen() {
             return;
           }
 
+          const schedule = persistedScheduleFromCalendarDates(pickupDateParsed, returnDateParsed);
+          const orderErr = validateCalendarReturnAfterPickup(schedule.pickupDate, schedule.returnDate);
+          if (orderErr != null) {
+            setScheduleFieldError(orderErr);
+            return;
+          }
+          setScheduleFieldError('');
+
           const totalPriceNum = parseMoneyToNumber(totalPriceInput);
           if (totalPriceNum == null || totalPriceNum < 0) {
             Alert.alert(
@@ -503,7 +524,6 @@ export default function RequestAToolScreen() {
 
           const payload = {
             toolName: toolName.trim(),
-            when: pickupDateInput,
             how,
             pickupRadiusMiles: mi,
             durationType,
@@ -513,24 +533,33 @@ export default function RequestAToolScreen() {
             location: locTrim,
             requestLat: geo?.lat ?? null,
             requestLng: geo?.lng ?? null,
-            pickupDate: pickupDateInput,
-            returnDate: returnDateInput,
+            pickupDate: schedule.pickupDate,
+            returnDate: schedule.returnDate,
+            beginAtIso: schedule.beginAtIso,
+            returnAtIso: schedule.returnAtIso,
           };
 
+          logRequestScheduleDebug('request form submit', payload as Record<string, unknown>);
+
           if (editingTimestamp != null) {
-            updateRequest(editingTimestamp, payload);
-            setEditingTimestamp(null);
-            setToolName('');
-            setHow(null);
-            setPickupRadiusMiles('10');
-            setCustomRadiusMilesInput('');
-            setDurationDaysInput('');
-            setPickupDateInput('');
-            setTotalPriceInput('');
-            setDeliveryFeeInput('');
-            setLocationInput('');
-            showFeedbackToast('Request updated');
-            router.back();
+            try {
+              await updateRequest(editingTimestamp, payload);
+              setEditingTimestamp(null);
+              setToolName('');
+              setHow(null);
+              setPickupRadiusMiles('10');
+              setCustomRadiusMilesInput('');
+              setDurationDaysInput('');
+              setPickupDateInput('');
+              setTotalPriceInput('');
+              setDeliveryFeeInput('');
+              setLocationInput('');
+              setScheduleFieldError('');
+              showFeedbackToast('Request updated');
+              router.back();
+            } catch {
+              Alert.alert('Could not save', 'Check your connection and try again.');
+            }
             return;
           }
           try {
@@ -625,6 +654,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: ui.textMuted,
     marginBottom: 10,
+    lineHeight: 18,
+  },
+  fieldScheduleError: {
+    fontSize: 13,
+    color: ui.danger,
+    marginTop: 8,
     lineHeight: 18,
   },
   moneyRow: {

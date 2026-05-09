@@ -31,6 +31,7 @@ import {
   unifiedRentalTitle,
   type UnifiedRentalRow,
 } from '@/lib/fetchUnifiedRentalsForUser';
+import { pickRentalWorkspaceNudgeRow } from '@/lib/rentalWorkspaceNudge';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { markAllNonMessageNotificationsAsRead } from '@/lib/markNotificationsRead';
 import { formatUsd, getNumericOfferPrice } from '@/lib/money';
@@ -120,6 +121,19 @@ function rentalCounterpartyMetaLine(otherUserId: string, role: RentalsSubView): 
   if (shortName) return shortName;
   if (ratingSeg) return `${roleLabel} • ${ratingSeg}`;
   return role === 'renting' ? 'Owner' : 'Renter';
+}
+
+function workspaceNudgeCounterpartyFirstName(row: UnifiedRentalRow, viewerUserId: string): string {
+  const me = viewerUserId.trim();
+  const otherId =
+    row.renter_user_id === me
+      ? String(row.owner_user_id ?? '').trim()
+      : String(row.renter_user_id ?? '').trim();
+  const pub = getPublicProfileForView(otherId);
+  const raw = pub.name.trim();
+  if (!raw || raw === PROFILE_NAME_FALLBACK || raw === '—') return 'the other party';
+  const first = raw.split(/\s+/)[0];
+  return first && first.length > 0 ? first : 'the other party';
 }
 
 /** Product copy for the compact status pill (no "Status:" prefix). */
@@ -230,6 +244,7 @@ type ActivityTab = 'requests' | 'offers' | 'rentals';
 
 const ACTIVITY_TABS: ActivityTab[] = ['requests', 'offers', 'rentals'];
 const ACTIVITY_LAST_TAB_STORAGE_KEY = 'activity_last_tab_v1';
+const ACTIVITY_RENTAL_WORKSPACE_NUDGE_DISMISSED_KEY = 'activity_rental_workspace_nudge_dismissed_v1';
 
 function parseStoredActivityTab(raw: string | null): ActivityTab | null {
   if (raw === 'requests' || raw === 'offers' || raw === 'rentals') return raw;
@@ -344,6 +359,9 @@ export default function ActivityScreen() {
   const [pendingListingRentals, setPendingListingRentals] = useState<PendingListingRentalRow[]>([]);
   const [unifiedRentals, setUnifiedRentals] = useState<UnifiedRentalRow[]>([]);
   const [busyRentalRequestId, setBusyRentalRequestId] = useState<string | null>(null);
+  const [dismissedWorkspaceNudgeIds, setDismissedWorkspaceNudgeIds] = useState<Set<string>>(
+    () => new Set()
+  );
 
   const refreshListingRentalRequests = useCallback(async () => {
     const uid = me.trim();
@@ -364,6 +382,36 @@ export default function ActivityScreen() {
     const rows = await fetchUnifiedRentalsForUser(uid);
     setUnifiedRentals(rows);
   }, [me]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(ACTIVITY_RENTAL_WORKSPACE_NUDGE_DISMISSED_KEY);
+        if (cancelled || raw == null || raw === '') return;
+        const parsed = JSON.parse(raw) as unknown;
+        if (!Array.isArray(parsed)) return;
+        const ids = parsed.filter((x): x is string => typeof x === 'string' && x.trim() !== '');
+        setDismissedWorkspaceNudgeIds(new Set(ids));
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const persistWorkspaceNudgeDismissed = useCallback(async (ids: Set<string>) => {
+    try {
+      await AsyncStorage.setItem(
+        ACTIVITY_RENTAL_WORKSPACE_NUDGE_DISMISSED_KEY,
+        JSON.stringify([...ids])
+      );
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const refreshListingRentalRequestsRef = useRef(refreshListingRentalRequests);
   refreshListingRentalRequestsRef.current = refreshListingRentalRequests;
@@ -618,6 +666,22 @@ export default function ActivityScreen() {
   }, [myLenderOffers, requests, offers]);
 
   const rentalsTotalCount = unifiedRentals.length;
+
+  const rentalWorkspaceNudgeRow = useMemo(
+    () => pickRentalWorkspaceNudgeRow(unifiedRentals, dismissedWorkspaceNudgeIds),
+    [unifiedRentals, dismissedWorkspaceNudgeIds]
+  );
+
+  const onDismissRentalWorkspaceNudge = useCallback(() => {
+    const id = rentalWorkspaceNudgeRow?.id;
+    if (id == null || id === '') return;
+    setDismissedWorkspaceNudgeIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      void persistWorkspaceNudgeDismissed(next);
+      return next;
+    });
+  }, [rentalWorkspaceNudgeRow?.id, persistWorkspaceNudgeDismissed]);
 
   const requestsActivityCount = useMemo(() => {
     let total = 0;
@@ -917,6 +981,51 @@ export default function ActivityScreen() {
                   </Pressable>
                 }
               />
+
+              {rentalWorkspaceNudgeRow ? (
+                <View style={styles.workspaceNudgeOuter}>
+                  <View style={styles.workspaceNudgeCard}>
+                    <View style={styles.workspaceNudgeTopRow}>
+                      <Text style={styles.workspaceNudgeEyebrow}>Action needed</Text>
+                      <Pressable
+                        pressOpacityFeedback={false}
+                        haptic
+                        onPress={onDismissRentalWorkspaceNudge}
+                        accessibilityRole="button"
+                        accessibilityLabel="Dismiss rental workspace reminder"
+                        style={({ pressed }) => [styles.workspaceNudgeDismissBtn, pressed && { opacity: 0.75 }]}
+                      >
+                        <Ionicons name="close" size={22} color={ui.textSecondary} />
+                      </Pressable>
+                    </View>
+                    <Text style={styles.workspaceNudgeTitle}>Rental agreement ready</Text>
+                    <Text style={styles.workspaceNudgeBody}>
+                      {`Coordinate pickup location and times with ${workspaceNudgeCounterpartyFirstName(
+                        rentalWorkspaceNudgeRow,
+                        me
+                      )}.`}
+                    </Text>
+                    <Pressable
+                      pressOpacityFeedback={false}
+                      haptic
+                      onPress={() => {
+                        router.push({
+                          pathname: '/rental/[id]',
+                          params: { id: rentalWorkspaceNudgeRow.id },
+                        });
+                      }}
+                      style={({ pressed }) => [
+                        styles.workspaceNudgeCta,
+                        pressed && primarySolidPressed,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Open rental workspace"
+                    >
+                      <Text style={styles.workspaceNudgeCtaLabel}>Open Rental Workspace</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : null}
 
               <View style={styles.tabRow}>
                 <Pressable
@@ -1388,6 +1497,63 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
     color: '#fff',
+  },
+  workspaceNudgeOuter: {
+    paddingHorizontal: ui.padScreenH,
+    marginBottom: 10,
+  },
+  workspaceNudgeCard: {
+    ...cardChrome,
+    paddingVertical: 14,
+    paddingHorizontal: ui.padCard,
+    backgroundColor: ui.surfaceTintPrimary,
+    borderWidth: 2,
+    borderColor: ui.primary,
+    ...shadowSegmentAttention,
+  },
+  workspaceNudgeTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  workspaceNudgeEyebrow: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: ui.primary,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  workspaceNudgeDismissBtn: {
+    marginRight: -4,
+    padding: 4,
+  },
+  workspaceNudgeTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: ui.textPrimary,
+    letterSpacing: -0.2,
+    marginBottom: 6,
+  },
+  workspaceNudgeBody: {
+    fontSize: 14,
+    fontWeight: '400',
+    color: ui.textSecondary,
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  workspaceNudgeCta: {
+    alignSelf: 'flex-start',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: ui.radiusButton,
+    backgroundColor: ui.primary,
+    ...shadowKey,
+  },
+  workspaceNudgeCtaLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: ui.primaryOn,
   },
   tabRow: {
     flexDirection: 'row',

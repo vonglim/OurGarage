@@ -1,4 +1,5 @@
 import { getAuthUserId } from '@/lib/auth';
+import { agreedScheduleIsoPairFromRequest } from '@/lib/agreedRentalScheduleFromRequest';
 import { getNumericOfferPrice } from '@/lib/money';
 import { getRequestOwnerId, getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
@@ -6,6 +7,16 @@ import { insertOfferAcceptedServerNotification } from '@/lib/insertServerNotific
 import { syncRequestAndOffersFromSupabase } from '@/lib/supabaseOfferSync';
 import { getOfferById } from '@/store/offersStore';
 import { emitAcceptMatchSideEffects, getRequestByTimestamp, requestAcceptsOffers, resolveRequestStoreTimestamp } from '@/store/requestsStore';
+
+/** PostgREST when `rentals.agreed_*` columns are missing (migration 043 not applied on remote). */
+function isMissingAgreedRentalColumnsError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: string; message?: string };
+  if (e.code !== 'PGRST204' || typeof e.message !== 'string') return false;
+  return (
+    e.message.includes('agreed_pickup_datetime') || e.message.includes('agreed_return_datetime')
+  );
+}
 
 export type FinalizeOfferAcceptanceResult =
   | { ok: true; rentalId: string }
@@ -103,6 +114,17 @@ export async function finalizeOfferAcceptance(
     return { ok: false, error: err };
   }
 
+  if (__DEV__) {
+    console.log('[accept] request schedule fields for agreement derivation', {
+      pickupDate: rec.pickupDate,
+      returnDate: rec.returnDate,
+      beginAtIso: rec.beginAtIso,
+      returnAtIso: rec.returnAtIso,
+      durationValue: rec.durationValue,
+      durationType: rec.durationType,
+    });
+  }
+
   const now = new Date().toISOString();
   const acceptedOfferId = String(offer.id);
   const renterId = offer.renterId.trim();
@@ -153,15 +175,24 @@ export async function finalizeOfferAcceptance(
         : typeof rec.posterUserId === 'string'
           ? rec.posterUserId.trim()
           : owner;
-    const payload = {
+    const agreed = agreedScheduleIsoPairFromRequest(rec);
+    if (!agreed.pickupIso || !agreed.returnIso) {
+      const err =
+        'Request is missing pickup and return dates. Update the request schedule before accepting this offer.';
+      console.error('ACCEPT ERROR:', err);
+      return { ok: false, error: err };
+    }
+    const rentalPayloadBase = {
       request_id: requestRowId,
       offer_id: offer.id,
       renter_user_id: offer.renterId,
       owner_user_id: ownerIdForRental,
       status: 'pending_meetup' as const,
-      meetup_time: null,
+      meetup_time: agreed.pickupIso,
+      pickup_datetime: agreed.pickupIso,
       meetup_location: null,
-      return_time: null,
+      return_time: agreed.returnIso,
+      return_datetime: agreed.returnIso,
       return_location: null,
       confirmed_by_renter: false,
       confirmed_by_owner: false,
@@ -173,22 +204,47 @@ export async function finalizeOfferAcceptance(
             : 'fullDay'),
       price: offer.price ?? 0,
     };
-    console.log('[RENTALS INSERT]', payload);
-    const { data: rentalRow, error: e3 } = await supabase
+    const rentalPayloadWithAgreed = {
+      ...rentalPayloadBase,
+      agreed_pickup_datetime: agreed.pickupIso,
+      agreed_return_datetime: agreed.returnIso,
+    };
+    console.log('[RENTALS INSERT]', rentalPayloadWithAgreed);
+
+    const firstInsert = await supabase
       .from('rentals')
-      .insert(payload)
+      .insert(rentalPayloadWithAgreed)
       .select('id')
       .single();
+    let rentalRow: { id?: unknown } | null = firstInsert.data as { id?: unknown } | null;
+    let e3 = firstInsert.error;
+
+    if (e3 != null && isMissingAgreedRentalColumnsError(e3)) {
+      if (__DEV__) {
+        console.warn(
+          '[finalizeOfferAcceptance] Retrying rentals insert without agreed_* (apply supabase/migrations/043_rental_agreed_schedule.sql for those columns)'
+        );
+      }
+      const retry = await supabase.from('rentals').insert(rentalPayloadBase).select('id').single();
+      rentalRow = retry.data as { id?: unknown } | null;
+      e3 = retry.error;
+    }
+
     if (e3) {
       console.error('CONFIRM RENTAL ERROR (rentals insert)', e3);
       return { ok: false, error: e3.message || 'Rental record failed' };
     }
 
+    const rentalIdForNotify =
+      rentalRow != null && typeof (rentalRow as { id?: unknown }).id === 'string'
+        ? String((rentalRow as { id: string }).id).trim()
+        : '';
     void insertOfferAcceptedServerNotification({
       actorId: me,
       offerRenterId: renterId,
       requestRowId,
       offerId: acceptedOfferId,
+      rentalId: rentalIdForNotify !== '' ? rentalIdForNotify : null,
     });
 
     const before = getRequestByTimestamp(ts);
@@ -200,12 +256,8 @@ export async function finalizeOfferAcceptance(
     }
     emitAcceptMatchSideEffects(before, ts, acceptedOfferId, acceptedPrice);
 
-    const rentalId =
-      rentalRow != null && typeof (rentalRow as { id?: unknown }).id === 'string'
-        ? String((rentalRow as { id: string }).id).trim()
-        : '';
-    if (rentalId !== '') {
-      return { ok: true, rentalId };
+    if (rentalIdForNotify !== '') {
+      return { ok: true, rentalId: rentalIdForNotify };
     }
     return {
       ok: true,
