@@ -58,6 +58,10 @@ type Req = {
 export type RequestCardOfferAction = {
   disabled: boolean;
   onPress: () => void;
+  /** Defaults to “Make an offer” when omitted (Browse). */
+  label?: string;
+  /** Visual emphasis for ongoing negotiation vs rental workspace. */
+  tone?: 'default' | 'negotiation' | 'rental';
 };
 
 type Props = {
@@ -216,16 +220,20 @@ export function RequestListCardInner({
               <View
                 style={[
                   styles.offerActionPill,
+                  offerAction.tone === 'negotiation' && styles.offerActionPillNegotiation,
+                  offerAction.tone === 'rental' && styles.offerActionPillRental,
                   offerAction.disabled && styles.offerActionPillDisabled,
                 ]}
               >
                 <Text
                   style={[
                     styles.offerActionText,
+                    offerAction.tone === 'negotiation' && styles.offerActionTextNegotiation,
+                    offerAction.tone === 'rental' && styles.offerActionTextRental,
                     offerAction.disabled && styles.offerActionTextDisabled,
                   ]}
                 >
-                  $ Make an offer
+                  {offerAction.label ?? 'Make an offer'}
                 </Text>
               </View>
             ) : (
@@ -236,6 +244,8 @@ export function RequestListCardInner({
                 onPress={offerAction.onPress}
                 style={({ pressed }) => [
                   styles.offerActionPill,
+                  offerAction.tone === 'negotiation' && styles.offerActionPillNegotiation,
+                  offerAction.tone === 'rental' && styles.offerActionPillRental,
                   offerAction.disabled && styles.offerActionPillDisabled,
                   pressed && !offerAction.disabled && styles.offerActionPillPressed,
                 ]}
@@ -243,10 +253,12 @@ export function RequestListCardInner({
                 <Text
                   style={[
                     styles.offerActionText,
+                    offerAction.tone === 'negotiation' && styles.offerActionTextNegotiation,
+                    offerAction.tone === 'rental' && styles.offerActionTextRental,
                     offerAction.disabled && styles.offerActionTextDisabled,
                   ]}
                 >
-                  $ Make an offer
+                  {offerAction.label ?? 'Make an offer'}
                 </Text>
               </Pressable>
             )}
@@ -403,6 +415,22 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     color: ui.textSecondary,
     textAlign: 'left',
+  },
+  offerActionPillNegotiation: {
+    backgroundColor: '#FFF8E1',
+    borderWidth: 1,
+    borderColor: 'rgba(249, 168, 37, 0.45)',
+  },
+  offerActionPillRental: {
+    backgroundColor: '#E3F2FD',
+    borderWidth: 1,
+    borderColor: 'rgba(21, 101, 192, 0.35)',
+  },
+  offerActionTextNegotiation: {
+    color: '#E65100',
+  },
+  offerActionTextRental: {
+    color: '#1565C0',
   },
   offerActionPill: {
     flexShrink: 0,

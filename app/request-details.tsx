@@ -18,11 +18,14 @@ import {
 } from '@/constants/appUi';
 import { useAuthUserId } from '@/lib/authUser';
 import { formatHowDisplay, needsDeliveryFee } from '@/lib/deliveryFormat';
+import { formatNegotiatedDeliverySummary } from '@/lib/negotiationDelivery';
+import { negotiatedOfferTotals, type RequestPricingContext } from '@/lib/negotiationTermSnapshot';
 import { formatDurationDisplay } from '@/lib/durationFormat';
-import { formatUsd, getNumericOfferPrice, getNumericTotalPrice } from '@/lib/money';
+import { formatUsd, getNumericTotalPrice } from '@/lib/money';
 import { openChatForRequest } from '@/lib/openRequestChat';
 import { getRequestOwnerId, isUuidString } from '@/lib/requestOwnership';
 import { formatDistanceFromYou } from '@/lib/requestDistance';
+import { canCreateNewOfferThreadAfterWithdraw } from '@/lib/negotiationLifecycle';
 import { billingDayCountForRequest, formatPerDayUsd } from '@/lib/requestPriceContext';
 import { fetchOffersByRequestIdWithProfiles } from '@/lib/supabaseOffers';
 import { getSupabase } from '@/lib/supabase';
@@ -92,15 +95,6 @@ function extractTermLine(message: string | null | undefined, label: string): str
   return v && v.length > 0 ? v : null;
 }
 
-function parseDeliveryFeeFromOfferMessage(message: string | null | undefined): number | null {
-  const text = String(message ?? '').trim();
-  if (!text) return null;
-  const m = text.match(/Delivery fee:\s*\$?\s*([0-9,]+(?:\.[0-9]+)?)/i);
-  if (!m) return null;
-  const n = Number(String(m[1]).replace(/,/g, ''));
-  return Number.isFinite(n) ? n : null;
-}
-
 function offerItemPreviewLines(offer: Offer): { line1: string | null; line2: string | null } {
   const brand = extractTermLine(offer.message, 'Brand and model');
   const desc =
@@ -117,7 +111,7 @@ function offerConditionSnippet(message: string | null | undefined): string | nul
       .map((l) => l.trim())
       .find(
         (l) =>
-          !/^(terms \(optional\)|brand and model:|description:|replacement value:|delivery fee:|daily late fee)/i.test(
+          !/^(terms \(optional\)|brand and model:|description:|replacement value:|delivery method:|delivery fee:|daily late fee)/i.test(
             l
           )
       ) ?? null;
@@ -142,6 +136,7 @@ export default function RequestDetailsScreen() {
   const requestId = params.requestId ?? '';
 
   const [tick, setTick] = useState(0);
+  const [lifecycleNow, setLifecycleNow] = useState(() => Date.now());
   /** Mapped from Supabase `offers` rows for this request. */
   const [offers, setOffers] = useState<Offer[]>([]);
   const [requestSummaryExpanded, setRequestSummaryExpanded] = useState(true);
@@ -151,8 +146,14 @@ export default function RequestDetailsScreen() {
   useFocusEffect(
     useCallback(() => {
       setTick((t) => t + 1);
+      setLifecycleNow(Date.now());
     }, [])
   );
+
+  useEffect(() => {
+    const id = setInterval(() => setLifecycleNow(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
 
   const request = useMemo(() => {
     void tick;
@@ -228,6 +229,29 @@ export default function RequestDetailsScreen() {
     );
   }, [request, currentUserId, displayOffers]);
 
+  const activeNegotiationOffers = useMemo(
+    () =>
+      visibleOffers.filter(
+        (o) => o.status === 'pending' || o.status === 'pending_confirmation'
+      ),
+    [visibleOffers]
+  );
+  const closedNegotiationOffers = useMemo(
+    () =>
+      visibleOffers.filter(
+        (o) => o.status !== 'pending' && o.status !== 'pending_confirmation'
+      ),
+    [visibleOffers]
+  );
+
+  const myNegotiationThread = useMemo(
+    () =>
+      visibleOffers.find(
+        (o) => typeof o.renterId === 'string' && o.renterId === currentUserId
+      ),
+    [visibleOffers, currentUserId]
+  );
+
   useEffect(() => {
     if (visibleOffers.length > 0) {
       setRequestSummaryExpanded(false);
@@ -300,6 +324,15 @@ export default function RequestDetailsScreen() {
   }
   const requestOwnerId = getRequestOwnerId(request as Record<string, unknown>);
 
+  const pricingCtx: RequestPricingContext = {
+    how: request.how,
+    deliveryFee: (request as { deliveryFee?: number | null }).deliveryFee,
+    pickupDate: (request as { pickupDate?: string }).pickupDate,
+    returnDate: (request as { returnDate?: string }).returnDate,
+    location: request.location,
+    pickupRadiusMiles: (request as { pickupRadiusMiles?: number }).pickupRadiusMiles,
+  };
+
   const isOwner = requestOwnerId != null && requestOwnerId !== '' && requestOwnerId === currentUserId;
 
   const ownerOpenForOffers =
@@ -308,8 +341,8 @@ export default function RequestDetailsScreen() {
     request.timestamp != null &&
     requestAcceptsOffers(request.timestamp);
 
-  const showOwnerWaitingForOffers = ownerOpenForOffers && visibleOffers.length === 0;
-  const showOwnerHasOffersSummary = ownerOpenForOffers && visibleOffers.length > 0;
+  const showOwnerWaitingForOffers = ownerOpenForOffers && activeNegotiationOffers.length === 0;
+  const showOwnerHasOffersSummary = ownerOpenForOffers && activeNegotiationOffers.length > 0;
 
   const onEditRequest = () => {
     if (request.timestamp == null || matched || !isOwner) return;
@@ -319,17 +352,38 @@ export default function RequestDetailsScreen() {
     });
   };
 
-  const canMakeOffer =
-    request.timestamp != null &&
-    !matched &&
-    !isOwner &&
-    requestAcceptsOffers(request.timestamp) &&
-    !visibleOffers.some(
-      (o) =>
-        typeof o.renterId === 'string' &&
-        o.renterId === currentUserId &&
-        o.status === 'pending_confirmation'
-    );
+  const canMakeOffer = useMemo(() => {
+    if (request.timestamp == null || matched || isOwner || !requestAcceptsOffers(request.timestamp)) {
+      return false;
+    }
+    if (
+      visibleOffers.some(
+        (o) =>
+          typeof o.renterId === 'string' &&
+          o.renterId === currentUserId &&
+          o.status === 'pending_confirmation'
+      )
+    ) {
+      return false;
+    }
+    const mine = myNegotiationThread;
+    if (!mine) return true;
+    if (mine.negotiationLocked) return false;
+    if (mine.status === 'pending' || mine.status === 'pending_confirmation') return false;
+    if (mine.status === 'declined') return false;
+    if (mine.status === 'closed') {
+      return canCreateNewOfferThreadAfterWithdraw(mine, lifecycleNow).ok;
+    }
+    return false;
+  }, [
+    request.timestamp,
+    matched,
+    isOwner,
+    visibleOffers,
+    currentUserId,
+    myNegotiationThread,
+    lifecycleNow,
+  ]);
 
   const onMakeOffer = () => {
     if (request.timestamp == null || matched || isOwner || !requestAcceptsOffers(request.timestamp))
@@ -394,8 +448,16 @@ export default function RequestDetailsScreen() {
   const collapsedSummaryLine3 = request != null ? dashMeta(request.location) : '—';
 
   const headerSubtitle = useMemo(() => {
-    if (isOwner && visibleOffers.length > 0) {
+    if (isOwner && activeNegotiationOffers.length > 0) {
       return 'Compare offers from nearby owners';
+    }
+    if (
+      isOwner &&
+      ownerOpenForOffers &&
+      activeNegotiationOffers.length === 0 &&
+      closedNegotiationOffers.length > 0
+    ) {
+      return 'No active offers — see closed threads below';
     }
     if (isOwner && ownerOpenForOffers && visibleOffers.length === 0) {
       return 'Nearby owners will respond here';
@@ -407,12 +469,23 @@ export default function RequestDetailsScreen() {
       return 'Equipment request';
     }
     return '';
-  }, [isOwner, visibleOffers.length, ownerOpenForOffers]);
+  }, [
+    isOwner,
+    visibleOffers.length,
+    activeNegotiationOffers.length,
+    closedNegotiationOffers.length,
+    ownerOpenForOffers,
+  ]);
 
   const offersSectionTitle =
-    visibleOffers.length === 0
-      ? 'Offers'
-      : `${visibleOffers.length} offer${visibleOffers.length === 1 ? '' : 's'} received`;
+    activeNegotiationOffers.length > 0
+      ? `${activeNegotiationOffers.length} offer${activeNegotiationOffers.length === 1 ? '' : 's'} received`
+      : closedNegotiationOffers.length > 0
+        ? 'Closed offers'
+        : 'Offers';
+
+  const showClosedSubheading =
+    activeNegotiationOffers.length > 0 && closedNegotiationOffers.length > 0;
 
   const canToggleRequestSummary = visibleOffers.length > 0;
 
@@ -442,7 +515,8 @@ export default function RequestDetailsScreen() {
                   </Pressable>
                 ) : isOwner && showOwnerHasOffersSummary ? (
                   <Text style={styles.headerOfferCount} numberOfLines={1}>
-                    {visibleOffers.length} offer{visibleOffers.length === 1 ? '' : 's'}
+                    {activeNegotiationOffers.length} offer
+                    {activeNegotiationOffers.length === 1 ? '' : 's'}
                   </Text>
                 ) : isOwner && showOwnerWaitingForOffers ? (
                   <Text style={styles.headerOfferCountMuted} numberOfLines={2}>
@@ -462,9 +536,9 @@ export default function RequestDetailsScreen() {
             keyboardShouldPersistTaps="handled"
           >
             <Text style={styles.sectionLabel}>{offersSectionTitle}</Text>
-            {ownerOpenForOffers && visibleOffers.length > 0 ? (
+            {ownerOpenForOffers && activeNegotiationOffers.length > 0 ? (
               <Text style={styles.sectionHelper}>
-                Compare offers, message owners, or accept an agreement.
+                Compare offers here — open a thread for accept, counter, or decline.
               </Text>
             ) : null}
             {listedPerDayLine != null && visibleOffers.length > 0 ? (
@@ -483,23 +557,16 @@ export default function RequestDetailsScreen() {
                 <Text style={styles.muted}>No offers yet</Text>
               )
             ) : (
-              visibleOffers.map((offer, index) => {
+              <>
+              {activeNegotiationOffers.map((offer, index) => {
                 const who = getOfferUserPreview(offer);
                 const isBestOffer = index === 0;
-                const offerBasePrice = getNumericOfferPrice(offer);
-                const fee = request.deliveryFee;
-                const feeNum =
-                  typeof fee === 'number' && Number.isFinite(fee)
-                    ? fee
-                    : fee != null && String(fee).trim() !== ''
-                      ? Number(String(fee).replace(/[^0-9.]/g, ''))
-                      : null;
-                const offerDeliveryFee =
-                  parseDeliveryFeeFromOfferMessage(offer.message) ??
-                  (needsDeliveryFee(request.how) && feeNum != null && Number.isFinite(feeNum)
-                    ? feeNum
-                    : 0);
-                const offerTotalWithDelivery = offerBasePrice + offerDeliveryFee;
+                const { total: offerTotalWithDelivery, method: offerDelMethod, delivery: offerDelFee } =
+                  negotiatedOfferTotals(offer, pricingCtx);
+                const deliveryChip = formatNegotiatedDeliverySummary({
+                  method: offerDelMethod,
+                  fee: offerDelMethod === 'owner_delivery' ? offerDelFee : null,
+                });
                 const theirPerDay =
                   offerTotalWithDelivery > 0
                     ? formatPerDayUsd(offerTotalWithDelivery, requestDayCount)
@@ -507,24 +574,40 @@ export default function RequestDetailsScreen() {
                 const { line1: brandLine, line2: descLine } = offerItemPreviewLines(offer);
                 const conditionChip = offerConditionSnippet(offer.message);
                 const areaChip = String(request.location ?? '').trim();
-                const showOwnerActions =
-                  isOwner && ownerOpenForOffers && !matched && offer.status !== 'declined';
-                const showRenterActions = !isOwner && !matched && visibleOffers.length > 0;
+                const isNegotiationActionable =
+                  !matched &&
+                  offer.status === 'pending' &&
+                  request.timestamp != null &&
+                  requestAcceptsOffers(request.timestamp);
+                const latestSenderIsMe =
+                  typeof currentUserId === 'string' &&
+                  currentUserId.trim() !== '' &&
+                  offer.lastUpdatedBy === currentUserId.trim();
+                const showSenderWaitingActions =
+                  isNegotiationActionable && latestSenderIsMe;
 
                 return (
-                  <View
+                  <Pressable
                     key={offer.id}
-                    style={[
+                    onPress={() => goToOfferDetail(offer)}
+                    pressOpacityFeedback={false}
+                    style={({ pressed }) => [
                       styles.offerCard,
                       isBestOffer && styles.offerCardBest,
                       matched && styles.offerCardMatched,
+                      pressed && styles.offerCardPressed,
                     ]}
                   >
-                    {isBestOffer ? (
-                      <View style={styles.bestValueBadge}>
-                        <Text style={styles.bestValueBadgeText}>Best value</Text>
-                      </View>
-                    ) : null}
+                    <View style={styles.offerCardTopRow}>
+                      {isBestOffer ? (
+                        <View style={styles.bestValueBadge}>
+                          <Text style={styles.bestValueBadgeText}>Best value</Text>
+                        </View>
+                      ) : (
+                        <View />
+                      )}
+                      <Text style={styles.offerCardChevron}>›</Text>
+                    </View>
                     <OfferOffererRow
                       name={who.name}
                       rating={who.rating}
@@ -548,7 +631,7 @@ export default function RequestDetailsScreen() {
                     <View style={styles.chipRow}>
                       <View style={styles.chip}>
                         <Text style={styles.chipText} numberOfLines={1}>
-                          {formatHowDisplay(request)}
+                          {deliveryChip}
                         </Text>
                       </View>
                       {conditionChip ? (
@@ -582,95 +665,136 @@ export default function RequestDetailsScreen() {
                       </View>
                     ) : null}
 
-                    {requestOwnerId != null &&
-                    offer.lastUpdatedBy === requestOwnerId &&
-                    offer.lastUpdatedBy !== offer.renterId ? (
-                      <Text style={styles.offerCounterHint}>Your last counter is shown above</Text>
+                    {showSenderWaitingActions ? (
+                      <Text style={styles.offerCounterHint}>
+                        Waiting for response from {isOwner ? who.name : 'the request owner'}
+                      </Text>
                     ) : null}
 
                     <Text style={styles.offerTime}>{getTimeAgo(offer.updatedAt)}</Text>
 
-                    {showOwnerActions ? (
-                      <View style={styles.offerActionRow}>
-                        {offer.status === 'pending' || offer.status === 'pending_confirmation' ? (
-                          <Pressable
-                            pressOpacityFeedback={false}
-                            haptic
-                            onPress={() => goToOfferDetail(offer)}
-                            style={({ pressed }) => [
-                              styles.actionPrimary,
-                              pressed && primarySolidPressed,
-                            ]}
-                          >
-                            <Text style={styles.actionPrimaryText}>
-                              {offer.status === 'pending_confirmation' ? 'Review' : 'Accept'}
-                            </Text>
-                          </Pressable>
-                        ) : null}
-                        {offer.status === 'pending' ? (
-                          <Pressable
-                            pressOpacityFeedback={false}
-                            haptic
-                            onPress={() => goToOfferDetail(offer)}
-                            style={({ pressed }) => [
-                              styles.actionSecondary,
-                              pressed && styles.actionSecondaryPressed,
-                            ]}
-                          >
-                            <Text style={styles.actionSecondaryText}>Counter</Text>
-                          </Pressable>
-                        ) : null}
-                        <Pressable
-                          pressOpacityFeedback={false}
-                          onPress={() => goToOfferDetail(offer)}
-                          style={({ pressed }) => [
-                            styles.actionTertiary,
-                            pressed && styles.actionTertiaryPressed,
-                          ]}
-                        >
-                          <Text style={styles.actionTertiaryText}>Details</Text>
-                        </Pressable>
-                      </View>
-                    ) : showRenterActions ? (
-                      <View style={styles.offerActionRow}>
-                        <Pressable
-                          pressOpacityFeedback={false}
-                          haptic
-                          onPress={() => goToOfferDetail(offer)}
-                          style={({ pressed }) => [
-                            styles.actionPrimary,
-                            pressed && primarySolidPressed,
-                          ]}
-                        >
-                          <Text style={styles.actionPrimaryText}>View offer</Text>
-                        </Pressable>
-                        <Pressable
-                          pressOpacityFeedback={false}
-                          onPress={() => goToOfferDetail(offer)}
-                          style={({ pressed }) => [
-                            styles.actionTertiary,
-                            pressed && styles.actionTertiaryPressed,
-                          ]}
-                        >
-                          <Text style={styles.actionTertiaryText}>Details</Text>
-                        </Pressable>
-                      </View>
-                    ) : matched ? (
-                      <Pressable
-                        pressOpacityFeedback={false}
-                        onPress={() => goToOfferDetail(offer)}
-                        style={({ pressed }) => [
-                          styles.actionTertiary,
-                          { marginTop: 4 },
-                          pressed && styles.actionTertiaryPressed,
-                        ]}
-                      >
-                        <Text style={styles.actionTertiaryText}>View details</Text>
-                      </Pressable>
-                    ) : null}
-                  </View>
+                    <Pressable
+                      pressOpacityFeedback={false}
+                      haptic
+                      onPress={() => goToOfferDetail(offer)}
+                      style={({ pressed }) => [
+                        styles.offerDetailsPrimaryBtn,
+                        pressed && primarySolidPressed,
+                      ]}
+                    >
+                      <Text style={styles.offerDetailsPrimaryBtnText}>View Details</Text>
+                    </Pressable>
+                  </Pressable>
                 );
-              })
+              })}
+              {showClosedSubheading ? (
+                <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>Closed</Text>
+              ) : null}
+              {closedNegotiationOffers.map((offer) => {
+                const who = getOfferUserPreview(offer);
+                const { total: offerTotalWithDelivery, method: offerDelMethod, delivery: offerDelFee } =
+                  negotiatedOfferTotals(offer, pricingCtx);
+                const deliveryChip = formatNegotiatedDeliverySummary({
+                  method: offerDelMethod,
+                  fee: offerDelMethod === 'owner_delivery' ? offerDelFee : null,
+                });
+                const theirPerDay =
+                  offerTotalWithDelivery > 0
+                    ? formatPerDayUsd(offerTotalWithDelivery, requestDayCount)
+                    : '—';
+                const { line1: brandLine, line2: descLine } = offerItemPreviewLines(offer);
+                const conditionChip = offerConditionSnippet(offer.message);
+                const areaChip = String(request.location ?? '').trim();
+                const closedLabel = offer.status === 'closed' ? 'Withdrawn' : 'Declined';
+                return (
+                  <Pressable
+                    key={`closed-${offer.id}`}
+                    onPress={() => goToOfferDetail(offer)}
+                    pressOpacityFeedback={false}
+                    style={({ pressed }) => [
+                      styles.offerCard,
+                      styles.offerCardClosed,
+                      pressed && styles.offerCardPressed,
+                    ]}
+                  >
+                    <View style={styles.offerCardTopRow}>
+                      <View />
+                      <Text style={styles.offerCardChevron}>›</Text>
+                    </View>
+                    <OfferOffererRow
+                      name={who.name}
+                      rating={who.rating}
+                      avatar={who.avatar}
+                      lastActive={who.lastActive}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/(tabs)/profile',
+                          params: { viewUserId: who.userId },
+                        })
+                      }
+                    />
+                    <View style={styles.offerPriceBlock}>
+                      <Text style={styles.offerTotal}>{formatUsd(offerTotalWithDelivery)}</Text>
+                      <Text style={styles.offerSubPrice}>
+                        {theirPerDay} • {requestDayCount} {requestDayCount === 1 ? 'day' : 'days'}
+                      </Text>
+                    </View>
+                    <View style={styles.chipRow}>
+                      <View style={[styles.chip, styles.chipMuted]}>
+                        <Text style={[styles.chipText, styles.chipStatusClosed]} numberOfLines={1}>
+                          {closedLabel}
+                        </Text>
+                      </View>
+                      <View style={styles.chip}>
+                        <Text style={styles.chipText} numberOfLines={1}>
+                          {deliveryChip}
+                        </Text>
+                      </View>
+                      {conditionChip ? (
+                        <View style={styles.chip}>
+                          <Text style={styles.chipText} numberOfLines={1}>
+                            {conditionChip}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {areaChip ? (
+                        <View style={styles.chip}>
+                          <Text style={styles.chipText} numberOfLines={1}>
+                            {areaChip}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+                    {brandLine || descLine ? (
+                      <View style={styles.itemPreviewBlock}>
+                        {brandLine ? (
+                          <Text style={styles.itemPreviewLine} numberOfLines={1}>
+                            {brandLine}
+                          </Text>
+                        ) : null}
+                        {descLine ? (
+                          <Text style={styles.itemPreviewLineMuted} numberOfLines={1}>
+                            {descLine}
+                          </Text>
+                        ) : null}
+                      </View>
+                    ) : null}
+                    <Text style={styles.offerTime}>{getTimeAgo(offer.updatedAt)}</Text>
+                    <Pressable
+                      pressOpacityFeedback={false}
+                      haptic
+                      onPress={() => goToOfferDetail(offer)}
+                      style={({ pressed }) => [
+                        styles.offerDetailsPrimaryBtn,
+                        pressed && primarySolidPressed,
+                      ]}
+                    >
+                      <Text style={styles.offerDetailsPrimaryBtnText}>View Details</Text>
+                    </Pressable>
+                  </Pressable>
+                );
+              })}
+              </>
             )}
 
             <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>Request summary</Text>
@@ -731,7 +855,7 @@ export default function RequestDetailsScreen() {
                   <Text style={styles.waitingForOffersHint}>Waiting for offers</Text>
                 ) : showOwnerHasOffersSummary ? (
                   <Text style={styles.ownerHasOffersHint}>
-                    {formatOwnerOfferCountMessage(visibleOffers.length)}
+                    {formatOwnerOfferCountMessage(activeNegotiationOffers.length)}
                   </Text>
                 ) : null}
 
@@ -1171,13 +1295,33 @@ const styles = StyleSheet.create({
   offerCardMatched: {
     opacity: 0.88,
   },
+  offerCardClosed: {
+    opacity: 0.95,
+    backgroundColor: ui.surfaceGrouped,
+  },
+  offerCardPressed: {
+    opacity: 0.94,
+  },
+  offerCardTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  offerCardChevron: {
+    fontSize: 22,
+    fontWeight: '300',
+    color: ui.textSecondary,
+    lineHeight: 24,
+    marginTop: -2,
+    paddingLeft: 8,
+  },
   bestValueBadge: {
     alignSelf: 'flex-start',
     backgroundColor: '#E8F5E9',
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 4,
-    marginBottom: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(46,125,50,0.35)',
   },
@@ -1223,6 +1367,14 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: ui.primary,
   },
+  chipMuted: {
+    backgroundColor: ui.surfaceNeutral,
+    borderColor: ui.border,
+  },
+  chipStatusClosed: {
+    color: ui.textSecondary,
+    fontWeight: '700',
+  },
   itemPreviewBlock: {
     marginBottom: 6,
   },
@@ -1248,68 +1400,18 @@ const styles = StyleSheet.create({
     color: ui.textSecondary,
     marginBottom: 6,
   },
-  offerActionRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    alignItems: 'center',
-    marginTop: 2,
-  },
-  actionPrimary: {
-    flexGrow: 1,
-    flexBasis: '28%',
-    minWidth: 88,
+  offerDetailsPrimaryBtn: {
+    marginTop: 4,
+    alignSelf: 'stretch',
     backgroundColor: ui.primary,
     borderRadius: ui.radiusButton,
-    paddingVertical: 10,
+    paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  actionPrimaryText: {
-    fontSize: 14,
+  offerDetailsPrimaryBtnText: {
+    fontSize: 15,
     fontWeight: '700',
     color: ui.primaryOn,
-  },
-  actionSecondary: {
-    flexGrow: 1,
-    flexBasis: '28%',
-    minWidth: 88,
-    borderRadius: ui.radiusButton,
-    borderWidth: 2,
-    borderColor: ui.primary,
-    paddingVertical: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: ui.background,
-  },
-  actionSecondaryPressed: {
-    ...outlinePrimaryPressed,
-  },
-  actionSecondaryText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: ui.primary,
-  },
-  actionTertiary: {
-    flexGrow: 1,
-    flexBasis: '28%',
-    minWidth: 88,
-    position: 'relative',
-    paddingVertical: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: ui.radiusButton,
-    backgroundColor: ui.surfaceInput,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: ui.border,
-  },
-  actionTertiaryPressed: {
-    opacity: 0.9,
-    backgroundColor: ui.borderLight,
-  },
-  actionTertiaryText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: ui.textPrimary,
   },
 });

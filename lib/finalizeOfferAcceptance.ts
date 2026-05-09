@@ -1,5 +1,3 @@
-import { router } from 'expo-router';
-
 import { getAuthUserId } from '@/lib/auth';
 import { getNumericOfferPrice } from '@/lib/money';
 import { getRequestOwnerId, getRequestSupabaseRowId } from '@/lib/requestOwnership';
@@ -9,7 +7,13 @@ import { syncRequestAndOffersFromSupabase } from '@/lib/supabaseOfferSync';
 import { getOfferById } from '@/store/offersStore';
 import { emitAcceptMatchSideEffects, getRequestByTimestamp, requestAcceptsOffers, resolveRequestStoreTimestamp } from '@/store/requestsStore';
 
-export type FinalizeOfferAcceptanceResult = { ok: true } | { ok: false; error: string };
+export type FinalizeOfferAcceptanceResult =
+  | { ok: true; rentalId: string }
+  | {
+      ok: true;
+      rentalAgreementFallback: { requestId: string; offerId: string; price: string };
+    }
+  | { ok: false; error: string };
 
 /**
  * Single entry for poster accepting an offer (direct) or confirming after renter accepted counter.
@@ -198,24 +202,19 @@ export async function finalizeOfferAcceptance(
 
     const rentalId =
       rentalRow != null && typeof (rentalRow as { id?: unknown }).id === 'string'
-        ? (rentalRow as { id: string }).id
+        ? String((rentalRow as { id: string }).id).trim()
         : '';
     if (rentalId !== '') {
-      router.push({
-        pathname: '/rental/[id]',
-        params: { id: rentalId },
-      });
-    } else {
-      router.push({
-        pathname: '/rental-agreement',
-        params: {
-          requestId: requestRowId,
-          offerId: acceptedOfferId,
-          price: String(acceptedPrice),
-        },
-      });
+      return { ok: true, rentalId };
     }
-    return { ok: true };
+    return {
+      ok: true,
+      rentalAgreementFallback: {
+        requestId: requestRowId,
+        offerId: acceptedOfferId,
+        price: String(acceptedPrice),
+      },
+    };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('ACCEPT ERROR: exception', e);

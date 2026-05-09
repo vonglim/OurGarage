@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import type { NegotiationDeliveryMethod } from '@/lib/negotiationDelivery';
 import type { NegotiationOfferStatus, Offer } from '@/lib/negotiationOfferTypes';
 import { PROFILE_NAME_FALLBACK } from '@/lib/profileConstants';
 import { fetchAndMergeProfileNames, mergeProfileRowsFromServer, getRemoteDisplayNameForUserId } from '@/lib/remoteProfileCache';
@@ -148,6 +149,30 @@ export function mapSupabaseOfferRowToOffer(
   const posterCounterCount =
     typeof pc === 'number' && Number.isFinite(pc) ? Math.max(0, Math.floor(pc)) : 0;
 
+  const readInt = (v: unknown): number | undefined => {
+    if (typeof v === 'number' && Number.isFinite(v)) return Math.max(0, Math.floor(v));
+    if (typeof v === 'string' && v.trim() !== '') {
+      const n = Number(v);
+      if (Number.isFinite(n)) return Math.max(0, Math.floor(n));
+    }
+    return undefined;
+  };
+
+  const negotiationDeclineTotal = readInt(
+    row.negotiation_decline_total ?? row.negotiationDeclineTotal
+  );
+  const withdrawCycleCount = readInt(row.withdraw_cycle_count ?? row.withdrawCycleCount);
+  const negotiationLocked =
+    row.negotiation_locked === true ||
+    row.negotiation_locked === 't' ||
+    row.negotiationLocked === true;
+  const lastWithdrawalRaw = row.last_withdrawal_at ?? row.lastWithdrawalAt;
+  let lastWithdrawalAt: number | undefined;
+  if (typeof lastWithdrawalRaw === 'string' && lastWithdrawalRaw.trim() !== '') {
+    const t = Date.parse(lastWithdrawalRaw);
+    if (Number.isFinite(t)) lastWithdrawalAt = t;
+  }
+
   const declined =
     row.declined === true ||
     row.declined === 't' ||
@@ -177,6 +202,24 @@ export function mapSupabaseOfferRowToOffer(
     posterCounterCount,
     messageHistory: [],
   };
+  if (negotiationDeclineTotal !== undefined) out.negotiationDeclineTotal = negotiationDeclineTotal;
+  if (withdrawCycleCount !== undefined) out.withdrawCycleCount = withdrawCycleCount;
+  if (lastWithdrawalAt !== undefined) out.lastWithdrawalAt = lastWithdrawalAt;
+  if (negotiationLocked) out.negotiationLocked = true;
+  const nekRaw = row.last_negotiation_event_kind ?? row.lastNegotiationEventKind;
+  if (typeof nekRaw === 'string' && nekRaw.trim() !== '') {
+    out.lastNegotiationEventKind = nekRaw.trim();
+  }
+  const ndm = row.negotiation_delivery_method ?? row.negotiationDeliveryMethod;
+  if (ndm === 'pickup' || ndm === 'owner_delivery') {
+    out.negotiationDeliveryMethod = ndm as NegotiationDeliveryMethod;
+  }
+  const ndf = row.negotiation_delivery_fee ?? row.negotiationDeliveryFee;
+  if (typeof ndf === 'number' && Number.isFinite(ndf)) {
+    out.negotiationDeliveryFee = Math.max(0, ndf);
+  } else if (ndm === 'pickup') {
+    out.negotiationDeliveryFee = null;
+  }
   if (message) out.message = message;
   if (toolDescription) out.toolDescription = toolDescription;
 

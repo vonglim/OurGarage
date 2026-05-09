@@ -15,13 +15,25 @@ import {
   isRequestActiveForBrowse,
 } from '@/lib/openRequestsForBrowse';
 import { formatMilesShort, milesFromViewerToRequest } from '@/lib/requestDistance';
+import {
+  formatNegotiationCooldownRemaining,
+  getRenterBrowseNegotiationCardState,
+} from '@/lib/negotiationLifecycle';
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { normalizeListingImages } from '@/lib/normalizeListingImages';
+import { isSupabaseConfigured } from '@/lib/supabase';
 import type { ToolListing } from '@/store/listingsStore';
 import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
-import { refreshRequestsFromSupabase, useRequestsStore } from '@/store/requestsStore';
+import { getRentalsForRequest } from '@/store/rentalsStore';
+import { useOffersStore } from '@/store/offersStore';
+import {
+  getEffectiveRentalStatus,
+  refreshRequestsFromSupabase,
+  useRequestsStore,
+} from '@/store/requestsStore';
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import type { Router } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Image, PanResponder, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
@@ -66,6 +78,39 @@ function postedTimeAgoPhrase(timestamp: number): string {
   return `Posted ${rel}`;
 }
 
+async function navigateToRentalWorkspace(
+  router: Router,
+  input: { requestTimestamp: number; offerId: string; requestRowId: string }
+): Promise<void> {
+  const local = getRentalsForRequest(input.requestTimestamp).find(
+    (r) => r.offerId === input.offerId
+  );
+  if (local) {
+    router.push({ pathname: '/rental/[id]', params: { id: local.id } });
+    return;
+  }
+  if (isSupabaseConfigured()) {
+    const { getSupabase } = await import('@/lib/supabase');
+    const { data } = await getSupabase()
+      .from('rentals')
+      .select('id')
+      .eq('offer_id', input.offerId)
+      .maybeSingle();
+    const rid =
+      data && typeof (data as { id?: unknown }).id === 'string'
+        ? String((data as { id: string }).id).trim()
+        : '';
+    if (rid) {
+      router.push({ pathname: '/rental/[id]', params: { id: rid } });
+      return;
+    }
+  }
+  router.push({
+    pathname: '/offer-detail',
+    params: { requestId: input.requestRowId, offerId: input.offerId },
+  });
+}
+
 export default function Browse() {
   const router = useRouter();
   const params = useLocalSearchParams<{ query?: string | string[]; mode?: string | string[] }>();
@@ -101,6 +146,12 @@ export default function Browse() {
 
   const listings = useListingsStore((s) => s.listings);
   const requests = useRequestsStore((state) => state.requests);
+  const offersFromStore = useOffersStore((s) => s.offers);
+  const [browseLifecycleNow, setBrowseLifecycleNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setBrowseLifecycleNow(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -371,11 +422,145 @@ export default function Browse() {
                   typeof (req as { posterUserId?: string }).posterUserId === 'string'
                     ? (req as { posterUserId: string }).posterUserId
                     : undefined;
-                const isOwner = posterId != null && posterId === getAuthUserIdSync();
+                const me = getAuthUserIdSync();
+                const meTrim = typeof me === 'string' ? me.trim() : '';
+                const isOwner = posterId != null && posterId === meTrim;
                 const postedAgo =
                   ts != null && Number.isFinite(ts) ? postedTimeAgoPhrase(ts) : null;
 
                 const detailsId = getRequestSupabaseRowId(req as Record<string, unknown>);
+                const myOffer =
+                  ts != null && meTrim !== ''
+                    ? offersFromStore.find(
+                        (o) => o.requestId === ts && o.renterId.trim() === meTrim
+                      )
+                    : undefined;
+
+                const matched = Boolean((req as { matched?: boolean }).matched);
+                const acceptedOfferId = String(
+                  (req as { acceptedOfferId?: string | null }).acceptedOfferId ?? ''
+                ).trim();
+                const rentalLife = getEffectiveRentalStatus(
+                  req as Parameters<typeof getEffectiveRentalStatus>[0]
+                );
+                const iAmMatchedRenter =
+                  matched &&
+                  myOffer != null &&
+                  acceptedOfferId !== '' &&
+                  acceptedOfferId === myOffer.id;
+
+                const cardState =
+                  !isOwner && meTrim !== ''
+                    ? getRenterBrowseNegotiationCardState(myOffer, meTrim, browseLifecycleNow)
+                    : { kind: 'none' as const };
+
+                let negotiationHint: string | null = null;
+                if (!isOwner && cardState.kind !== 'none') {
+                  switch (cardState.kind) {
+                    case 'locked':
+                      negotiationHint = 'Negotiation closed';
+                      break;
+                    case 'active_pending':
+                      negotiationHint = cardState.awaitingTheirMove
+                        ? 'Counter pending — your turn'
+                        : 'Waiting for their response';
+                      break;
+                    case 'active_pending_confirmation':
+                      negotiationHint = 'Awaiting owner confirmation';
+                      break;
+                    case 'declined':
+                      negotiationHint = 'Negotiation closed';
+                      break;
+                    case 'withdrawn_cooldown':
+                      negotiationHint = `Offer withdrawn. You can re-offer in ${formatNegotiationCooldownRemaining(cardState.remainingMs)}.`;
+                      break;
+                    case 'withdrawn_can_reoffer':
+                      negotiationHint = 'Offer withdrawn. You can start a new offer.';
+                      break;
+                    default:
+                      negotiationHint = null;
+                  }
+                }
+
+                const browseOfferAction =
+                  !isOwner && ts != null
+                    ? !detailsId
+                      ? {
+                          disabled: true as const,
+                          label: 'Make an offer',
+                          onPress: () => undefined,
+                        }
+                      : iAmMatchedRenter &&
+                          (rentalLife === 'matched' ||
+                            rentalLife === 'active' ||
+                            rentalLife === 'completed')
+                        ? {
+                            disabled: false as const,
+                            label: 'Open Rental',
+                            tone: 'rental' as const,
+                            onPress: () => {
+                              void navigateToRentalWorkspace(router, {
+                                requestTimestamp: ts,
+                                offerId: String(myOffer!.id),
+                                requestRowId: detailsId,
+                              });
+                            },
+                          }
+                      : cardState.kind === 'locked' && myOffer
+                        ? {
+                            disabled: false as const,
+                            label: 'View negotiation',
+                            tone: 'negotiation' as const,
+                            onPress: () => {
+                              router.push({
+                                pathname: '/offer-detail',
+                                params: {
+                                  requestId: detailsId,
+                                  offerId: String(myOffer.id),
+                                },
+                              });
+                            },
+                          }
+                      : cardState.kind === 'withdrawn_can_reoffer'
+                        ? {
+                            disabled: false as const,
+                            label: 'Make New Offer',
+                            tone: 'default' as const,
+                            onPress: () => {
+                              router.push({
+                                pathname: '/make-offer',
+                                params: { requestId: detailsId },
+                              });
+                            },
+                          }
+                      : myOffer == null
+                        ? {
+                            disabled: false as const,
+                            label: 'Make an offer',
+                            tone: 'default' as const,
+                            onPress: () => {
+                              router.push({
+                                pathname: '/make-offer',
+                                params: { requestId: detailsId },
+                              });
+                            },
+                          }
+                        : {
+                            disabled: false as const,
+                            label: 'View negotiation',
+                            tone: 'negotiation' as const,
+                            onPress: () => {
+                              router.push({
+                                pathname: '/offer-detail',
+                                params: {
+                                  requestId: detailsId,
+                                  offerId: String(myOffer.id),
+                                },
+                              });
+                            },
+                          }
+                    : null;
+
                 return (
                   <View
                     key={ts ?? idx}
@@ -384,28 +569,19 @@ export default function Browse() {
                       idx === 0 && styles.cardEdge,
                       isOwner && styles.cardOwnRequest,
                       !detailsId && styles.cardDisabled,
+                      myOffer && !isOwner && styles.cardMyNegotiation,
                     ]}
                   >
                     <RequestListCardInner
                       req={req as never}
-                      matched={Boolean((req as { matched?: boolean }).matched)}
+                      matched={matched}
                       timeAgoText={postedAgo}
-                      offerAction={
-                        !isOwner && ts != null
-                          ? {
-                              disabled: !detailsId,
-                              onPress: () => {
-                                if (!detailsId) return;
-                                router.push({
-                                  pathname: '/make-offer',
-                                  params: { requestId: detailsId },
-                                });
-                              },
-                            }
-                          : null
-                      }
+                      offerAction={browseOfferAction}
                     />
                     {isOwner ? <Text style={styles.cardOwnRequestLabel}>Your request</Text> : null}
+                    {negotiationHint ? (
+                      <Text style={styles.cardNegotiationHint}>{negotiationHint}</Text>
+                    ) : null}
                   </View>
                 );
               })
@@ -688,6 +864,20 @@ const styles = StyleSheet.create({
     color: ui.primary,
     opacity: 0.75,
     letterSpacing: 0.2,
+  },
+  cardMyNegotiation: {
+    borderLeftWidth: 3,
+    borderLeftColor: '#F9A825',
+    paddingLeft: 10,
+    backgroundColor: '#FFFBF0',
+  },
+  cardNegotiationHint: {
+    marginTop: 6,
+    marginBottom: 4,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#E65100',
+    letterSpacing: 0.1,
   },
   cardMakeOfferHint: {
     marginTop: 8,

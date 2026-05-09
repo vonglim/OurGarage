@@ -1,3 +1,5 @@
+import type { NegotiationDeliveryMethod } from '@/lib/negotiationDelivery';
+import { resolveNegotiationDeliveryForWrite } from '@/lib/negotiationDelivery';
 import { logOfferSync } from '@/lib/supabaseOfferSync';
 import { getSupabase } from '@/lib/supabase';
 
@@ -24,8 +26,16 @@ export type OfferMessageKind =
   | 'renter_update'
   | 'poster_counter'
   | 'renter_accepts'
+  | 'proposal_declined'
   | 'declined'
   | 'accepted';
+
+export type NegotiationLifecycleDbWrite = {
+  negotiationDeclineTotal?: number;
+  withdrawCycleCount?: number;
+  lastWithdrawalAtIso?: string | null;
+  negotiationLocked?: boolean;
+};
 
 export async function upsertNegotiationOfferToSupabase(input: {
   requestRowId: string;
@@ -36,14 +46,27 @@ export async function upsertNegotiationOfferToSupabase(input: {
   lastUpdatedBy: string;
   status?: NegotiationOfferStatus;
   message?: string;
+  /**
+   * When set, stored on the new `offer_messages` row only (e.g. proposal decline copy).
+   * `offers.message` still uses `message` when provided.
+   */
+  threadEventBody?: string;
   posterCounterCount?: number;
   messageKind: OfferMessageKind;
   /** When set (including empty array), persisted on `offers` and copied to this `offer_messages` row. Omit to leave DB unchanged on update. */
   offer_images?: string[];
+  /** Optional lifecycle counters (anti-spam); omitted fields are not written on update. */
+  negotiationLifecycle?: NegotiationLifecycleDbWrite;
+  /** When set, persisted on `offers` for the negotiated fulfillment terms. */
+  negotiationDelivery?: { method: NegotiationDeliveryMethod; fee: number | null } | null;
+  /** Used to infer delivery from legacy offer `message` when `negotiationDelivery` is omitted. */
+  requestHowHint?: string | null;
 }): Promise<{ id: string } | null> {
   const supabase = getSupabase();
   const status = input.status ?? 'pending';
   const msg = input.message?.trim();
+  const threadBody = input.threadEventBody?.trim();
+  const bodyForOfferMessage = threadBody && threadBody.length > 0 ? threadBody : msg;
 
   logOfferSync('before_write', 'upsertNegotiationOfferToSupabase', {
     requestRowId: input.requestRowId,
@@ -71,11 +94,42 @@ export async function upsertNegotiationOfferToSupabase(input: {
     status,
     poster_counter_count: input.posterCounterCount ?? 0,
     updated_at: new Date().toISOString(),
+    last_negotiation_event_kind: input.messageKind,
   };
   if (msg) baseFields.message = msg;
   if (input.offer_images !== undefined) {
     baseFields.offer_images =
       input.offer_images.length > 0 ? input.offer_images.map((u) => String(u).trim()).filter(Boolean) : null;
+  }
+  const lc = input.negotiationLifecycle;
+  if (lc != null) {
+    if (lc.negotiationDeclineTotal !== undefined) {
+      baseFields.negotiation_decline_total = lc.negotiationDeclineTotal;
+    }
+    if (lc.withdrawCycleCount !== undefined) {
+      baseFields.withdraw_cycle_count = lc.withdrawCycleCount;
+    }
+    if (lc.lastWithdrawalAtIso !== undefined) {
+      baseFields.last_withdrawal_at = lc.lastWithdrawalAtIso;
+    }
+    if (lc.negotiationLocked !== undefined) {
+      baseFields.negotiation_locked = lc.negotiationLocked;
+    }
+  }
+
+  const writeNegotiationDelivery =
+    input.negotiationDelivery != null ||
+    input.messageKind === 'initial' ||
+    input.messageKind === 'renter_update' ||
+    input.messageKind === 'poster_counter';
+  if (writeNegotiationDelivery) {
+    const resolved = resolveNegotiationDeliveryForWrite({
+      message: msg ?? bodyForOfferMessage,
+      explicit: input.negotiationDelivery ?? undefined,
+      requestHowFallback: input.requestHowHint ?? null,
+    });
+    baseFields.negotiation_delivery_method = resolved.method;
+    baseFields.negotiation_delivery_fee = resolved.method === 'pickup' ? null : resolved.fee;
   }
 
   let offerId: string;
@@ -92,6 +146,10 @@ export async function upsertNegotiationOfferToSupabase(input: {
       ...baseFields,
       request_id: input.requestRowId,
       user_id: input.renterId,
+      negotiation_decline_total: lc?.negotiationDeclineTotal ?? 0,
+      withdraw_cycle_count: lc?.withdrawCycleCount ?? 0,
+      last_withdrawal_at: lc?.lastWithdrawalAtIso ?? null,
+      negotiation_locked: lc?.negotiationLocked ?? false,
     };
     const { data: ins, error: inErr } = await supabase
       .from('offers')
@@ -116,7 +174,7 @@ export async function upsertNegotiationOfferToSupabase(input: {
     offer_id: offerId,
     author_id: input.lastUpdatedBy,
     receiver_id: receiverId,
-    body: msg ?? null,
+    body: bodyForOfferMessage ? bodyForOfferMessage : null,
     price: input.currentPrice,
     kind: input.messageKind,
   };

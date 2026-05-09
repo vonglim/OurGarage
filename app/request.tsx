@@ -15,6 +15,7 @@ import { primarySolidPressed, subtleControlPressed, ui } from '@/constants/appUi
 import { type HowKey, needsDeliveryFee } from '@/lib/deliveryFormat';
 import { type DurationType } from '@/lib/durationFormat';
 import { getRequestEditFormValues } from '@/lib/getRequestEditFormValues';
+import { calculateDailyLateFee } from '@/lib/dailyLateFee';
 import { formatUsd, parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
 import { coordinatesFromLocationField } from '@/lib/zipCoordinates';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
@@ -22,8 +23,6 @@ import { addRequest, getRequestByTimestamp, updateRequest } from '@/store/reques
 
 const MAX_DURATION_DAYS = 30;
 const RADIUS_OPTIONS = [5, 10, 25, 50] as const;
-const DAILY_LATE_FEE_PENALTY_MULTIPLIER = 1.2;
-
 function formatDateDigits(input: string): string {
   const digits = input.replace(/\D/g, '').slice(0, 8);
   if (digits.length <= 2) return digits;
@@ -169,9 +168,13 @@ export default function RequestAToolScreen() {
   const returnDateInput = returnDateParsed ? dateToMask(returnDateParsed) : '';
   const durationType: DurationType = durationDays > 1 ? 'multiDay' : 'fullDay';
   const totalPriceNum = parseMoneyToNumber(totalPriceInput);
-  const derivedDailyRate = totalPriceNum != null && totalPriceNum >= 0 ? totalPriceNum / durationDays : null;
-  const derivedDailyLateFee = derivedDailyRate != null ? derivedDailyRate * DAILY_LATE_FEE_PENALTY_MULTIPLIER : null;
   const deliveryFeeNumDraft = parseMoneyToNumber(deliveryFeeInput);
+  const totalCostForRental = (totalPriceNum ?? 0) + (needsDeliveryFee(how) ? Math.max(0, deliveryFeeNumDraft ?? 0) : 0);
+  const derivedDailyRate = totalPriceNum != null && totalPriceNum >= 0 ? totalPriceNum / durationDays : null;
+  const derivedDailyLateFee =
+    totalPriceNum != null && totalPriceNum >= 0
+      ? calculateDailyLateFee({ totalAmount: totalCostForRental, durationDays })
+      : null;
   const selectedRadiusMiles =
     pickupRadiusMiles === 'custom' ? parseInt(customRadiusMilesInput, 10) : parseInt(pickupRadiusMiles, 10);
   const isFormFilledForTotal =
@@ -183,7 +186,6 @@ export default function RequestAToolScreen() {
     totalPriceNum != null &&
     totalPriceNum >= 0 &&
     (!needsDeliveryFee(how) || deliveryFeeNumDraft != null);
-  const totalCostForRental = (totalPriceNum ?? 0) + (needsDeliveryFee(how) ? deliveryFeeNumDraft ?? 0 : 0);
 
   return (
     <ScreenWrapper style={styles.screenWrap}>

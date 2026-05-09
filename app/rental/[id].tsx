@@ -3,7 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Image } from 'expo-image';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -34,6 +34,8 @@ import { insertServerNotificationToRecipient } from '@/lib/insertServerNotificat
 import {
   insertMeetupProposalOfferMessage,
 } from '@/lib/meetupProposalThreadEvent';
+import { formatNegotiatedDeliverySummary } from '@/lib/negotiationDelivery';
+import { negotiatedDeliveryForOffer, type RequestPricingContext } from '@/lib/negotiationTermSnapshot';
 import { formatUsd } from '@/lib/money';
 import { getProfileNameForUserId } from '@/lib/profileDisplayName';
 import {
@@ -75,6 +77,7 @@ import {
   type RentalNoteRow,
 } from '@/lib/rentalNotes';
 import { getSupabase } from '@/lib/supabase';
+import { getOfferById, useOffersStore } from '@/store/offersStore';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
 import { primarySolidPressed, shadowCard, shadowKey, ui } from '@/constants/appUi';
 
@@ -581,6 +584,38 @@ export default function RentalScreen() {
   const refreshQueuedRef = useRef(false);
   const proposalEditorRef = useRef<RentalDetailsCardHandle | null>(null);
   const workflowViewKeyRef = useRef<string>('');
+  const offersFromStore = useOffersStore((s) => s.offers);
+
+  const offerForRental = useMemo(() => {
+    if (!rental?.offer_id) return undefined;
+    const id = String(rental.offer_id).trim();
+    if (!id) return undefined;
+    return getOfferById(id) ?? offersFromStore.find((o) => o.id === id);
+  }, [rental?.offer_id, offersFromStore]);
+
+  const requestPricingCtx = useMemo((): RequestPricingContext | null => {
+    if (!request) return null;
+    return {
+      how: request.how,
+      deliveryFee: request.delivery_fee ?? request.deliveryFee,
+      pickupDate: request.pickup_date ?? request.pickupDate,
+      returnDate: request.return_date ?? request.returnDate,
+      location: request.location,
+      pickupRadiusMiles: request.pickup_radius_miles ?? request.pickupRadiusMiles,
+    };
+  }, [request]);
+
+  const negotiatedDeliveryLabel = useMemo(() => {
+    if (offerForRental && requestPricingCtx) {
+      const { method, fee } = negotiatedDeliveryForOffer(offerForRental, requestPricingCtx);
+      return formatNegotiatedDeliverySummary({
+        method,
+        fee: method === 'owner_delivery' ? fee : null,
+      });
+    }
+    const dm = request?.delivery_method ?? request?.deliveryMethod;
+    return typeof dm === 'string' && dm.trim() !== '' ? dm.trim() : '—';
+  }, [offerForRental, request, requestPricingCtx]);
 
   useEffect(() => {
     setPickupEvidenceDisplay([]);
@@ -1910,8 +1945,8 @@ export default function RentalScreen() {
                       <Text style={styles.valueEmphasis}>{formatUsd(finalPrice ?? 0)}</Text>
                     </View>
                     <View style={styles.costGridCell}>
-                      <Text style={styles.label}>Delivery method</Text>
-                      <Text style={styles.valueStandard}>{request?.deliveryMethod || 'No delivery needed'}</Text>
+                      <Text style={styles.label}>Delivery</Text>
+                      <Text style={styles.valueStandard}>{negotiatedDeliveryLabel}</Text>
                     </View>
                   </View>
                   <View style={styles.costGridRow}>
@@ -2532,6 +2567,10 @@ export default function RentalScreen() {
                   <View style={styles.agreementSummaryRow}>
                     <Text style={styles.agreementSummaryLabel}>Rental Price</Text>
                     <Text style={styles.agreementSummaryValue}>{formatUsd(finalPrice)}</Text>
+                  </View>
+                  <View style={styles.agreementSummaryRow}>
+                    <Text style={styles.agreementSummaryLabel}>Delivery</Text>
+                    <Text style={styles.agreementSummaryValue}>{negotiatedDeliveryLabel}</Text>
                   </View>
                   <View style={styles.agreementSummaryRow}>
                     <Text style={styles.agreementSummaryLabel}>Pickup Date/Time</Text>

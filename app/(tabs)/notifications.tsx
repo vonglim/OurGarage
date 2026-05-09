@@ -142,6 +142,15 @@ export default function NotificationsScreen() {
   }, []);
 
   const navigateFromNotification = (n: AppNotification) => {
+    if (__DEV__) {
+      console.log('[notifications] tap', {
+        id: n.id,
+        type: n.type,
+        requestId: n.requestId,
+        offerId: n.offerId,
+        chatId: n.chatId,
+      });
+    }
     if (n.type === 'review') {
       router.push('/reviews');
       return;
@@ -174,21 +183,24 @@ export default function NotificationsScreen() {
         n.type === 'offer_accepted' ||
         n.type === 'accepted' ||
         n.type === 'declined') &&
-      n.requestId != null &&
       n.offerId != null &&
       String(n.offerId).trim() !== ''
     ) {
-      const resolved = resolveRequestFromRouteId(n.requestId);
-      const ts = resolved != null ? (resolved as { timestamp?: number }).timestamp : undefined;
-      if (typeof ts === 'number' && Number.isFinite(ts)) {
-        router.push({
-          pathname: '/offer-detail',
-          params: {
-            requestId: String(ts),
-            offerId: String(n.offerId).trim(),
-          },
-        });
+      const offerId = String(n.offerId).trim();
+      const requestId =
+        n.requestId != null && String(n.requestId).trim() !== ''
+          ? String(n.requestId).trim()
+          : undefined;
+      if (__DEV__) {
+        console.log('[notifications] navigate -> offer-detail', { requestId, offerId });
       }
+      router.push({
+        pathname: '/offer-detail',
+        params: {
+          offerId,
+          ...(requestId ? { requestId } : {}),
+        },
+      });
       return;
     }
     if (n.requestId != null) {

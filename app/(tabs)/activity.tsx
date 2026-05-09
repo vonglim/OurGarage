@@ -183,7 +183,13 @@ function pendingListingTitle(row: PendingListingRentalRow): string {
   return name || row.listing_id;
 }
 
-type OutgoingOfferStatus = 'pending' | 'countered' | 'awaiting_poster' | 'accepted' | 'declined';
+type OutgoingOfferStatus =
+  | 'pending'
+  | 'countered'
+  | 'awaiting_poster'
+  | 'proposal_declined'
+  | 'accepted'
+  | 'declined';
 
 function getOutgoingOfferStatus(o: Offer, req: unknown): OutgoingOfferStatus {
   if (o.status === 'declined' || o.status === 'closed') return 'declined';
@@ -202,6 +208,18 @@ function getOutgoingOfferStatus(o: Offer, req: unknown): OutgoingOfferStatus {
     return 'awaiting_poster';
   }
   const ownerId = getRequestOwnerId(req as Record<string, unknown>);
+  const ownerTrim = ownerId != null ? String(ownerId).trim() : '';
+  const lastTrim = String(o.lastUpdatedBy ?? '').trim();
+  const renterTrim = o.renterId.trim();
+  if (
+    o.status === 'pending' &&
+    o.lastNegotiationEventKind === 'proposal_declined' &&
+    ownerTrim !== '' &&
+    lastTrim === ownerTrim &&
+    renterTrim !== lastTrim
+  ) {
+    return 'proposal_declined';
+  }
   if (ownerId != null && o.lastUpdatedBy === ownerId && o.lastUpdatedBy !== o.renterId) {
     return 'countered';
   }
@@ -230,10 +248,12 @@ function outgoingOfferStatusLabel(s: OutgoingOfferStatus): string {
       return 'Countered';
     case 'awaiting_poster':
       return 'Awaiting owner';
+    case 'proposal_declined':
+      return 'Proposal declined';
     case 'accepted':
       return 'Accepted';
     case 'declined':
-      return 'Declined';
+      return 'Closed';
     default:
       return s;
   }
@@ -743,6 +763,8 @@ export default function ActivityScreen() {
         return { bg: '#E8F5E9', fg: '#1B5E20' };
       case 'countered':
         return { bg: '#FFF8E1', fg: '#F57F17' };
+      case 'proposal_declined':
+        return { bg: '#FFFBEB', fg: '#B45309' };
       case 'awaiting_poster':
         return { bg: '#E3F2FD', fg: '#1565C0' };
       case 'declined':

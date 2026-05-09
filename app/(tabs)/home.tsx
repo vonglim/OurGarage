@@ -10,6 +10,12 @@ import { Image, Platform, ScrollView, StyleSheet, Text, TextInput, View } from '
 import HomeMarketing from '@/components/HomeMarketing';
 import { MainTabFab } from '@/components/MainTabFab';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
+import { useAuthUserId } from '@/lib/authUser';
+import { fetchUnifiedRentalsForUser } from '@/lib/fetchUnifiedRentalsForUser';
+import {
+  selectHomeActiveRentalCardModel,
+  type HomeActiveRentalCardModel,
+} from '@/lib/homeActiveRentalCardModel';
 import { formatUsd, getNumericTotalPrice } from '@/lib/money';
 import { listOpenRequestsSortedByDistance } from '@/lib/openRequestsForBrowse';
 import { normalizeListingImages } from '@/lib/normalizeListingImages';
@@ -48,11 +54,13 @@ function requestPriceLabel(req: Record<string, unknown>): string {
 
 export default function Home() {
   const router = useRouter();
+  const me = useAuthUserId();
   const onboardingOkRef = useRef<boolean | null>(null);
   const findSearchInputRef = useRef<TextInput>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [homeRentalCard, setHomeRentalCard] = useState<HomeActiveRentalCardModel | null>(null);
 
   const requests = useRequestsStore((s) => s.requests);
   const [listings, setListings] = useState<ToolListing[]>([]);
@@ -71,8 +79,23 @@ export default function Home() {
     useCallback(() => {
       touchLastActive();
       void refreshRequestsFromSupabase();
-      fetchListings(); 
-    }, [])
+      fetchListings();
+
+      const uid = me.trim();
+      if (!uid) {
+        setHomeRentalCard(null);
+        return;
+      }
+      let cancelled = false;
+      void (async () => {
+        const rows = await fetchUnifiedRentalsForUser(uid);
+        if (cancelled) return;
+        setHomeRentalCard(selectHomeActiveRentalCardModel(rows, uid));
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [me])
   );
 
   useFocusEffect(
@@ -355,6 +378,56 @@ export default function Home() {
                 </View>
               </View>
             </View>
+
+            {homeRentalCard ? (
+              <View style={styles.activeRentalCard}>
+                <View style={styles.activeRentalHeaderRow}>
+                  <View style={styles.activeRentalDot} importantForAccessibility="no" />
+                  <Text
+                    style={styles.activeRentalSectionLabel}
+                    {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
+                  >
+                    {homeRentalCard.sectionLabel}
+                  </Text>
+                </View>
+                <Text
+                  style={styles.activeRentalEquipment}
+                  numberOfLines={2}
+                  {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
+                >
+                  {homeRentalCard.equipmentTitle}
+                </Text>
+                <Text
+                  style={styles.activeRentalPrimary}
+                  {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
+                >
+                  {homeRentalCard.primaryLine}
+                </Text>
+                {homeRentalCard.detailLine ? (
+                  <Text
+                    style={styles.activeRentalDetail}
+                    {...(Platform.OS === 'android' ? { includeFontPadding: false } : {})}
+                  >
+                    {homeRentalCard.detailLine}
+                  </Text>
+                ) : null}
+                <Pressable
+                  haptic
+                  pressOpacityFeedback={false}
+                  onPress={() => {
+                    router.push({
+                      pathname: '/rental/[id]',
+                      params: { id: homeRentalCard.rentalId },
+                    });
+                  }}
+                  style={({ pressed }) => [styles.activeRentalCta, pressed && styles.activeRentalCtaPressed]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open Rental Workspace"
+                >
+                  <Text style={styles.activeRentalCtaText}>Open Rental Workspace</Text>
+                </Pressable>
+              </View>
+            ) : null}
 
             <View style={styles.sectionCard}>
               <View style={styles.sectionCardHeader}>
@@ -715,6 +788,76 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: ui.textPrimary,
     letterSpacing: -0.12,
+  },
+  activeRentalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: SECTION_CARD_PADDING,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.04)',
+    ...shadowCard,
+  },
+  activeRentalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 8,
+  },
+  activeRentalDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#22C55E',
+  },
+  activeRentalSectionLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: ui.textSecondary,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  activeRentalEquipment: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: ui.textPrimary,
+    letterSpacing: -0.35,
+    lineHeight: 24,
+    marginBottom: 8,
+  },
+  activeRentalPrimary: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: ui.textPrimary,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  activeRentalDetail: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: ui.textSecondary,
+    lineHeight: 20,
+    marginBottom: 16,
+  },
+  activeRentalCta: {
+    marginTop: 8,
+    minHeight: 48,
+    borderRadius: ui.radiusButton,
+    backgroundColor: ui.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: ui.spaceMd,
+    ...shadowKey,
+  },
+  activeRentalCtaPressed: {
+    ...primarySolidPressed,
+  },
+  activeRentalCtaText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: ui.primaryOn,
+    letterSpacing: -0.2,
   },
   sectionCardHeader: {
     flexDirection: 'row',
