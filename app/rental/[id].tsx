@@ -54,6 +54,7 @@ import {
   resolveAgreementBaselineDurationHours,
 } from '@/lib/proposalDurationChange';
 import { isUuidString } from '@/lib/requestOwnership';
+import { normalizeLegalName } from '@/lib/legalName';
 import { insertRentalAgreementSnapshot } from '@/lib/rentalAgreement';
 import {
   RENTAL_EVIDENCE_BUCKET_MISSING_MESSAGE,
@@ -606,6 +607,44 @@ const LAYOUT_TABLET_MIN = 600;
 const CHECKLIST_TWO_COL_MIN = 768;
 const REQUIRED_RETURN_PHOTOS = 3;
 
+/** Signing modal — mockup-aligned accent (distinct from app nav primary). */
+const AGREEMENT_SIGN_GREEN = '#15A34A';
+const AGREEMENT_CARD_BG = '#F8F9FB';
+const AGREEMENT_HOLD_TINT = '#EBF3FF';
+const AGREEMENT_HEADING_SLATE = '#334155';
+
+function AgreementModalKvRow({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.agreementModalKvRow}>
+      <Text style={styles.agreementModalKvLabel}>{label}</Text>
+      <Text style={styles.agreementModalKvValue} numberOfLines={4}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function AgreementModalSecurityHoldInner({ preauthAmount }: { preauthAmount: number }) {
+  return (
+    <>
+      <View style={styles.agreementModalSectionIconRow}>
+        <Ionicons name="lock-closed-outline" size={20} color="#2563EB" />
+        <Text style={styles.agreementModalSectionTitle}>Temporary Security Hold</Text>
+      </View>
+      <Text style={styles.agreementModalHoldSubtitle}>{`${formatUsd(preauthAmount)} temporary hold`}</Text>
+      <View style={styles.agreementModalHoldBodyWrap}>
+        <Text style={styles.agreementModalHoldBody}>This is a temporary hold, not an immediate charge.</Text>
+        <Text style={styles.agreementModalHoldBody}>
+          If approved after review, charges may apply for damage, non-return, or excessive late fees.
+        </Text>
+        <Text style={styles.agreementModalHoldBody}>
+          Holds may expire automatically according to payment provider policies and timing.
+        </Text>
+      </View>
+    </>
+  );
+}
+
 const PICKUP_VERIFICATION_EXAMPLE = require('@/assets/images/pickup-verification-example.png');
 
 function normalizeRole(raw: unknown): PartyRole | undefined {
@@ -1117,7 +1156,63 @@ export default function RentalScreen() {
   const router = useRouter();
   const supabase = getSupabase();
   const insets = useSafeAreaInsets();
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const agreementModalLayout = useMemo(() => {
+    const landscape = windowWidth > windowHeight;
+    const isTablet = windowWidth >= LAYOUT_TABLET_MIN;
+    const isTabletLandscape = isTablet && landscape;
+
+    let backdropPadH: number;
+    let backdropPadV: number;
+    let cardWidth: number;
+    let preferredHeight: number;
+    let maxShellHeight: number;
+    let shellMaxWidth: number | undefined;
+
+    if (!isTablet) {
+      backdropPadH = 8;
+      backdropPadV = 10;
+      cardWidth = windowWidth - backdropPadH * 2;
+      preferredHeight = windowHeight - backdropPadV * 2;
+      maxShellHeight = preferredHeight;
+      shellMaxWidth = undefined;
+    } else if (isTabletLandscape) {
+      backdropPadH = Math.max(16, Math.round(windowWidth * 0.045));
+      backdropPadV = Math.max(14, Math.round(windowHeight * 0.065));
+      cardWidth = windowWidth * 0.9;
+      preferredHeight = windowHeight * 0.87;
+      maxShellHeight = windowHeight * 0.9;
+      shellMaxWidth = windowWidth >= 1200 ? 1000 : undefined;
+    } else {
+      backdropPadH = Math.max(16, Math.round(windowWidth * 0.05));
+      backdropPadV = Math.max(16, Math.round(windowHeight * 0.06));
+      cardWidth = windowWidth * 0.9;
+      preferredHeight = windowHeight * 0.88;
+      maxShellHeight = windowHeight * 0.9;
+      shellMaxWidth = windowWidth >= 1200 ? 1000 : undefined;
+    }
+
+    if (shellMaxWidth != null) {
+      cardWidth = Math.min(cardWidth, shellMaxWidth);
+    }
+
+    const shellHeight = Math.min(preferredHeight, maxShellHeight);
+    const threeCol = windowWidth >= 900 && landscape;
+    const twoCol = windowWidth >= 600 && !threeCol;
+
+    return {
+      cardWidth,
+      shellHeight,
+      maxShellHeight,
+      backdropPadH,
+      backdropPadV,
+      shellMaxWidth,
+      isTablet,
+      threeCol,
+      twoCol,
+      landscape,
+    };
+  }, [windowWidth, windowHeight]);
   const isTabletMargins = windowWidth >= LAYOUT_TABLET_MIN;
   const checklistTwoColumns = windowWidth >= CHECKLIST_TWO_COL_MIN;
   const scrollPadH = isTabletMargins ? ui.spaceSection : 14;
@@ -1212,6 +1307,19 @@ export default function RentalScreen() {
         method,
         fee: method === 'owner_delivery' ? fee : null,
       });
+    }
+    const dm = request?.delivery_method ?? request?.deliveryMethod;
+    return typeof dm === 'string' && dm.trim() !== '' ? dm.trim() : '—';
+  }, [offerForRental, request, requestPricingCtx]);
+
+  /** Agreement modal: value column only (label is always "Delivery") — no "Delivery: $x" prefix. */
+  const agreementDeliveryValue = useMemo(() => {
+    if (offerForRental && requestPricingCtx) {
+      const { method, fee } = negotiatedDeliveryForOffer(offerForRental, requestPricingCtx);
+      if (method === 'pickup') return 'Pickup';
+      if (fee == null) return 'Owner delivery';
+      if (fee <= 0) return 'Free delivery';
+      return formatUsd(fee);
     }
     const dm = request?.delivery_method ?? request?.deliveryMethod;
     return typeof dm === 'string' && dm.trim() !== '' ? dm.trim() : '—';
@@ -2285,12 +2393,12 @@ export default function RentalScreen() {
   const graceHours = Number(rental.grace_period_hours ?? 2);
   const agreementVersion = Math.max(1, Number(rental.agreement_version ?? 1));
   const agreementText = [
-    '1. Renter is responsible for returning the item in the same condition received, excluding normal wear.',
-    '2. Late fees may apply after the grace period shown in this agreement, subject to review.',
-    '3. Damage, loss, missing components, or non-return may result in eligible charges up to replacement value.',
-    '4. Verification photos and rental notes are treated as shared evidence for dispute review.',
-    '5. Failure to return the item may trigger additional marketplace recovery action.',
-    '6. Both parties agree evidence and status transitions are tied to this rental lifecycle.',
+    'Return the item in the same condition received, excluding normal wear.',
+    'Late fees may apply after the listed grace period.',
+    'Damage, loss, missing parts, or non-return may result in charges up to the replacement value.',
+    'Verification photos and rental notes may be used during dispute review.',
+    'Non-returned items may result in additional recovery action.',
+    'Both parties agree that rental evidence and confirmations are part of the rental record.',
   ].join('\n');
 
   const openPhotoViewer = (phase: VerificationPhase, index: number) => {
@@ -2642,10 +2750,10 @@ export default function RentalScreen() {
   };
 
   const onRenterSignAndAuthorize = async () => {
-    const signed = signatureName.trim();
-    if (!signed || !agreementConsent || !me || viewerRole !== 'renter' || !canRenterFinalizeHandoff) return;
+    const signedTrimmed = signatureName.trim();
+    if (!signedTrimmed || !agreementConsent || !me || viewerRole !== 'renter' || !canRenterFinalizeHandoff) return;
+    const typedNorm = normalizeLegalName(signatureName);
     const signedAt = new Date().toISOString();
-    const normalizedSignedName = signed.toUpperCase();
     const signingPhotoRefs = [...pickupEvidenceDisplay, ...returnEvidenceDisplay].map((p) => ({
       id: p.id,
       path: p.path ?? null,
@@ -2653,6 +2761,7 @@ export default function RentalScreen() {
     }));
     const snapshot = await insertRentalAgreementSnapshot(supabase, {
       rentalId: rental.id,
+      signedByUserId: me,
       agreementVersion,
       agreementText,
       rentalSummaryJson: {
@@ -2666,7 +2775,8 @@ export default function RentalScreen() {
         max_late_fee_cap: maxLateFeeCap,
         grace_period_hours: graceHours,
       },
-      signedName: normalizedSignedName,
+      signedNameNormalized: typedNorm,
+      signedNameAsEntered: signedTrimmed,
       signedAt,
       replacementValue,
       dailyLateFee: lateFee,
@@ -2675,12 +2785,17 @@ export default function RentalScreen() {
       verificationPhotoRefs: signingPhotoRefs,
     });
     if (!snapshot.ok) {
-      Alert.alert('Could not finalize agreement', snapshot.error ?? 'Please try again.');
+      if (snapshot.kind === 'schema_unavailable') {
+        Alert.alert('Agreement temporarily unavailable', 'Please refresh the app and try again.');
+      } else {
+        if (__DEV__) console.warn('[agreement] snapshot insert failed', snapshot);
+        Alert.alert('Could not finalize agreement', 'Please try again.');
+      }
       return;
     }
     const handoffResult = await persistReadinessFlags({
       handoff_approved_by_renter: true,
-      signed_name: normalizedSignedName,
+      signed_name: typedNorm,
       signed_at: signedAt,
       agreement_version: agreementVersion,
       preauth_status: 'authorized',
@@ -4302,137 +4417,234 @@ export default function RentalScreen() {
           </View>
         </Modal>
 
-        <Modal visible={agreementModalVisible} transparent animationType="slide" onRequestClose={() => setAgreementModalVisible(false)}>
-          <View style={styles.agreementModalBackdrop}>
-            <KeyboardAvoidingView
-              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-              keyboardVerticalOffset={Platform.OS === 'ios' ? 20 : 0}
+        <Modal visible={agreementModalVisible} transparent animationType="fade" onRequestClose={() => setAgreementModalVisible(false)}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.agreementModalKeyboardRoot}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 8 : 0}
+          >
+            <View
+              style={[
+                styles.agreementModalBackdrop,
+                {
+                  paddingHorizontal: agreementModalLayout.backdropPadH,
+                  paddingVertical: agreementModalLayout.backdropPadV,
+                },
+              ]}
             >
-            <View style={styles.agreementModalCard}>
-              <ScrollView style={styles.agreementScroll} showsVerticalScrollIndicator={false}>
-                <Text style={styles.cardSectionTitle}>Rental Agreement</Text>
-                <Text style={styles.agreementVersionMeta}>{`Version ${agreementVersion}`}</Text>
-
-                <View style={styles.agreementSectionCard}>
-                  <Text style={styles.agreementSectionTitle}>Rental Summary</Text>
-                  <View style={styles.agreementSummaryRow}>
-                    <Text style={styles.agreementSummaryLabel}>Rental Price</Text>
-                    <Text style={styles.agreementSummaryValue}>{formatUsd(finalPrice)}</Text>
+              <View
+                style={[
+                  styles.agreementModalShell,
+                  {
+                    width: agreementModalLayout.cardWidth,
+                    height: agreementModalLayout.shellHeight,
+                    maxHeight: agreementModalLayout.maxShellHeight,
+                  },
+                  agreementModalLayout.shellMaxWidth != null
+                    ? { maxWidth: agreementModalLayout.shellMaxWidth }
+                    : null,
+                ]}
+              >
+                <View style={styles.agreementModalHeader}>
+                  <View style={styles.agreementModalHeaderTop}>
+                    <View style={styles.agreementModalTitleBlock}>
+                      <Text style={styles.agreementModalTitle}>Rental Agreement</Text>
+                      <Text style={styles.agreementModalVersion}>{`Version ${agreementVersion}`}</Text>
+                    </View>
+                    <Pressable
+                      pressOpacityFeedback={false}
+                      accessibilityRole="button"
+                      accessibilityLabel="Close agreement"
+                      onPress={() => {
+                        setAgreementModalVisible(false);
+                        setAgreementConsent(false);
+                      }}
+                      style={({ pressed }) => [styles.agreementModalCloseBtn, pressed && { opacity: 0.65 }]}
+                    >
+                      <Ionicons name="close" size={26} color={AGREEMENT_HEADING_SLATE} />
+                    </Pressable>
                   </View>
-                  <View style={styles.agreementSummaryRow}>
-                    <Text style={styles.agreementSummaryLabel}>Delivery</Text>
-                    <Text style={styles.agreementSummaryValue}>{negotiatedDeliveryLabel}</Text>
-                  </View>
-                  <View style={styles.agreementSummaryRow}>
-                    <Text style={styles.agreementSummaryLabel}>Pickup Date/Time</Text>
-                    <Text style={styles.agreementSummaryValue}>{formatDateTime(rental.pickup_datetime)}</Text>
-                  </View>
-                  <View style={styles.agreementSummaryRow}>
-                    <Text style={styles.agreementSummaryLabel}>Return Date/Time</Text>
-                    <Text style={styles.agreementSummaryValue}>{formatDateTime(rental.return_datetime)}</Text>
-                  </View>
-                  <View style={styles.agreementSummaryRow}>
-                    <Text style={styles.agreementSummaryLabel}>Meetup Location</Text>
-                    <Text style={styles.agreementSummaryValue}>{rental.meetup_location || 'Not set'}</Text>
-                  </View>
-                  <View style={styles.agreementSummaryRow}>
-                    <Text style={styles.agreementSummaryLabel}>Replacement Value</Text>
-                    <Text style={styles.agreementSummaryValue}>{formatUsd(replacementValue)}</Text>
-                  </View>
-                  <View style={styles.agreementSummaryRow}>
-                    <Text style={styles.agreementSummaryLabel}>Preauthorization Amount</Text>
-                    <Text style={styles.agreementSummaryValue}>{formatUsd(preauthAmount)}</Text>
-                  </View>
-                  <View style={styles.agreementSummaryRow}>
-                    <Text style={styles.agreementSummaryLabel}>Daily Late Fee</Text>
-                    <Text style={styles.agreementSummaryValue}>{formatUsd(lateFee)}</Text>
-                  </View>
-                  <View style={styles.agreementSummaryRow}>
-                    <Text style={styles.agreementSummaryLabel}>Maximum Late Fee Cap</Text>
-                    <Text style={styles.agreementSummaryValue}>{formatUsd(maxLateFeeCap)}</Text>
-                  </View>
-                  <View style={styles.agreementSummaryRow}>
-                    <Text style={styles.agreementSummaryLabel}>Grace Period</Text>
-                    <Text style={styles.agreementSummaryValue}>{`${graceHours} hours`}</Text>
-                  </View>
+                  <Text style={styles.agreementModalHelper}>
+                    Please review and accept the rental terms before continuing.
+                  </Text>
+                  <Text style={styles.agreementModalHelperSecondary}>
+                    This agreement helps protect both the owner and renter during the rental.
+                  </Text>
+                  <View style={styles.agreementModalHeaderRule} />
                 </View>
 
-                <View style={styles.agreementSectionCard}>
-                  <Text style={styles.agreementSectionTitle}>Renter Responsibilities</Text>
-                  {agreementText.split('\n').map((line) => (
-                    <Text key={line} style={styles.agreementParagraph}>
-                      {line}
+                <ScrollView
+                  style={styles.agreementModalBodyScroll}
+                  contentContainerStyle={styles.agreementModalBodyContent}
+                  showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                  keyboardDismissMode="on-drag"
+                  bounces
+                >
+                  <View
+                    style={[
+                      styles.agreementModalGridRow,
+                      agreementModalLayout.threeCol && styles.agreementModalGridRowThree,
+                      agreementModalLayout.twoCol && !agreementModalLayout.threeCol && styles.agreementModalGridRowTwo,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.agreementModalCardBlock,
+                        agreementModalLayout.threeCol && styles.agreementModalGridCellThird,
+                        agreementModalLayout.twoCol && styles.agreementModalGridCellHalf,
+                      ]}
+                    >
+                      <View style={styles.agreementModalSectionIconRow}>
+                        <Ionicons name="calendar-outline" size={20} color={AGREEMENT_HEADING_SLATE} />
+                        <Text style={styles.agreementModalSectionTitle}>Rental Details</Text>
+                      </View>
+                      <AgreementModalKvRow label="Pickup" value={meetingPickupDisplay} />
+                      <AgreementModalKvRow label="Return" value={meetingReturnDisplay} />
+                      <AgreementModalKvRow label="Meetup location" value={meetupLocationTrimmed || 'Not set'} />
+                      <AgreementModalKvRow label="Duration" value={computedDurationLabel} />
+                      <AgreementModalKvRow label="Delivery" value={agreementDeliveryValue} />
+                    </View>
+
+                    <View
+                      style={[
+                        styles.agreementModalCardBlock,
+                        agreementModalLayout.threeCol && styles.agreementModalGridCellThird,
+                        agreementModalLayout.twoCol && styles.agreementModalGridCellHalf,
+                      ]}
+                    >
+                      <View style={styles.agreementModalSectionIconRow}>
+                        <Ionicons name="cash-outline" size={20} color={AGREEMENT_HEADING_SLATE} />
+                        <Text style={styles.agreementModalSectionTitle}>Financial Terms</Text>
+                      </View>
+                      <AgreementModalKvRow label="Rental price" value={formatUsd(finalPrice)} />
+                      <AgreementModalKvRow label="Replacement value" value={formatUsd(replacementValue)} />
+                      <AgreementModalKvRow label="Daily late fee" value={formatUsd(lateFee)} />
+                      <AgreementModalKvRow label="Late fee cap" value={formatUsd(maxLateFeeCap)} />
+                      <AgreementModalKvRow label="Grace period" value={`${graceHours} hours`} />
+                    </View>
+
+                    {agreementModalLayout.threeCol ? (
+                      <View style={[styles.agreementModalCardBlock, styles.agreementModalGridCellThird, styles.agreementModalHoldCard]}>
+                        <AgreementModalSecurityHoldInner preauthAmount={preauthAmount} />
+                      </View>
+                    ) : null}
+                  </View>
+
+                  {!agreementModalLayout.threeCol ? (
+                    <View style={[styles.agreementModalCardBlock, styles.agreementModalHoldCard, styles.agreementModalSectionGap]}>
+                      <AgreementModalSecurityHoldInner preauthAmount={preauthAmount} />
+                    </View>
+                  ) : null}
+
+                  <View
+                    style={[
+                      styles.agreementModalGridRow,
+                      agreementModalLayout.landscape && agreementModalLayout.isTablet && styles.agreementModalBottomSplit,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.agreementModalCardBlock,
+                        agreementModalLayout.landscape && agreementModalLayout.isTablet && styles.agreementModalBottomWide,
+                      ]}
+                    >
+                      <View style={styles.agreementModalSectionIconRow}>
+                        <Ionicons name="checkmark-circle-outline" size={20} color={AGREEMENT_SIGN_GREEN} />
+                        <Text style={styles.agreementModalSectionTitle}>Your Responsibilities</Text>
+                      </View>
+                      <View style={styles.agreementModalBulletList}>
+                        {agreementText.split('\n').map((line) => {
+                          const body = line.replace(/^\s*\d+\.\s*/, '').trim();
+                          if (!body) return null;
+                          return (
+                            <View key={line} style={styles.agreementModalBulletRow}>
+                              <Text style={styles.agreementModalBulletGlyph}>•</Text>
+                              <Text style={styles.agreementModalBulletBody}>{body}</Text>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    </View>
+
+                    <View
+                      style={[
+                        styles.agreementModalCardBlock,
+                        agreementModalLayout.landscape && agreementModalLayout.isTablet && styles.agreementModalBottomNarrow,
+                        styles.agreementModalSignatureCard,
+                      ]}
+                    >
+                      <View style={styles.agreementModalSectionIconRow}>
+                        <Ionicons name="create-outline" size={20} color={AGREEMENT_HEADING_SLATE} />
+                        <Text style={styles.agreementModalSectionTitle}>Electronic Signature</Text>
+                      </View>
+                      <Text style={styles.agreementModalSignatureIntro}>
+                        By continuing, you agree to the rental terms and authorize the temporary hold described above.
+                      </Text>
+                      <View style={styles.agreementModalConsentRow}>
+                        <Switch
+                          value={agreementConsent}
+                          onValueChange={setAgreementConsent}
+                          trackColor={{ false: '#9CA3AF', true: AGREEMENT_SIGN_GREEN }}
+                          thumbColor="#FFFFFF"
+                          ios_backgroundColor="#9CA3AF"
+                        />
+                        <Text style={styles.agreementModalConsentLabel}>I agree to the rental terms</Text>
+                      </View>
+                      <Text style={styles.agreementModalSignatureFieldLabel}>Full legal name</Text>
+                      <Text style={styles.agreementModalSignatureNameHelper}>
+                        Enter your legal name to sign this agreement.
+                      </Text>
+                      <TextInput
+                        style={styles.agreementModalSignatureInput}
+                        value={signatureName}
+                        onChangeText={setSignatureName}
+                        placeholder="Type your full legal name"
+                        placeholderTextColor={ui.textMuted}
+                        autoCapitalize="words"
+                      />
+                    </View>
+                  </View>
+                </ScrollView>
+
+                <View style={[styles.agreementModalFooter, { paddingBottom: Math.max(insets.bottom, 14) }]}>
+                  <Pressable
+                    pressOpacityFeedback={false}
+                    onPress={() => {
+                      setAgreementModalVisible(false);
+                      setAgreementConsent(false);
+                    }}
+                    style={({ pressed }) => [styles.agreementModalFooterCancel, pressed && { opacity: 0.85 }]}
+                  >
+                    <Text style={styles.agreementModalFooterCancelText}>Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    pressOpacityFeedback={false}
+                    onPress={() => void onRenterSignAndAuthorize()}
+                    disabled={signatureName.trim().length === 0 || !agreementConsent}
+                    style={({ pressed }) => {
+                      const canSign = signatureName.trim().length > 0 && agreementConsent;
+                      return [
+                        styles.agreementModalFooterPrimary,
+                        !canSign && styles.agreementModalFooterPrimaryDisabled,
+                        pressed && canSign && { opacity: 0.92 },
+                      ];
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.agreementModalFooterPrimaryText,
+                        (signatureName.trim().length === 0 || !agreementConsent) &&
+                          styles.agreementModalFooterPrimaryTextDisabled,
+                      ]}
+                    >
+                      Sign & Authorize
                     </Text>
-                  ))}
+                  </Pressable>
                 </View>
-
-                <View style={styles.agreementSectionCard}>
-                  <Text style={styles.agreementSectionTitle}>Preauthorization Hold</Text>
-                  <Text style={styles.agreementHoldAmount}>{`Preauthorization Hold: ${formatUsd(preauthAmount)}`}</Text>
-                  <Text style={styles.agreementParagraph}>
-                    This is a temporary authorization hold and not an immediate charge.
-                  </Text>
-                  <Text style={styles.agreementParagraph}>
-                    Funds are not transferred unless an eligible claim is approved after review.
-                  </Text>
-                  <Text style={styles.agreementParagraph}>
-                    Eligible claim reasons may include item damage, excessive late fees, missing components, or non-return.
-                  </Text>
-                  <Text style={styles.agreementParagraph}>
-                    Holds may expire automatically according to payment provider policies and timing windows.
-                  </Text>
-                </View>
-
-                <View style={styles.agreementSectionCard}>
-                  <Text style={styles.agreementSectionTitle}>Electronic Signature Consent</Text>
-                  <Text style={styles.agreementParagraph}>
-                    I acknowledge this electronic signature is legally binding and I agree to the rental terms above.
-                  </Text>
-                  <View style={styles.consentRow}>
-                    <Switch value={agreementConsent} onValueChange={setAgreementConsent} />
-                    <Text style={styles.consentLabel}>I agree to the rental terms</Text>
-                  </View>
-                </View>
-
-                <View style={styles.agreementSectionCard}>
-                  <Text style={styles.agreementSectionTitle}>Signature Input</Text>
-                  <TextInput
-                    style={styles.agreementSignatureInput}
-                    value={signatureName}
-                    onChangeText={setSignatureName}
-                    placeholder="Type your full legal name"
-                    placeholderTextColor={ui.textMuted}
-                    autoCapitalize="words"
-                  />
-                </View>
-              </ScrollView>
-
-              <View style={styles.agreementModalActions}>
-                <Pressable
-                  pressOpacityFeedback={false}
-                  onPress={() => {
-                    setAgreementModalVisible(false);
-                    setAgreementConsent(false);
-                  }}
-                >
-                  <Text style={styles.reportTextBtn}>Cancel</Text>
-                </Pressable>
-                <Pressable
-                  pressOpacityFeedback={false}
-                  onPress={() => void onRenterSignAndAuthorize()}
-                  disabled={signatureName.trim().length === 0 || !agreementConsent}
-                  style={({ pressed }) => [
-                    styles.startButton,
-                    (signatureName.trim().length === 0 || !agreementConsent) && styles.startButtonDisabled,
-                    pressed && signatureName.trim().length > 0 && agreementConsent && styles.startButtonPressed,
-                  ]}
-                >
-                  <Text style={styles.startButtonText}>Sign & Authorize</Text>
-                </Pressable>
               </View>
             </View>
-            </KeyboardAvoidingView>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
       </ScreenEntrance>
     </View>
@@ -5228,97 +5440,306 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
   },
+  agreementModalKeyboardRoot: {
+    flex: 1,
+  },
   agreementModalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.38)',
+    backgroundColor: 'rgba(0,0,0,0.4)',
     justifyContent: 'center',
-    paddingHorizontal: 16,
+    alignItems: 'center',
   },
-  agreementModalCard: {
+  agreementModalShell: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 14,
-    gap: 8,
-    maxHeight: '86%',
+    borderRadius: 24,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(15, 23, 42, 0.08)',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.18,
+    shadowRadius: 28,
+    elevation: 14,
   },
-  agreementScroll: {
-    maxHeight: 520,
+  agreementModalHeader: {
+    paddingTop: 20,
+    paddingHorizontal: 22,
+    paddingBottom: 14,
+    backgroundColor: '#FFFFFF',
   },
-  agreementVersionMeta: {
-    fontSize: 11,
-    color: ui.textMuted,
-    fontWeight: '600',
-    marginBottom: 2,
-  },
-  agreementSectionCard: {
-    borderWidth: 1,
-    borderColor: ui.border,
-    backgroundColor: '#F8FAFD',
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-    gap: 6,
-    marginBottom: 8,
-  },
-  agreementSectionTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: ui.textPrimary,
-  },
-  agreementSummaryRow: {
+  agreementModalHeaderTop: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'flex-start',
-    gap: 10,
+    justifyContent: 'space-between',
+    gap: 12,
   },
-  agreementSummaryLabel: {
+  agreementModalTitleBlock: {
     flex: 1,
-    fontSize: 11,
-    color: ui.textMuted,
+    minWidth: 0,
+  },
+  agreementModalTitle: {
+    fontSize: 26,
     fontWeight: '600',
+    color: AGREEMENT_HEADING_SLATE,
+    letterSpacing: -0.3,
   },
-  agreementSummaryValue: {
+  agreementModalVersion: {
+    marginTop: 4,
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#64748B',
+  },
+  agreementModalHelper: {
+    marginTop: 12,
+    fontSize: 15,
+    lineHeight: 22,
+    color: '#64748B',
+    fontWeight: '400',
+  },
+  agreementModalHelperSecondary: {
+    marginTop: 8,
+    fontSize: 14,
+    lineHeight: 21,
+    color: '#94A3B8',
+    fontWeight: '400',
+  },
+  agreementModalCloseBtn: {
+    padding: 4,
+    marginTop: -4,
+    marginRight: -4,
+  },
+  agreementModalHeaderRule: {
+    marginTop: 16,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(15, 23, 42, 0.1)',
+  },
+  agreementModalBodyScroll: {
     flex: 1,
-    fontSize: 11,
-    color: ui.textPrimary,
-    textAlign: 'right',
-    fontWeight: '700',
+    minHeight: 0,
+    backgroundColor: '#FFFFFF',
   },
-  agreementParagraph: {
-    fontSize: 11,
-    color: ui.textSecondary,
-    lineHeight: 16,
+  agreementModalBodyContent: {
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 28,
+    gap: 20,
   },
-  agreementHoldAmount: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: ui.primary,
+  agreementModalGridRow: {
+    flexDirection: 'column',
+    gap: 20,
   },
-  consentRow: {
+  agreementModalGridRowTwo: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 16,
+  },
+  agreementModalGridRowThree: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 14,
+  },
+  agreementModalGridCellHalf: {
+    flex: 1,
+    minWidth: 0,
+  },
+  agreementModalGridCellThird: {
+    flex: 1,
+    minWidth: 0,
+  },
+  agreementModalBottomSplit: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 16,
+  },
+  agreementModalBottomWide: {
+    flex: 2,
+    minWidth: 0,
+  },
+  agreementModalBottomNarrow: {
+    flex: 1,
+    minWidth: 0,
+  },
+  agreementModalCardBlock: {
+    backgroundColor: AGREEMENT_CARD_BG,
+    borderRadius: 18,
+    padding: 20,
+    gap: 12,
+  },
+  agreementModalHoldCard: {
+    backgroundColor: AGREEMENT_HOLD_TINT,
+  },
+  agreementModalSectionGap: {
+    marginTop: 0,
+  },
+  agreementModalSectionIconRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
+    marginBottom: 2,
   },
-  consentLabel: {
-    flex: 1,
-    fontSize: 11,
-    color: ui.textPrimary,
+  agreementModalSectionTitle: {
+    fontSize: 17,
     fontWeight: '600',
+    color: AGREEMENT_HEADING_SLATE,
+    letterSpacing: -0.2,
   },
-  agreementSignatureInput: {
-    minHeight: 42,
-    borderWidth: 1,
-    borderColor: ui.border,
-    borderRadius: 8,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+  agreementModalKvRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 14,
+  },
+  agreementModalKvLabel: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '400',
+    color: '#64748B',
+    lineHeight: 20,
+  },
+  agreementModalKvValue: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: AGREEMENT_HEADING_SLATE,
+    textAlign: 'right',
+    lineHeight: 21,
+  },
+  agreementModalHoldSubtitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#1D4ED8',
+    marginBottom: 2,
+  },
+  agreementModalHoldBodyWrap: {
+    gap: 12,
+    marginTop: 2,
+  },
+  agreementModalHoldBody: {
     fontSize: 13,
-    color: ui.textPrimary,
+    lineHeight: 20,
+    color: '#64748B',
+    fontWeight: '400',
   },
-  agreementModalActions: {
-    marginTop: 6,
-    gap: 8,
+  agreementModalBulletList: {
+    gap: 11,
+  },
+  agreementModalBulletRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  agreementModalBulletGlyph: {
+    width: 18,
+    fontSize: 14,
+    lineHeight: 24,
+    color: '#7C8A9E',
+  },
+  agreementModalBulletBody: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 24,
+    color: '#7C8A9E',
+    fontWeight: '400',
+  },
+  agreementModalSignatureCard: {
+    gap: 16,
+  },
+  agreementModalSignatureIntro: {
+    fontSize: 14,
+    lineHeight: 22,
+    color: '#7C8A9E',
+    fontWeight: '400',
+  },
+  agreementModalConsentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  agreementModalConsentLabel: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '500',
+    color: AGREEMENT_HEADING_SLATE,
+  },
+  agreementModalSignatureFieldLabel: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#64748B',
+  },
+  agreementModalSignatureNameHelper: {
+    marginTop: 4,
+    marginBottom: 8,
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#7C8A9E',
+    fontWeight: '400',
+  },
+  agreementModalSignatureInput: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: 'rgba(15, 23, 42, 0.12)',
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: AGREEMENT_HEADING_SLATE,
+    fontWeight: '500',
+  },
+  agreementModalFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(15, 23, 42, 0.08)',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0F172A',
+        shadowOffset: { width: 0, height: -4 },
+        shadowOpacity: 0.07,
+        shadowRadius: 12,
+      },
+      android: {
+        elevation: 6,
+      },
+      default: {},
+    }),
+  },
+  agreementModalFooterCancel: {
+    flex: 0,
+    paddingVertical: 11,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(15, 23, 42, 0.2)',
+    backgroundColor: '#FFFFFF',
+  },
+  agreementModalFooterCancelText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: AGREEMENT_HEADING_SLATE,
+  },
+  agreementModalFooterPrimary: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 14,
+    backgroundColor: AGREEMENT_SIGN_GREEN,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+  },
+  agreementModalFooterPrimaryDisabled: {
+    backgroundColor: '#A7F3D0',
+  },
+  agreementModalFooterPrimaryText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  agreementModalFooterPrimaryTextDisabled: {
+    color: '#14532D',
   },
   devReadinessBlock: {
     marginTop: 6,
