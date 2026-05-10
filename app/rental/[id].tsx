@@ -23,6 +23,7 @@ import {
   UIManager,
   useWindowDimensions,
   View,
+  type LayoutChangeEvent,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -37,6 +38,7 @@ import {
 } from '@/components/RentalDetailsCard';
 import { AppKeyboardAwareScrollView } from '@/components/AppKeyboardAwareScrollView';
 import { BackHeader } from '@/components/AppHeaders';
+import { RentalLifecycleNavigator } from '@/components/RentalLifecycleNavigator';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useAuthUserId } from '@/lib/authUser';
 import { insertServerNotificationToRecipient } from '@/lib/insertServerNotification';
@@ -55,6 +57,7 @@ import {
 } from '@/lib/proposalDurationChange';
 import { isUuidString } from '@/lib/requestOwnership';
 import { normalizeLegalName } from '@/lib/legalName';
+import { deriveLifecyclePhaseFromRentalStatus } from '@/lib/rentalLifecyclePhase';
 import { insertRentalAgreementSnapshot } from '@/lib/rentalAgreement';
 import {
   RENTAL_EVIDENCE_BUCKET_MISSING_MESSAGE,
@@ -111,6 +114,7 @@ import {
 import { formatSupabaseMutationFailure } from '@/lib/supabaseSchemaMismatchMessage';
 import { getSupabase } from '@/lib/supabase';
 import { getOfferById, useOffersStore } from '@/store/offersStore';
+import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
 import { primarySolidPressed, shadowCard, shadowKey, ui } from '@/constants/appUi';
 
@@ -1220,8 +1224,9 @@ export default function RentalScreen() {
   const rentalId = (firstParam(params.id) ?? '').trim();
   const [rental, setRental] = useState<RentalRow | null>(null);
   const [request, setRequest] = useState<any>(null);
-  /** Local-only: pickup → active → return → completed */
-  const [lifecyclePhase, setLifecyclePhase] = useState<'pickup' | 'active' | 'return' | 'completed'>('pickup');
+  /** Section Y offsets inside scroll content (for lifecycle navigator). */
+  const lifecycleSectionYRef = useRef<Partial<Record<string, number>>>({});
+  const [signHandoffBusy, setSignHandoffBusy] = useState(false);
   const [pickupChecklist, setPickupChecklist] = useState<ChecklistMaps>(() =>
     emptyChecklistMaps(OWNER_PICKUP_ITEMS, RENTER_PICKUP_ITEMS)
   );
@@ -1280,6 +1285,10 @@ export default function RentalScreen() {
   const proposalEditorRef = useRef<RentalDetailsCardHandle | null>(null);
   const workflowViewKeyRef = useRef<string>('');
   const offersFromStore = useOffersStore((s) => s.offers);
+
+  const onLifecycleSectionLayout = useCallback((key: string) => (e: LayoutChangeEvent) => {
+    lifecycleSectionYRef.current[key] = e.nativeEvent.layout.y;
+  }, []);
 
   const offerForRental = useMemo(() => {
     if (!rental?.offer_id) return undefined;
@@ -1469,12 +1478,6 @@ export default function RentalScreen() {
       const rAck = deriveDualConfirmation(freshRows, 'return');
       setPickupAck({ ...pAck });
       setReturnAck({ ...rAck });
-      const hasReturnRows = freshRows.some((r) => r.phase === 'return');
-      if (rAck.owner && rAck.renter) setLifecyclePhase('completed');
-      else if (hasReturnRows) setLifecyclePhase('return');
-      else if (pAck.owner && pAck.renter) setLifecyclePhase('active');
-      else setLifecyclePhase('pickup');
-
       const [pickupPhotosRaw, returnPhotosRaw] = await Promise.all([
         fetchVerificationPhotos(supabase, rentalId, 'pickup'),
         fetchVerificationPhotos(supabase, rentalId, 'return'),
@@ -2169,6 +2172,7 @@ export default function RentalScreen() {
     !proposalBusy &&
     (showMeetingAccept || showMeetingPrimaryAction || (showMeetingConfirmedActions && canEditConfirmed));
   const meetingCompleted = agreementStatus === 'confirmed' && !hasPendingProposal;
+  const lifecyclePhase = deriveLifecyclePhaseFromRentalStatus(rental.status);
   const lifecycleStatusForLayout = String(rental.status ?? 'pending').trim().toLowerCase();
   const returnWorkflowEnabledForLayout = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
     lifecycleStatusForLayout
@@ -2277,21 +2281,6 @@ export default function RentalScreen() {
   const [returnChecklistLeft, returnChecklistRight] = splitForTwoColumns(
     returnItems as readonly ChecklistItemDef[]
   );
-  const progressSteps = [
-    { key: 'matched', label: 'Match' },
-    { key: 'agreement', label: 'Agree' },
-    { key: 'pickup', label: 'Pickup' },
-    { key: 'active', label: 'Active' },
-    { key: 'return', label: 'Return' },
-  ] as const;
-  const currentStepIndex =
-    lifecyclePhase === 'return'
-      ? 4
-      : lifecyclePhase === 'active'
-        ? 3
-        : termsCompleted
-          ? 2
-          : 1;
   const rentalStatus = String(rental.status ?? 'pending').trim().toLowerCase();
   const handoffCompleted = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
     rentalStatus
@@ -2386,6 +2375,52 @@ export default function RentalScreen() {
   const returnWindow = isPhotoUploadWindowOpen('return', rental.pickup_datetime, rental.return_datetime);
   const canUploadPickup = viewerRole === 'owner' && !handoffCompleted && pickupWindow.allowed;
   const canUploadReturn = viewerRole === 'renter' && returnWorkflowEnabled && !returnCompleted && returnWindow.allowed;
+
+  const lifecycleSteps = [
+    { key: 'matched', label: 'Match' },
+    { key: 'agreement', label: 'Agree' },
+    { key: 'pickup', label: 'Pickup' },
+    { key: 'active', label: 'Active' },
+    { key: 'return', label: 'Return' },
+  ] as const;
+  const lifecycleStepDone = [
+    true,
+    termsCompleted && meetingCompleted,
+    handoffCompleted,
+    lifecyclePhase === 'return' || lifecyclePhase === 'completed',
+    lifecyclePhase === 'completed',
+  ];
+  let lifecycleNavigatorCurrentIndex = lifecycleStepDone.findIndex((d) => !d);
+  if (lifecycleNavigatorCurrentIndex === -1) lifecycleNavigatorCurrentIndex = lifecycleSteps.length - 1;
+  const lifecycleTransactionComplete = lifecyclePhase === 'completed';
+  let lifecycleAttentionIndex: number | null = null;
+  if (!termsCompleted || !meetingCompleted) {
+    lifecycleAttentionIndex = 1;
+  } else if (!handoffCompleted && (bilateralPickupReady || canRenterFinalizeHandoff || canOwnerConfirmPickupReady)) {
+    lifecycleAttentionIndex = 2;
+  } else if (returnWorkflowEnabled && !returnCompleted && lifecyclePhase === 'return') {
+    lifecycleAttentionIndex = 4;
+  }
+
+  const scrollToLifecycleStep = (index: number) => {
+    if (index === 1) setTermsExpanded(true);
+    if (index === 2) setMeetingExpanded(true);
+    if (index === 3) setPickupExpanded(true);
+    if (index === 4) setReturnExpanded(true);
+    requestAnimationFrame(() => {
+      const pad = 12;
+      const ys = lifecycleSectionYRef.current;
+      let y = 0;
+      if (index === 0) y = 0;
+      else if (index === 1) y = ys.terms ?? 0;
+      else if (index === 2) y = ys.meeting ?? 0;
+      else if (index === 3) {
+        y = handoffCompleted && ys.active != null ? ys.active : ys.pickup ?? ys.meeting ?? 0;
+      } else y = ys.return ?? 0;
+      mainScrollRef.current?.scrollTo({ y: Math.max(0, y - pad), animated: true });
+    });
+  };
+
   const replacementValue = Number(rental.replacement_value ?? Math.max(finalPrice * 3, 150));
   const preauthAmount = Number(rental.preauth_amount ?? calculatePreauthAmount(replacementValue));
   const lateFee = Number(rental.daily_late_fee ?? Math.max(10, Math.round(finalPrice * 0.1)));
@@ -2691,10 +2726,6 @@ export default function RentalScreen() {
                 .single();
               if (__DEV__) console.log('[verification mutation] rental status update ok', { rentalId: rental.id, status: 'handed_off' });
               if (updatedRental) setRental(updatedRental as RentalRow);
-              setLifecyclePhase('active');
-            }
-            if (ack.owner && ack.renter) {
-              setLifecyclePhase('active');
             }
             await refreshVerificationState();
           },
@@ -2752,6 +2783,8 @@ export default function RentalScreen() {
   const onRenterSignAndAuthorize = async () => {
     const signedTrimmed = signatureName.trim();
     if (!signedTrimmed || !agreementConsent || !me || viewerRole !== 'renter' || !canRenterFinalizeHandoff) return;
+    if (signHandoffBusy) return;
+    setSignHandoffBusy(true);
     const typedNorm = normalizeLegalName(signatureName);
     const signedAt = new Date().toISOString();
     const signingPhotoRefs = [...pickupEvidenceDisplay, ...returnEvidenceDisplay].map((p) => ({
@@ -2759,62 +2792,70 @@ export default function RentalScreen() {
       path: p.path ?? null,
       phase: p.phase ?? null,
     }));
-    const snapshot = await insertRentalAgreementSnapshot(supabase, {
-      rentalId: rental.id,
-      signedByUserId: me,
-      agreementVersion,
-      agreementText,
-      rentalSummaryJson: {
-        rental_price: finalPrice,
-        pickup_datetime: rental.pickup_datetime ?? null,
-        return_datetime: rental.return_datetime ?? null,
-        meetup_location: rental.meetup_location ?? null,
-        replacement_value: replacementValue,
-        preauthorization_amount: preauthAmount,
-        daily_late_fee: lateFee,
-        max_late_fee_cap: maxLateFeeCap,
-        grace_period_hours: graceHours,
-      },
-      signedNameNormalized: typedNorm,
-      signedNameAsEntered: signedTrimmed,
-      signedAt,
-      replacementValue,
-      dailyLateFee: lateFee,
-      maxLateFeeCap,
-      preauthAmount,
-      verificationPhotoRefs: signingPhotoRefs,
-    });
-    if (!snapshot.ok) {
-      if (snapshot.kind === 'schema_unavailable') {
-        Alert.alert('Agreement temporarily unavailable', 'Please refresh the app and try again.');
-      } else {
-        if (__DEV__) console.warn('[agreement] snapshot insert failed', snapshot);
-        Alert.alert('Could not finalize agreement', 'Please try again.');
-      }
-      return;
-    }
-    const handoffResult = await persistReadinessFlags({
-      handoff_approved_by_renter: true,
-      signed_name: typedNorm,
-      signed_at: signedAt,
-      agreement_version: agreementVersion,
-      preauth_status: 'authorized',
-      preauth_authorized_at: signedAt,
-      status: 'handed_off',
-    });
-    if (!handoffResult.ok) {
-      const fmt = formatSupabaseMutationFailure(handoffResult.error, {
-        path: 'rentals.update.persistReadinessFlags.renterFinalizeHandoff',
-        table: 'rentals',
+    try {
+      const snapshot = await insertRentalAgreementSnapshot(supabase, {
+        rentalId: rental.id,
+        signedByUserId: me,
+        agreementVersion,
+        agreementText,
+        rentalSummaryJson: {
+          rental_price: finalPrice,
+          pickup_datetime: rental.pickup_datetime ?? null,
+          return_datetime: rental.return_datetime ?? null,
+          meetup_location: rental.meetup_location ?? null,
+          replacement_value: replacementValue,
+          preauthorization_amount: preauthAmount,
+          daily_late_fee: lateFee,
+          max_late_fee_cap: maxLateFeeCap,
+          grace_period_hours: graceHours,
+        },
+        signedNameNormalized: typedNorm,
+        signedNameAsEntered: signedTrimmed,
+        signedAt,
+        replacementValue,
+        dailyLateFee: lateFee,
+        maxLateFeeCap,
+        preauthAmount,
+        verificationPhotoRefs: signingPhotoRefs,
       });
-      if (__DEV__) console.warn(fmt.devLog);
-      Alert.alert('Could not finalize handoff', fmt.userBody);
-      return;
+      if (!snapshot.ok) {
+        if (snapshot.kind === 'schema_unavailable') {
+          Alert.alert('Agreement temporarily unavailable', 'Please refresh the app and try again.');
+        } else {
+          if (__DEV__) console.warn('[agreement] snapshot insert failed', snapshot);
+          Alert.alert('Could not finalize agreement', 'Please try again.');
+        }
+        return;
+      }
+      const handoffResult = await persistReadinessFlags({
+        handoff_approved_by_renter: true,
+        signed_name: typedNorm,
+        signed_at: signedAt,
+        agreement_version: agreementVersion,
+        preauth_status: 'authorized',
+        preauth_authorized_at: signedAt,
+        status: 'handed_off',
+      });
+      if (!handoffResult.ok) {
+        const fmt = formatSupabaseMutationFailure(handoffResult.error, {
+          path: 'rentals.update.persistReadinessFlags.renterFinalizeHandoff',
+          table: 'rentals',
+        });
+        if (__DEV__) console.warn(fmt.devLog);
+        Alert.alert('Could not finalize handoff', fmt.userBody);
+        return;
+      }
+      if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+        UIManager.setLayoutAnimationEnabledExperimental(true);
+      }
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setAgreementModalVisible(false);
+      setSignatureName('');
+      setAgreementConsent(false);
+      showFeedbackToast('Pickup confirmed successfully');
+    } finally {
+      setSignHandoffBusy(false);
     }
-    setAgreementModalVisible(false);
-    setSignatureName('');
-    setAgreementConsent(false);
-    setLifecyclePhase('active');
   };
 
   const onStartReturn = async () => {
@@ -2834,7 +2875,6 @@ export default function RentalScreen() {
       .single();
     if (__DEV__) console.log('[verification mutation] rental status update ok', { rentalId: rental.id, status: 'return_pending' });
     if (updatedRental) setRental(updatedRental as RentalRow);
-    setLifecyclePhase('return');
     await refreshVerificationState();
   };
 
@@ -2874,10 +2914,6 @@ export default function RentalScreen() {
                 .single();
               if (__DEV__) console.log('[verification mutation] rental status update ok', { rentalId: rental.id, status: 'returned' });
               if (updatedRental) setRental(updatedRental as RentalRow);
-              setLifecyclePhase('completed');
-            }
-            if (ack.owner && ack.renter) {
-              setLifecyclePhase('completed');
             }
             await refreshVerificationState();
           },
@@ -3053,58 +3089,20 @@ export default function RentalScreen() {
               style={styles.rentalBackHeader}
             />
 
-            {lifecyclePhase === 'completed' ? (
-              <View style={[styles.progressRow, styles.progressRowComplete]}>
-                <Text style={styles.progressCompleteBanner}>✓ Transaction Complete</Text>
-              </View>
-            ) : (
-              <View style={[styles.progressRow, !isTabletMargins && styles.progressRowPhone]}>
-                {progressSteps.map((step, idx) => {
-                  const isDone = idx < currentStepIndex;
-                  const isCurrent = idx === currentStepIndex;
-                  return (
-                    <React.Fragment key={step.key}>
-                      <View style={styles.progressStepCell}>
-                        <View style={styles.progressItem}>
-                          <Text
-                            style={[
-                              styles.progressSymbol,
-                              isDone
-                                ? styles.progressDone
-                                : isCurrent
-                                  ? styles.progressSymbolActive
-                                  : styles.progressFuture,
-                              isCurrent ? styles.progressSymbolCurrent : null,
-                            ]}
-                          >
-                            {isDone ? '✓' : isCurrent ? '●' : '○'}
-                          </Text>
-                          <Text
-                            style={[
-                              styles.progressLabel,
-                              isDone
-                                ? styles.progressDone
-                                : isCurrent
-                                  ? styles.progressLabelActive
-                                  : styles.progressFuture,
-                              isCurrent ? styles.progressLabelCurrent : null,
-                            ]}
-                          >
-                            {step.label}
-                          </Text>
-                        </View>
-                      </View>
-                      {idx < progressSteps.length - 1 ? (
-                        <View style={[styles.progressConnector, !isTabletMargins && styles.progressConnectorPhone]} />
-                      ) : null}
-                    </React.Fragment>
-                  );
-                })}
-              </View>
-            )}
+            <View style={styles.lifecycleNavigatorWrap} onLayout={onLifecycleSectionLayout('banner')}>
+              <RentalLifecycleNavigator
+                steps={lifecycleSteps}
+                stepDone={lifecycleStepDone}
+                currentIndex={lifecycleNavigatorCurrentIndex}
+                attentionIndex={lifecycleAttentionIndex}
+                transactionComplete={lifecycleTransactionComplete}
+                onStepPress={(i) => scrollToLifecycleStep(i)}
+              />
+            </View>
 
             <RentalWorkflowBanner model={workflowBannerModel} onOpenMessages={openRentalChat} />
 
+            <View onLayout={onLifecycleSectionLayout('terms')}>
             <Pressable
               pressOpacityFeedback={false}
               onPress={() => {
@@ -3176,7 +3174,9 @@ export default function RentalScreen() {
                 </>
               )}
             </Pressable>
+            </View>
 
+            <View onLayout={onLifecycleSectionLayout('meeting')}>
             <Pressable
               pressOpacityFeedback={false}
               onPress={() => {
@@ -3355,9 +3355,10 @@ export default function RentalScreen() {
                 </>
               )}
             </Pressable>
+            </View>
 
-            
             {agreementStatus === 'confirmed' ? (
+              <View onLayout={onLifecycleSectionLayout('pickup')}>
               <View style={[styles.checklistCard, !isTabletMargins && styles.cardPadPhone]}>
                 <Pressable
                   pressOpacityFeedback={false}
@@ -4160,9 +4161,11 @@ export default function RentalScreen() {
                   </>
                 )}
               </View>
+              </View>
             ) : null}
 
             {agreementStatus === 'confirmed' && lifecyclePhase === 'active' ? (
+              <View onLayout={onLifecycleSectionLayout('active')}>
               <View style={[styles.prepareForReturnCard, !isTabletMargins && styles.cardPadPhone]}>
                 <Text style={styles.prepareForReturnTitle}>Prepare for Return</Text>
                 <View style={styles.prepareForReturnRow}>
@@ -4183,8 +4186,10 @@ export default function RentalScreen() {
                 <Text style={styles.prepareReminderLine}>· Include all accessories</Text>
                 <Text style={styles.prepareReminderLine}>· Plan return photos for the verification step</Text>
               </View>
+              </View>
             ) : null}
 
+            <View onLayout={onLifecycleSectionLayout('return')}>
             <Pressable
               pressOpacityFeedback={false}
               onPress={() => {
@@ -4202,26 +4207,49 @@ export default function RentalScreen() {
                 pressOpacityFeedback={false}
                 disabled={!returnWorkflowEnabled}
                 onPress={() => setReturnExpanded((v) => !v)}
-                style={({ pressed }) => [styles.sectionHeaderRow, pressed && { opacity: 0.9 }]}
+                style={({ pressed }) => [styles.verificationTitleRow, pressed && { opacity: 0.9 }]}
               >
-                <View style={styles.sectionTitleWithCheck}>
-                  <Text style={styles.sectionTitleInline}>Return / Drop-off Details</Text>
-                  {returnCompletedForCard ? <Text style={styles.sectionCompleteCheck}>✓</Text> : null}
-                </View>
+                <Text style={styles.verificationSectionTitle}>Return / Drop-off Details</Text>
                 <View style={styles.sectionHeaderRight}>
-                  <Text style={styles.inlineRoleLabel}>{!returnWorkflowEnabled ? 'Locked' : returnExpanded ? 'Collapse' : 'Expand'}</Text>
+                  {returnCompletedForCard ? <Text style={styles.sectionCompleteCheck}>✓</Text> : null}
+                  <Text style={styles.inlineRoleLabel}>
+                    {!returnWorkflowEnabled ? 'Locked' : returnExpanded ? 'Collapse' : 'View'}
+                  </Text>
                 </View>
               </Pressable>
               {!returnWorkflowEnabled ? (
                 <Text style={styles.verificationCollapsedMeta}>Available after handoff is confirmed.</Text>
               ) : !returnExpanded ? (
-                <Text style={styles.verificationCollapsedMeta}>
-                  {returnCompletedForCard
-                    ? 'Return workflow complete with verification evidence recorded.'
-                    : 'Track return checklist, photos, and final confirmation.'}
-                </Text>
+                <>
+                  <Text style={styles.verificationCollapsedMeta}>
+                    {returnCompletedForCard
+                      ? 'Return workflow complete with verification evidence recorded.'
+                      : 'Track return checklist, photos, and final confirmation.'}
+                  </Text>
+                  {!returnCompleted && !returnWindow.allowed && returnWindow.helperText ? (
+                    <View style={[styles.handoffInfoBanner, styles.handoffInfoBannerRenter]}>
+                      <Ionicons name="time-outline" size={18} color="rgba(217, 119, 6, 0.95)" />
+                      <Text style={styles.handoffInfoBannerTextRenter}>{returnWindow.helperText}</Text>
+                    </View>
+                  ) : null}
+                </>
               ) : (
                 <>
+                  {!returnCompleted && !returnWindow.allowed && returnWindow.helperText ? (
+                    <View style={[styles.handoffInfoBanner, styles.handoffInfoBannerRenter, { marginBottom: 12 }]}>
+                      <Ionicons name="time-outline" size={18} color="rgba(217, 119, 6, 0.95)" />
+                      <Text style={styles.handoffInfoBannerTextRenter}>{returnWindow.helperText}</Text>
+                    </View>
+                  ) : null}
+                  <View style={styles.handoffSection}>
+                    <View style={styles.handoffSectionTitleRow}>
+                      <Ionicons name="images-outline" size={18} color={ui.primary} />
+                      <Text style={styles.handoffSectionTitle}>Return evidence</Text>
+                    </View>
+                    <Text style={styles.handoffSectionHelper}>
+                      Upload clear return photos. They stay visible only to you and the other party until the rental is
+                      complete.
+                    </Text>
                   <VerificationPhotosSubsection
                     photos={returnEvidenceDisplay}
                     uploading={uploadingEvidence}
@@ -4240,8 +4268,16 @@ export default function RentalScreen() {
                       ? 'Return evidence is locked after return confirmation is completed.'
                       : 'Return evidence remains editable until return confirmation is completed.'}
                   </Text>
+                  </View>
+                  <View style={styles.handoffSection}>
+                    <View style={styles.handoffRespHeader}>
+                      <View style={styles.handoffRespTitleRow}>
+                        <Ionicons name="list-outline" size={18} color={ui.textSecondary} />
+                        <Text style={styles.handoffSectionTitle}>Your responsibilities</Text>
+                      </View>
+                    </View>
                   <View style={styles.verificationSubheadRow}>
-                    <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Your responsibilities</Text>
+                    <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Checklist</Text>
                     <Pressable
                       pressOpacityFeedback={false}
                       disabled={!returnWorkflowEnabled || returnCompleted}
@@ -4274,6 +4310,7 @@ export default function RentalScreen() {
                             checked={Boolean(returnDoneForRole[item.id])}
                             onToggle={() => toggleReturnItem(item.id)}
                             disabled={!returnWorkflowEnabled || returnCompleted}
+                            light
                           />
                         ))}
                       </View>
@@ -4285,6 +4322,7 @@ export default function RentalScreen() {
                             checked={Boolean(returnDoneForRole[item.id])}
                             onToggle={() => toggleReturnItem(item.id)}
                             disabled={!returnWorkflowEnabled || returnCompleted}
+                            light
                           />
                         ))}
                       </View>
@@ -4297,9 +4335,11 @@ export default function RentalScreen() {
                         checked={Boolean(returnDoneForRole[item.id])}
                         onToggle={() => toggleReturnItem(item.id)}
                         disabled={!returnWorkflowEnabled || returnCompleted}
+                        light
                       />
                     ))
                   )}
+                  </View>
                   <View style={styles.notesGroup}>
                     <Text style={styles.notesGroupTitle}>Renter Notes</Text>
                     <NoteList notes={renterNotes} />
@@ -4316,6 +4356,7 @@ export default function RentalScreen() {
                 </>
               )}
             </Pressable>
+            </View>
 
             <View style={[styles.actionsCard, !isTabletMargins && styles.cardPadPhone]}>
               {actionFooter}
@@ -4610,20 +4651,28 @@ export default function RentalScreen() {
                 <View style={[styles.agreementModalFooter, { paddingBottom: Math.max(insets.bottom, 14) }]}>
                   <Pressable
                     pressOpacityFeedback={false}
+                    disabled={signHandoffBusy}
                     onPress={() => {
                       setAgreementModalVisible(false);
                       setAgreementConsent(false);
                     }}
-                    style={({ pressed }) => [styles.agreementModalFooterCancel, pressed && { opacity: 0.85 }]}
+                    style={({ pressed }) => [
+                      styles.agreementModalFooterCancel,
+                      signHandoffBusy && { opacity: 0.5 },
+                      pressed && !signHandoffBusy && { opacity: 0.85 },
+                    ]}
                   >
                     <Text style={styles.agreementModalFooterCancelText}>Cancel</Text>
                   </Pressable>
                   <Pressable
                     pressOpacityFeedback={false}
                     onPress={() => void onRenterSignAndAuthorize()}
-                    disabled={signatureName.trim().length === 0 || !agreementConsent}
+                    disabled={
+                      signatureName.trim().length === 0 || !agreementConsent || signHandoffBusy
+                    }
                     style={({ pressed }) => {
-                      const canSign = signatureName.trim().length > 0 && agreementConsent;
+                      const canSign =
+                        signatureName.trim().length > 0 && agreementConsent && !signHandoffBusy;
                       return [
                         styles.agreementModalFooterPrimary,
                         !canSign && styles.agreementModalFooterPrimaryDisabled,
@@ -4631,15 +4680,19 @@ export default function RentalScreen() {
                       ];
                     }}
                   >
-                    <Text
-                      style={[
-                        styles.agreementModalFooterPrimaryText,
-                        (signatureName.trim().length === 0 || !agreementConsent) &&
-                          styles.agreementModalFooterPrimaryTextDisabled,
-                      ]}
-                    >
-                      Sign & Authorize
-                    </Text>
+                    {signHandoffBusy ? (
+                      <ActivityIndicator color="#FFFFFF" />
+                    ) : (
+                      <Text
+                        style={[
+                          styles.agreementModalFooterPrimaryText,
+                          (signatureName.trim().length === 0 || !agreementConsent) &&
+                            styles.agreementModalFooterPrimaryTextDisabled,
+                        ]}
+                      >
+                        Sign & Authorize
+                      </Text>
+                    )}
                   </Pressable>
                 </View>
               </View>
@@ -4685,6 +4738,16 @@ const styles = StyleSheet.create({
   },
   rentalBackHeader: {
     marginBottom: 6,
+  },
+  lifecycleNavigatorWrap: {
+    marginBottom: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: ui.radiusCard,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(15, 23, 42, 0.08)',
+    ...shadowCard,
   },
   /** Keeps header layout width; inner control is scaled 2× for a larger message icon. */
   topChatIconSlot: {
@@ -4737,86 +4800,6 @@ const styles = StyleSheet.create({
   meetingProposeLinkDisabled: {
     color: ui.textMuted,
     textDecorationLine: 'none',
-  },
-  progressRow: {
-    width: '100%',
-    backgroundColor: ui.primary,
-    borderRadius: ui.radiusCard,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  progressRowPhone: {
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-  },
-  progressRowComplete: {
-    justifyContent: 'center',
-    paddingVertical: 9,
-  },
-  progressCompleteBanner: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    textAlign: 'center',
-    letterSpacing: 0.25,
-  },
-  progressStepCell: {
-    flex: 1,
-    minWidth: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  progressItem: {
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 2,
-    maxWidth: '100%',
-  },
-  progressConnector: {
-    width: 14,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: 'rgba(255,255,255,0.22)',
-    marginHorizontal: 2,
-  },
-  progressConnectorPhone: {
-    width: 10,
-    marginHorizontal: 1,
-  },
-  progressSymbol: {
-    fontSize: 10,
-    fontWeight: '700',
-    lineHeight: 11,
-  },
-  progressSymbolCurrent: {
-    fontSize: 11,
-    lineHeight: 12,
-  },
-  progressLabel: {
-    fontSize: 8.5,
-    fontWeight: '500',
-    lineHeight: 10,
-    textAlign: 'center',
-  },
-  progressLabelCurrent: {
-    fontSize: 9.5,
-    fontWeight: '800',
-  },
-  progressDone: {
-    color: 'rgba(235,242,255,0.92)',
-  },
-  progressSymbolActive: {
-    color: '#5EE9A8',
-  },
-  progressLabelActive: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  progressFuture: {
-    color: 'rgba(223,231,245,0.58)',
   },
   centered: {
     flex: 1,
