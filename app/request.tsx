@@ -15,7 +15,6 @@ import { primarySolidPressed, subtleControlPressed, ui } from '@/constants/appUi
 import { type HowKey, needsDeliveryFee } from '@/lib/deliveryFormat';
 import { type DurationType } from '@/lib/durationFormat';
 import { getRequestEditFormValues } from '@/lib/getRequestEditFormValues';
-import { calculateDailyLateFee } from '@/lib/dailyLateFee';
 import { formatUsd, parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
 import {
   logRequestScheduleDebug,
@@ -23,6 +22,16 @@ import {
   validateCalendarReturnAfterPickup,
 } from '@/lib/requestSchedulePersistence';
 import { coordinatesFromLocationField } from '@/lib/zipCoordinates';
+import {
+  mockRequestBudgetTotalInput,
+  mockRequestDurationDaysInput,
+  mockRequestEquipmentDetailSuffix,
+  mockRequestEquipmentItemName,
+  mockRequestPickupDateMask,
+  mockRequestRadiusPresetMiles,
+  mockRequestRentalArea,
+  useDevPageAutofill,
+} from '@/lib/devTools';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { addRequest, getRequestByTimestamp, updateRequest } from '@/store/requestsStore';
 
@@ -131,6 +140,22 @@ export default function RequestAToolScreen() {
     []
   );
 
+  const devAutofillRequestEquipment = useCallback(() => {
+    setScheduleFieldError('');
+    setToolName(`${mockRequestEquipmentItemName()} — ${mockRequestEquipmentDetailSuffix()}`);
+    setLocationInput(mockRequestRentalArea());
+    setPickupRadiusMiles(mockRequestRadiusPresetMiles());
+    setCustomRadiusMilesInput('');
+    setHow('pickup_nearby');
+    setDurationDaysInput(mockRequestDurationDaysInput());
+    setPickupDateInput(mockRequestPickupDateMask(10));
+    setTotalPriceInput(mockRequestBudgetTotalInput());
+    setDeliveryFeeInput('');
+    showFeedbackToast('Dev: request form filled');
+  }, []);
+
+  useDevPageAutofill(devAutofillRequestEquipment, { screenLabel: 'Request equipment' });
+
   useFocusEffect(
     useCallback(() => {
       const rawEdit = params.editTimestamp;
@@ -177,10 +202,6 @@ export default function RequestAToolScreen() {
   const deliveryFeeNumDraft = parseMoneyToNumber(deliveryFeeInput);
   const totalCostForRental = (totalPriceNum ?? 0) + (needsDeliveryFee(how) ? Math.max(0, deliveryFeeNumDraft ?? 0) : 0);
   const derivedDailyRate = totalPriceNum != null && totalPriceNum >= 0 ? totalPriceNum / durationDays : null;
-  const derivedDailyLateFee =
-    totalPriceNum != null && totalPriceNum >= 0
-      ? calculateDailyLateFee({ totalAmount: totalCostForRental, durationDays })
-      : null;
   const selectedRadiusMiles =
     pickupRadiusMiles === 'custom' ? parseInt(customRadiusMilesInput, 10) : parseInt(pickupRadiusMiles, 10);
   const isFormFilledForTotal =
@@ -409,9 +430,7 @@ export default function RequestAToolScreen() {
               ${totalPriceNum.toFixed(2)} over {durationDays} {durationDays === 1 ? 'day' : 'days'}
             </Text>
             <Text style={styles.breakdownRow}>Daily rate: ${(derivedDailyRate ?? 0).toFixed(2)} / day</Text>
-            <Text style={styles.breakdownRow}>
-              Late-fee daily rate (+20%): ${(derivedDailyLateFee ?? 0).toFixed(2)} / day
-            </Text>
+            <Text style={styles.breakdownRow}>Late fees use standardized platform policy.</Text>
           </View>
         ) : null}
         <Text style={styles.softEstimate}>Estimated based on listing rates.</Text>

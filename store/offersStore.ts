@@ -13,6 +13,10 @@ import type { Offer } from '@/lib/negotiationOfferTypes';
 import { PROFILE_NAME_FALLBACK } from '@/lib/profileConstants';
 import { getProfileNameForUserId } from '@/lib/profileDisplayName';
 import { getPublicProfileForView } from '@/lib/publicProfiles';
+import {
+  sortOffersByLowestNegotiatedTotal,
+  type RequestPricingContext,
+} from '@/lib/negotiationTermSnapshot';
 import { getRequestOwnerId, getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { logOfferSync, syncRequestAndOffersFromSupabase } from '@/lib/supabaseOfferSync';
 import {
@@ -490,12 +494,18 @@ export function sortOffersForPoster(offers: Offer[]): Offer[] {
   });
 }
 
-export function getOffersForRequest(requestId: number): Offer[] {
+export function getOffersForRequest(
+  requestId: number,
+  requestForComparePricing?: RequestPricingContext | null
+): Offer[] {
   const list = useOffersStore
     .getState()
     .offers.filter(
       (o) => o.requestId === requestId && o.status !== 'declined' && o.status !== 'closed'
     );
+  if (requestForComparePricing != null && typeof requestForComparePricing === 'object') {
+    return sortOffersByLowestNegotiatedTotal(list, requestForComparePricing);
+  }
   return sortOffersForPoster(list);
 }
 
@@ -716,6 +726,8 @@ export function getOfferUserPreview(offer: Offer): {
   userId: string;
   name: string;
   rating: number;
+  /** Explicit review count when synced; `null` when unknown. */
+  ratingReviewCount: number | null;
   avatar: string;
   lastActive: number;
 } {
@@ -725,6 +737,7 @@ export function getOfferUserPreview(offer: Offer): {
       userId: '',
       name: '—',
       rating: 0,
+      ratingReviewCount: null,
       avatar: getPublicProfileForView('').avatar,
       lastActive: Date.now(),
     };
@@ -746,6 +759,10 @@ export function getOfferUserPreview(offer: Offer): {
     typeof offer.offerUserAvatar === 'string' && offer.offerUserAvatar.trim().length > 0
       ? offer.offerUserAvatar.trim()
       : pub.avatar;
+  const rcRaw = offer.offerUserRatingCount;
+  const ratingReviewCount =
+    typeof rcRaw === 'number' && Number.isFinite(rcRaw) ? Math.max(0, Math.floor(rcRaw)) : null;
+
   return {
     userId,
     name: name || PROFILE_NAME_FALLBACK,
@@ -753,6 +770,7 @@ export function getOfferUserPreview(offer: Offer): {
       typeof offer.offerUserRating === 'number' && Number.isFinite(offer.offerUserRating)
         ? offer.offerUserRating
         : pub.ratingNumber,
+    ratingReviewCount,
     avatar,
     lastActive,
   };

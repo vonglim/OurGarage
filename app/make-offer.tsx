@@ -18,7 +18,6 @@ import {
   cooldownRemainingAfterWithdrawMs,
   formatNegotiationCooldownRemaining,
 } from '@/lib/negotiationLifecycle';
-import { calculateDailyLateFee } from '@/lib/dailyLateFee';
 import {
   defaultNegotiationDeliveryMethodForRequest,
   formatNegotiationDeliveryFeeTermLine,
@@ -26,8 +25,20 @@ import {
   type NegotiationDeliveryMethod,
 } from '@/lib/negotiationDelivery';
 import { formatUsd, getNumericTotalPrice, parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
+import { calculatePreauthAmount } from '@/lib/rentalProtection';
 import { billingDayCountForRequest } from '@/lib/requestPriceContext';
+import { NEGOTIATION_LATE_FEE_TERMS_LINE } from '@/lib/counterOfferMessage';
 import { isUuidString } from '@/lib/requestOwnership';
+import {
+  mockMakeOfferBrandModel,
+  mockMakeOfferDeliveryFeeInput,
+  mockMakeOfferDescription,
+  mockMakeOfferMessage,
+  mockMakeOfferNegotiationMethod,
+  mockMakeOfferPriceInput,
+  mockMakeOfferReplacementValueInput,
+  useDevPageAutofill,
+} from '@/lib/devTools';
 import { uploadOfferImage } from '@/lib/uploadOfferImage';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
@@ -121,15 +132,12 @@ export default function MakeOfferScreen() {
     if (offerTotal == null) return null;
     return offerTotal / effectiveDayCount;
   }, [offerTotal, effectiveDayCount]);
-  const derivedDailyLateFee = useMemo(() => {
-    if (offerTotal == null) return null;
-    const basis = offerTotal + (negotiationDeliveryMethod === 'owner_delivery' ? draftDeliveryFeeNum : 0);
-    return calculateDailyLateFee({
-      totalAmount: basis,
-      durationDays: effectiveDayCount,
-    });
-  }, [offerTotal, negotiationDeliveryMethod, draftDeliveryFeeNum, effectiveDayCount]);
   const totalOfferPrice = (offerTotal ?? 0) + draftDeliveryFeeNum;
+  const replacementValueNumForProtection = parseMoneyToNumber(replacementValueDraft) ?? 0;
+  const estimatedAuthHold = useMemo(
+    () => calculatePreauthAmount(replacementValueNumForProtection),
+    [replacementValueNumForProtection]
+  );
 
   React.useEffect(() => {
     if (listedTotal != null && listedTotal > 0) setPriceDraft(sanitizeMoneyDigits(String(listedTotal)));
@@ -173,6 +181,31 @@ export default function MakeOfferScreen() {
   );
 
   const isPoster = !!request && request.posterUserId === getAuthUserIdSync();
+
+  const devAutofillMakeOffer = useCallback(() => {
+    if (!request || !requestIdStr || isPoster) return;
+    const price = mockMakeOfferPriceInput({
+      listedTotal,
+      requestHow: typeof request.how === 'string' ? request.how : null,
+      dayCount: effectiveDayCount,
+    });
+    setPriceDraft(sanitizeMoneyDigits(price));
+    setBrandModelDraft(mockMakeOfferBrandModel());
+    setDescriptionDraft(mockMakeOfferDescription());
+    setMessageDraft(mockMakeOfferMessage());
+    const method = mockMakeOfferNegotiationMethod(typeof request.how === 'string' ? request.how : null);
+    setNegotiationDeliveryMethod(method);
+    const offerNum = parseMoneyToNumber(sanitizeMoneyDigits(price)) ?? 0;
+    setReplacementValueDraft(sanitizeMoneyDigits(mockMakeOfferReplacementValueInput(offerNum)));
+    if (method === 'owner_delivery') {
+      setDeliveryFeeDraft(sanitizeMoneyDigits(mockMakeOfferDeliveryFeeInput()));
+    } else {
+      setDeliveryFeeDraft(sanitizeMoneyDigits('0'));
+    }
+    showFeedbackToast('Dev: offer form filled');
+  }, [request, requestIdStr, isPoster, listedTotal, effectiveDayCount]);
+
+  useDevPageAutofill(devAutofillMakeOffer, { screenLabel: 'Make offer' });
 
   const goToCamera = useCallback(() => {
     if (Platform.OS === 'web') {
@@ -234,7 +267,7 @@ export default function MakeOfferScreen() {
       negotiationDeliveryMethod === 'owner_delivery'
         ? formatNegotiationDeliveryFeeTermLine(deliveryFeeNum)
         : null,
-      `Daily late fee (auto): ${formatUsd(derivedDailyLateFee ?? 0)} (+20% of daily rate)`,
+      NEGOTIATION_LATE_FEE_TERMS_LINE,
     ]
       .filter(Boolean)
       .join('\n');
@@ -356,18 +389,18 @@ export default function MakeOfferScreen() {
                   <Text style={styles.breakdownRow}>
                     Daily rate: {formatUsd(derivedDailyRate ?? 0)} / day
                   </Text>
-                  <Text style={styles.breakdownRow}>
-                    Late-fee daily rate (+20%): {formatUsd(derivedDailyLateFee ?? 0)} / day
-                  </Text>
                 </View>
               ) : (
-                <Text style={styles.breakdownEmpty}>Enter an offer amount to preview daily rate and late-fee basis.</Text>
+                <Text style={styles.breakdownEmpty}>Enter an offer amount to preview your daily rate.</Text>
               )}
             </View>
 
             <View style={styles.sectionCard}>
               <Text style={styles.label}>Delivery method</Text>
-              <Text style={styles.fieldHint}>Pickup vs owner-provided delivery for this offer (not inferred from the fee).</Text>
+              <Text style={styles.fieldHint}>
+                How you’ll hand off the item. If you offer delivery, you can add a one-time logistics fee below — it’s
+                optional compensation, not open-ended pricing.
+              </Text>
               <View style={styles.deliveryOptionsRow}>
                 <Pressable
                   onPress={() => setNegotiationDeliveryMethod('pickup')}
@@ -464,20 +497,29 @@ export default function MakeOfferScreen() {
             </View>
 
             <View style={styles.sectionCard}>
-              <Text style={styles.sectionTitle}>Offer Details / Terms (Optional)</Text>
+              <Text style={styles.sectionTitle}>Protection & offer terms</Text>
               <View>
                 <Text style={styles.fieldHint}>Replacement value</Text>
+                <Text style={styles.termsInfoText}>
+                  Fair market value if the item were lost or seriously damaged. This is the main input for estimating the
+                  renter’s temporary hold — you don’t set the hold amount directly.
+                </Text>
                 <TextInput value={replacementValueDraft} onChangeText={(t) => setReplacementValueDraft(sanitizeMoneyDigits(t))} keyboardType="decimal-pad" style={styles.input} {...numberPadAccessoryProps()} />
+                <Text style={[styles.fieldHint, styles.stackedFieldLabel]}>Estimated authorization hold</Text>
+                <Text style={styles.calculatedHoldValue}>{formatUsd(estimatedAuthHold)}</Text>
+                <Text style={styles.termsInfoText}>Calculated automatically from replacement value.</Text>
+                <Text style={[styles.fieldHint, styles.stackedFieldLabel]}>Late fees</Text>
+                <Text style={styles.termsInfoText}>Late fees are automatically calculated using platform policy.</Text>
+                <Text style={styles.termsInfoSub}>Late returns may incur additional charges.</Text>
                 {negotiationDeliveryMethod === 'owner_delivery' ? (
                   <>
-                    <Text style={styles.fieldHint}>Delivery fee (0 = free delivery)</Text>
+                    <Text style={[styles.fieldHint, styles.stackedFieldLabel]}>Delivery compensation (one-time)</Text>
+                    <Text style={styles.termsInfoText}>
+                      Optional amount for pickup and return logistics. Enter 0 if you include delivery at no charge.
+                    </Text>
                     <TextInput value={deliveryFeeDraft} onChangeText={(t) => setDeliveryFeeDraft(sanitizeMoneyDigits(t))} keyboardType="decimal-pad" style={styles.input} {...numberPadAccessoryProps()} />
                   </>
                 ) : null}
-                <Text style={styles.fieldHint}>Daily late fee (automatic)</Text>
-                <Text style={styles.termsInfoText}>
-                  Set automatically to {formatUsd(derivedDailyLateFee ?? 0)} per day (+20% of daily rate).
-                </Text>
               </View>
             </View>
 
@@ -565,6 +607,20 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     color: ui.textSecondary,
     fontWeight: '500',
+  },
+  termsInfoSub: {
+    marginTop: 2,
+    marginBottom: 4,
+    fontSize: 11,
+    lineHeight: 16,
+    color: ui.textMuted,
+    fontWeight: '500',
+  },
+  calculatedHoldValue: {
+    marginTop: 4,
+    fontSize: 16,
+    fontWeight: '700',
+    color: ui.textPrimary,
   },
   totalPriceRow: {
     marginTop: 2,

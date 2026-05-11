@@ -1,4 +1,3 @@
-import { calculateDailyLateFee, formatDailyLateFeeAutoTermsLine } from '@/lib/dailyLateFee';
 import {
   formatNegotiationDeliveryFeeTermLine,
   formatNegotiationDeliveryMethodLine,
@@ -6,6 +5,20 @@ import {
   parseNegotiationDeliveryMethodFromMessage,
   type NegotiationDeliveryMethod,
 } from '@/lib/negotiationDelivery';
+
+/** Stored under `Terms (optional):`; replaces legacy `Daily late fee (auto):` lines during merges. */
+export const NEGOTIATION_LATE_FEE_TERMS_LINE =
+  'Late fees: Automatically calculated using platform policy.';
+
+function replaceLateFeeTermsLine(body: string, newLine: string): string {
+  if (/^Daily late fee \(auto\):.*$/m.test(body)) {
+    return body.replace(/^Daily late fee \(auto\):.*$/m, newLine);
+  }
+  if (/^Late fees:.*$/m.test(body)) {
+    return body.replace(/^Late fees:.*$/m, newLine);
+  }
+  return replaceLineOrInsertAfterTermsIntro(body, /^Late fees:.*$/m, newLine);
+}
 
 function replaceLineOrInsertAfterTermsIntro(body: string, linePattern: RegExp, newLine: string): string {
   if (linePattern.test(body)) {
@@ -47,12 +60,12 @@ function stripDeliveryFeeLines(body: string): string {
 }
 
 /**
- * Updates delivery method/fee and daily-late-fee lines inside the offer message; preserves item/terms copy.
+ * Updates delivery method/fee and standardized late-fee policy line inside the offer message; preserves item/terms copy.
  * Prepends optional user note when present.
  */
 export function mergeNegotiationMessageForCounter(args: {
   existing: string | null | undefined;
-  /** Full negotiated total for the period (base + delivery when applicable); late fee = (this ÷ dayCount) × 1.2. */
+  /** Retained for API compatibility with callers (totals); late-fee wording in the message is platform-standard. */
   dailyRateBasisAmount: number;
   dayCount: number;
   negotiationDeliveryMethod: NegotiationDeliveryMethod;
@@ -61,11 +74,6 @@ export function mergeNegotiationMessageForCounter(args: {
   optionalNote: string;
 }): string {
   let body = String(args.existing ?? '').trim();
-  const late = calculateDailyLateFee({
-    totalAmount: Math.max(0, args.dailyRateBasisAmount),
-    durationDays: args.dayCount,
-  });
-  const lateLine = formatDailyLateFeeAutoTermsLine(late);
 
   const methodLine = formatNegotiationDeliveryMethodLine(args.negotiationDeliveryMethod);
   body = replaceLineOrInsertAfterTermsIntro(body, /^[ \t]*Delivery method:.*$/m, methodLine);
@@ -82,7 +90,7 @@ export function mergeNegotiationMessageForCounter(args: {
     body = stripDeliveryFeeLines(body);
   }
 
-  body = replaceLineOrInsertAfterTermsIntro(body, /^Daily late fee \(auto\):.*$/m, lateLine);
+  body = replaceLateFeeTermsLine(body, NEGOTIATION_LATE_FEE_TERMS_LINE);
 
   const note = args.optionalNote.trim();
   if (note) {

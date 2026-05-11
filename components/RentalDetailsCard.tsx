@@ -547,34 +547,44 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
         <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
           <View style={styles.modalBackdrop}>
             <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Propose pickup & return</Text>
+              <Text style={styles.modalTitle}>Coordinate meetup</Text>
               <ScrollView
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator={false}
                 style={styles.modalScroll}
               >
-                <Text style={styles.modalLabel}>Meetup location</Text>
-                <TextInput
-                  value={meetupLocation}
-                  onChangeText={setMeetupLocation}
-                  placeholder="Where you’ll meet"
-                  placeholderTextColor={ui.textSecondary}
-                  style={styles.modalInput}
-                />
-                {meetupSuggestions.length > 0 ? (
-                  <View style={styles.suggestionsWrap}>
-                    {meetupSuggestions.map((s) => (
-                      <Pressable
-                        key={s}
-                        pressOpacityFeedback={false}
-                        onPress={() => setMeetupLocation(s)}
-                        style={({ pressed }) => [styles.suggestionItem, pressed && styles.secondaryBtnPressed]}
-                      >
-                        <Text style={styles.suggestionText}>{s}</Text>
-                      </Pressable>
-                    ))}
+                <View style={styles.modalMeetupSection}>
+                  <View style={styles.modalSectionHeaderRow}>
+                    <Ionicons name="location-outline" size={17} color={ui.textSecondary} />
+                    <Text style={styles.modalSectionTitleText}>Meetup location</Text>
                   </View>
-                ) : null}
+                  <TextInput
+                    value={meetupLocation}
+                    onChangeText={setMeetupLocation}
+                    placeholder="Where you’ll meet"
+                    placeholderTextColor={ui.textSecondary}
+                    style={styles.modalMeetupInput}
+                  />
+                  <Text style={styles.modalMeetupHelper}>
+                    Shared meetup location for pickup and return.
+                  </Text>
+                  {meetupSuggestions.length > 0 ? (
+                    <View style={styles.suggestionsWrap}>
+                      {meetupSuggestions.map((s) => (
+                        <Pressable
+                          key={s}
+                          pressOpacityFeedback={false}
+                          onPress={() => setMeetupLocation(s)}
+                          style={({ pressed }) => [styles.suggestionItem, pressed && styles.secondaryBtnPressed]}
+                        >
+                          <Text style={styles.suggestionText}>{s}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  ) : null}
+                </View>
+
+                <View style={styles.modalSectionDivider} />
 
                 <Text style={styles.modalSectionTitle}>Pickup</Text>
                 <View style={styles.pickerRow}>
@@ -594,7 +604,7 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
                   </Pressable>
                 </View>
 
-                <Text style={[styles.modalSectionTitle, styles.modalSectionSpaced]}>Return</Text>
+                <Text style={[styles.modalSectionTitle, styles.modalSectionTitleReturn]}>Return</Text>
                 <View style={styles.pickerRow}>
                   <Pressable
                     pressOpacityFeedback={false}
@@ -930,29 +940,51 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
     color: ui.textPrimary,
+    marginBottom: 12,
+  },
+  modalMeetupSection: {
+    marginBottom: 2,
+  },
+  modalSectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     marginBottom: 8,
+  },
+  modalSectionTitleText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    flex: 1,
   },
   modalSectionTitle: {
     fontSize: 13,
     fontWeight: '700',
     color: ui.textPrimary,
-    marginBottom: 4,
-    marginTop: 2,
+    marginBottom: 8,
+    marginTop: 0,
   },
-  modalSectionSpaced: {
-    marginTop: 10,
+  modalSectionTitleReturn: {
+    marginTop: 18,
   },
-  modalLabel: {
-    fontSize: 11,
-    color: ui.textSecondary,
-    marginBottom: 3,
-    fontWeight: '600',
+  modalMeetupHelper: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: '#64748B',
+    marginTop: 8,
+    marginBottom: 0,
+  },
+  modalSectionDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(15, 23, 42, 0.12)',
+    marginTop: 18,
+    marginBottom: 18,
   },
   pickerRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
     gap: 8,
-    marginBottom: 4,
+    marginBottom: 8,
   },
   pickerValueCell: {
     flex: 1,
@@ -1021,14 +1053,25 @@ const styles = StyleSheet.create({
     color: ui.textPrimary,
     marginBottom: 4,
   },
+  modalMeetupInput: {
+    borderColor: ui.border,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    minHeight: 50,
+    fontSize: 15,
+    color: ui.textPrimary,
+    backgroundColor: ui.surfaceInput,
+  },
   modalActions: {
-    marginTop: 8,
+    marginTop: 14,
     flexDirection: 'row',
     gap: 8,
   },
   suggestionsWrap: {
-    marginTop: 4,
-    marginBottom: 6,
+    marginTop: 10,
+    marginBottom: 0,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: ui.border,
     borderRadius: 10,

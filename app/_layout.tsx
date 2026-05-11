@@ -10,6 +10,7 @@ import 'react-native-reanimated';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { DevToolsFab } from '@/components/DevToolsFab';
 import { FeedbackToastHost } from '@/components/FeedbackToastHost';
 import { CreateUsernameScreen } from '@/components/CreateUsernameScreen';
 import { LoginScreen } from '@/components/LoginScreen';
@@ -269,6 +270,7 @@ export default function RootLayout() {
               <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
             </Stack>
             <FeedbackToastHost />
+            <DevToolsFab />
             </View>
             <StatusBar style="auto" />
           </ThemeProvider>

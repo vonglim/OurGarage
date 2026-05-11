@@ -1,6 +1,7 @@
 import type { VerificationPhase } from '@/lib/rentalVerification';
 
-const WINDOW_HOURS_BEFORE_EVENT = 24;
+/** Hours before scheduled pickup/return when verification photo uploads open. */
+export const RENTAL_PHOTO_WINDOW_HOURS_BEFORE_EVENT = 48;
 
 function parseTs(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -17,12 +18,12 @@ export function isPhotoUploadWindowOpen(
   const targetTs = parseTs(phase === 'pickup' ? pickupDatetime : returnDatetime);
   if (targetTs == null) return { allowed: true, helperText: null };
 
-  const windowStartTs = targetTs - WINDOW_HOURS_BEFORE_EVENT * 60 * 60 * 1000;
+  const windowStartTs = targetTs - RENTAL_PHOTO_WINDOW_HOURS_BEFORE_EVENT * 60 * 60 * 1000;
   if (nowMs >= windowStartTs) return { allowed: true, helperText: null };
 
   const phaseLabel = phase === 'pickup' ? 'pickup' : 'return';
   return {
     allowed: false,
-    helperText: `Photos become available 24 hours before ${phaseLabel}.`,
+    helperText: `Photos become available ${RENTAL_PHOTO_WINDOW_HOURS_BEFORE_EVENT} hours before ${phaseLabel}.`,
   };
 }

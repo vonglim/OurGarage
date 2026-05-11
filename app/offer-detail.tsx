@@ -1,6 +1,6 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -16,20 +16,29 @@ import {
   View,
 } from 'react-native';
 import { Image } from 'expo-image';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Pressable } from '@/components/Pressable';
-import { AppImage } from '@/components/ui/AppImage';
 import { ScreenBackButton } from '@/components/ScreenBackButton';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BackHeader } from '@/components/AppHeaders';
 
 import { ScreenWrapper } from '@/components/ScreenWrapper';
+import {
+  CompareOfferScanCard,
+  OfferCountPill,
+  OfferDecisionStatusStrip,
+  OfferDeepDetailBody,
+  StickyActionBar,
+  TransactionHeader,
+  UserNamePill,
+} from '@/components/transaction';
+import { compareListToolbarMinHeight } from '@/constants/designTokens';
 import { getAuthUserIdSync } from '@/lib/authUser';
 import { formatHowDisplay } from '@/lib/deliveryFormat';
 import { formatNegotiatedDeliverySummary } from '@/lib/negotiationDelivery';
 import { formatDurationDisplay } from '@/lib/durationFormat';
+import type { Offer } from '@/lib/negotiationOfferTypes';
 import { formatUsd, getNumericOfferPrice } from '@/lib/money';
-import { parseProfileAvatar } from '@/lib/profileAvatar';
 import type { FinalizeOfferAcceptanceResult } from '@/lib/finalizeOfferAcceptance';
 import { finalizeOfferAcceptance } from '@/lib/finalizeOfferAcceptance';
 import { PROFILE_NAME_FALLBACK } from '@/lib/profileConstants';
@@ -50,21 +59,30 @@ import {
   parseProposalDeclinedReason,
 } from '@/lib/negotiationLifecycle';
 import { calculateDailyLateFee } from '@/lib/dailyLateFee';
+import { calculatePreauthAmount } from '@/lib/rentalProtection';
 import {
   filterNegotiationDiffRows,
   negotiatedOfferTotals,
   negotiationChangeBullets,
   snapshotFromNegotiationMessageRow,
+  sortOffersByLowestNegotiatedTotal,
   type RequestPricingContext,
 } from '@/lib/negotiationTermSnapshot';
+import {
+  getPosterThreadNegotiationFlags,
+  posterShouldShowCounterButton,
+} from '@/lib/posterOfferThreadUi';
+import { formatRequestDateRangeLine } from '@/lib/formatRequestSummaryDates';
+import { splitRequestDisplayTitle } from '@/lib/splitRequestDisplayTitle';
 import { billingDayCountForRequest } from '@/lib/requestPriceContext';
-import { getPresetById } from '@/lib/userAvatarPresets';
 import type { SupabaseRequestChatMessageRow } from '@/lib/supabaseRequestChatMessages';
 import { fetchRequestChatMessagesFromSupabase } from '@/lib/supabaseRequestChatMessages';
 import {
   addRenterAcceptsPosterProposed,
+  countOffersForRequest,
   declineOffer,
   getOfferUserPreview,
+  getOffersForRequest,
   posterCounterOffersRemainingForRenter,
   useOffersStore,
 } from '@/store/offersStore';
@@ -80,6 +98,7 @@ import {
   subtleControlPressed,
   ui,
 } from '@/constants/appUi';
+import { mockDeclineReason, useDevPageAutofill } from '@/lib/devTools';
 
 function firstParam(v: string | string[] | undefined): string | undefined {
   if (v == null) return undefined;
@@ -105,10 +124,41 @@ function extractTermLine(message: string | null | undefined, label: string): str
   return v && v.length > 0 ? v : null;
 }
 
+/** Single-line preview for compare cards only (full copy stays on offer detail). */
+function comparePreviewOneLine(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const s = raw.replace(/\s+/g, ' ').trim();
+  if (!s) return null;
+  const max = 118;
+  return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
+}
+
+function compareShowRatingRow(p: ReturnType<typeof getOfferUserPreview>): boolean {
+  if (p.rating <= 0.05) return false;
+  if (p.ratingReviewCount === 0) return false;
+  return p.ratingReviewCount == null || p.ratingReviewCount > 0;
+}
+
 function parseMoneyFromTextLine(value: string | null): number | null {
   if (!value) return null;
   const n = Number(String(value).replace(/[^0-9.]/g, ''));
   return Number.isFinite(n) ? n : null;
+}
+
+/** Reads optional verification photo URL from synced offer row fields (UI-only). */
+function readOfferVerificationPhotoUri(o: Offer): string | null {
+  const r = o as unknown as Record<string, unknown>;
+  const keys = [
+    'verification_photo_url',
+    'verificationPhotoUrl',
+    'verification_photo',
+    'timestamp_verification_photo_url',
+  ] as const;
+  for (const k of keys) {
+    const v = r[k];
+    if (typeof v === 'string' && v.trim().length > 0) return v.trim();
+  }
+  return null;
 }
 
 function scheduleNavigateToRentalWorkspace(
@@ -139,12 +189,19 @@ function scheduleNavigateToRentalWorkspace(
 
 export default function OfferDetailScreen() {
   const insets = useSafeAreaInsets();
+  /** Avoid stacking SafeArea top + ScreenWrapper padding with TransactionHeader insets. */
+  const offerScreenWrapperStyle = useMemo(
+    () => [styles.screenWrap, { paddingTop: 0, paddingHorizontal: 0 }],
+    []
+  );
   const params = useLocalSearchParams<{
     requestId?: string | string[];
     request_id?: string | string[];
     offerId?: string | string[];
     offer_id?: string | string[];
     id?: string | string[];
+    view?: string | string[];
+    compare?: string | string[];
   }>();
   const requestIdStr = (
     firstParam(params.requestId) ??
@@ -157,11 +214,11 @@ export default function OfferDetailScreen() {
     firstParam(params.id) ??
     ''
   ).trim();
+  const compareParam = firstParam(params.compare) === '1';
   const [tick, setTick] = useState(0);
-  const [expandedHistory, setExpandedHistory] = useState<Record<string, boolean>>({});
-  const [protectionExpanded, setProtectionExpanded] = useState(false);
   const [viewerVisible, setViewerVisible] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(0);
+  const [verificationViewerUri, setVerificationViewerUri] = useState<string | null>(null);
   const [linkedRentalId, setLinkedRentalId] = useState<string | null>(null);
   const [linkedRentalLoading, setLinkedRentalLoading] = useState(false);
   const [lifecycleNow, setLifecycleNow] = useState(() => Date.now());
@@ -169,14 +226,25 @@ export default function OfferDetailScreen() {
   const [postAcceptRedirectPending, setPostAcceptRedirectPending] = useState(false);
   const [offerLookupLoading, setOfferLookupLoading] = useState(false);
   const [offerLookupAttempted, setOfferLookupAttempted] = useState(false);
-  const [counterReceivedLines, setCounterReceivedLines] = useState<string[] | null>(null);
-  const [proposalDeclinedBanner, setProposalDeclinedBanner] = useState<{ reason: string | null } | null>(
-    null
-  );
+  const [counterReceivedByOfferId, setCounterReceivedByOfferId] = useState<
+    Record<string, string[] | null>
+  >({});
+  const [proposalDeclinedByOfferId, setProposalDeclinedByOfferId] = useState<
+    Record<string, { reason: string | null } | null>
+  >({});
   const [declineModalVisible, setDeclineModalVisible] = useState(false);
+  const [declineTargetOfferId, setDeclineTargetOfferId] = useState<string | null>(null);
   const [declineReasonDraft, setDeclineReasonDraft] = useState('');
   const postAcceptNavOnceRef = useRef(false);
   const acceptFinalizeBusyRef = useRef(false);
+
+  const devAutofillOfferDetail = useCallback(() => {
+    setDeclineReasonDraft(mockDeclineReason());
+    setDeclineModalVisible(true);
+    showFeedbackToast('Dev: decline draft filled (submit separately)');
+  }, []);
+
+  useDevPageAutofill(devAutofillOfferDetail, { screenLabel: 'Offer detail' });
 
   const offersFromStore = useOffersStore((s) => s.offers);
 
@@ -450,6 +518,102 @@ export default function OfferDetailScreen() {
   const footerShows =
     showIncomingNegotiationActions || showOutgoingPendingActions || posterCanConfirmRental;
 
+  const showStickyPosterCounterButton =
+    !!offer &&
+    isViewerPoster &&
+    posterShouldShowCounterButton(
+      offer,
+      getPosterThreadNegotiationFlags(offer, { matched, rentalStatus, meTrim }),
+      { matched, rentalStatus, posterCounterRemaining: posterRemaining }
+    );
+
+  const requestTimestampForOffers = useMemo(() => {
+    if (!request) return null;
+    const ts = (request as { timestamp?: unknown }).timestamp;
+    if (typeof ts === 'number' && Number.isFinite(ts)) return ts;
+    if (offer) return offer.requestId;
+    return null;
+  }, [request, offer]);
+
+  const posterDecisionOffers = useMemo(() => {
+    if (!isViewerPoster || matched || rentalStatus !== 'pending') return [];
+    if (requestTimestampForOffers == null) return [];
+    return getOffersForRequest(requestTimestampForOffers);
+  }, [isViewerPoster, matched, rentalStatus, requestTimestampForOffers, offersFromStore]);
+
+  const posterHasMultipleComparableOffers =
+    !!offer &&
+    isViewerPoster &&
+    !matched &&
+    rentalStatus === 'pending' &&
+    posterDecisionOffers.length > 1;
+
+  const isOfferCompareMode = posterHasMultipleComparableOffers && compareParam;
+
+  const viewParam = firstParam(params.view);
+  useLayoutEffect(() => {
+    if (!request || !offer) return;
+    if (isOfferCompareMode) return;
+    if (viewParam === 'full') return;
+    const rowId = getRequestSupabaseRowId(request as Record<string, unknown>);
+    const rid =
+      typeof rowId === 'string' && rowId.trim().length > 0 ? rowId.trim() : requestIdStr.trim();
+    const requestIdForRoute = (rid.length > 0 ? rid : requestIdStr).trim();
+    router.replace({
+      pathname: '/offer-detail',
+      params: {
+        requestId: requestIdForRoute,
+        offerId: String(offer.id),
+        view: 'full',
+      },
+    });
+  }, [request, offer, isOfferCompareMode, viewParam, requestIdStr, offer?.id]);
+
+  const requestPricingForSort = useMemo((): RequestPricingContext | null => {
+    if (!request) return null;
+    return {
+      how: request.how,
+      deliveryFee: request.deliveryFee,
+      pickupDate: (request as { pickupDate?: string }).pickupDate,
+      returnDate: (request as { returnDate?: string }).returnDate,
+      location: request.location,
+      pickupRadiusMiles: (request as { pickupRadiusMiles?: number }).pickupRadiusMiles,
+    };
+  }, [request]);
+
+  const compareSortedOffers = useMemo(() => {
+    if (!isOfferCompareMode || !requestPricingForSort) return [];
+    return sortOffersByLowestNegotiatedTotal(posterDecisionOffers, requestPricingForSort);
+  }, [isOfferCompareMode, posterDecisionOffers, requestPricingForSort]);
+
+  const offersForThreadChatDerived = useMemo(() => {
+    if (!request || matched || rentalStatus !== 'pending') return [];
+    const rowId = getRequestSupabaseRowId(request as Record<string, unknown>);
+    if (!rowId) return [];
+    const meTrimLoop = String(me ?? '').trim();
+    if (!meTrimLoop) return [];
+    if (isViewerPoster) {
+      if (requestTimestampForOffers == null) return [];
+      const list = getOffersForRequest(requestTimestampForOffers);
+      if (list.length > 1 && compareParam) return [];
+      if (list.length > 1 && offer) return [offer];
+      return offer ? [offer] : [];
+    }
+    if (offer && isRenterOnThread) return [offer];
+    return [];
+  }, [
+    request,
+    matched,
+    rentalStatus,
+    me,
+    offer,
+    isViewerPoster,
+    isRenterOnThread,
+    requestTimestampForOffers,
+    offersFromStore,
+    compareParam,
+  ]);
+
   const handleAcceptOffer = () => {
     if (!isViewerPoster || !showIncomingNegotiationActions || !request || !offer) return;
     if (offer.negotiationLocked) return;
@@ -538,17 +702,23 @@ export default function OfferDetailScreen() {
     }
 
     setDeclineReasonDraft('');
+    setDeclineTargetOfferId(offer.id);
     setDeclineModalVisible(true);
   };
 
   const submitDeclineProposal = () => {
-    if (!offer || !request) return;
+    if (!request) return;
+    const target =
+      (declineTargetOfferId ? offersFromStore.find((x) => x.id === declineTargetOfferId) : undefined) ??
+      offer;
+    if (!target) return;
     void (async () => {
-      const ok = await declineOffer(offer.requestId, offer.id, {
+      const ok = await declineOffer(target.requestId, target.id, {
         intent: 'decline_proposal',
         reason: declineReasonDraft.trim() || undefined,
       });
       setDeclineModalVisible(false);
+      setDeclineTargetOfferId(null);
       if (ok) {
         showFeedbackToast('Proposal declined');
       } else {
@@ -686,122 +856,114 @@ export default function OfferDetailScreen() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      if (!offer || !request || matched || rentalStatus !== 'pending' || offer.status !== 'pending') {
-        if (!cancelled) setCounterReceivedLines(null);
+      const targets = offersForThreadChatDerived;
+      const rowId = request ? getRequestSupabaseRowId(request as Record<string, unknown>) : null;
+      if (!request || !rowId || matched || rentalStatus !== 'pending' || targets.length === 0) {
+        if (!cancelled) {
+          setCounterReceivedByOfferId({});
+          setProposalDeclinedByOfferId({});
+        }
         return;
       }
-      const meTrim = String(me ?? '').trim();
-      if (!meTrim || String(offer.lastUpdatedBy ?? '').trim() === meTrim) {
-        if (!cancelled) setCounterReceivedLines(null);
+      const meTrimLoop = String(me ?? '').trim();
+      if (!meTrimLoop) {
+        if (!cancelled) {
+          setCounterReceivedByOfferId({});
+          setProposalDeclinedByOfferId({});
+        }
         return;
       }
-      if (!isNegotiationParticipant) {
-        if (!cancelled) setCounterReceivedLines(null);
+      const participates = isViewerPoster || (offer != null && isRenterOnThread);
+      if (!participates) {
+        if (!cancelled) {
+          setCounterReceivedByOfferId({});
+          setProposalDeclinedByOfferId({});
+        }
         return;
       }
-      const rowId = getRequestSupabaseRowId(request as Record<string, unknown>);
-      if (!rowId) {
-        if (!cancelled) setCounterReceivedLines(null);
-        return;
-      }
-      const rows = await fetchRequestChatMessagesFromSupabase(rowId, offer.id);
-      if (cancelled) return;
-      const timeline = filterNegotiationDiffRows((rows ?? []) as SupabaseRequestChatMessageRow[]);
-      if (timeline.length < 2) {
-        setCounterReceivedLines(null);
-        return;
-      }
-      const last = timeline[timeline.length - 1];
-      const prev = timeline[timeline.length - 2];
-      if (String(last.author_id ?? '').trim() === meTrim) {
-        setCounterReceivedLines(null);
-        return;
-      }
-      const beforeSnap = snapshotFromNegotiationMessageRow(prev, request as RequestPricingContext);
-      const afterSnap = snapshotFromNegotiationMessageRow(last, request as RequestPricingContext);
-      const counterpartyNoun = isViewerPoster ? 'lender' : 'owner';
-      const lines = negotiationChangeBullets(beforeSnap, afterSnap, 'incoming', {
-        counterpartyNoun,
-      });
-      setCounterReceivedLines(lines.length > 0 ? lines : null);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    offer?.id,
-    offer?.updatedAt,
-    offer?.lastUpdatedBy,
-    offer?.status,
-    request,
-    matched,
-    rentalStatus,
-    me,
-    isNegotiationParticipant,
-    isViewerPoster,
-    tick,
-  ]);
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      if (
-        !offer ||
-        !request ||
-        matched ||
-        rentalStatus !== 'pending' ||
-        (offer.status !== 'pending' && offer.status !== 'pending_confirmation')
-      ) {
-        if (!cancelled) setProposalDeclinedBanner(null);
-        return;
+      const nextCounter: Record<string, string[] | null> = {};
+      const nextProposal: Record<string, { reason: string | null } | null> = {};
+
+      for (const o of targets) {
+        if (cancelled) return;
+        const rows = await fetchRequestChatMessagesFromSupabase(rowId, o.id);
+        if (cancelled) return;
+
+        if (o.status === 'pending' && String(o.lastUpdatedBy ?? '').trim() !== meTrimLoop) {
+          const timeline = filterNegotiationDiffRows((rows ?? []) as SupabaseRequestChatMessageRow[]);
+          if (timeline.length < 2) {
+            nextCounter[o.id] = null;
+          } else {
+            const last = timeline[timeline.length - 1];
+            const prev = timeline[timeline.length - 2];
+            if (String(last.author_id ?? '').trim() === meTrimLoop) {
+              nextCounter[o.id] = null;
+            } else {
+              const beforeSnap = snapshotFromNegotiationMessageRow(
+                prev,
+                request as RequestPricingContext
+              );
+              const afterSnap = snapshotFromNegotiationMessageRow(
+                last,
+                request as RequestPricingContext
+              );
+              const counterpartyNoun = isViewerPoster ? 'lender' : 'owner';
+              const lines = negotiationChangeBullets(beforeSnap, afterSnap, 'incoming', {
+                counterpartyNoun,
+              });
+              nextCounter[o.id] = lines.length > 0 ? lines : null;
+            }
+          }
+        } else {
+          nextCounter[o.id] = null;
+        }
+
+        if (o.status !== 'pending' && o.status !== 'pending_confirmation') {
+          nextProposal[o.id] = null;
+          continue;
+        }
+        const timelineKinds = new Set([
+          'initial',
+          'renter_update',
+          'poster_counter',
+          'proposal_declined',
+          'renter_accepts',
+        ]);
+        const timeline = (rows ?? []).filter((r) => timelineKinds.has(String(r.kind ?? '').trim()));
+        if (timeline.length === 0) {
+          nextProposal[o.id] = null;
+          continue;
+        }
+        const last = timeline[timeline.length - 1];
+        if (String(last.kind ?? '').trim() !== 'proposal_declined') {
+          nextProposal[o.id] = null;
+          continue;
+        }
+        if (String(last.author_id ?? '').trim() === meTrimLoop) {
+          nextProposal[o.id] = null;
+          continue;
+        }
+        nextProposal[o.id] = { reason: parseProposalDeclinedReason(last.body) };
       }
-      const meTrim = String(me ?? '').trim();
-      if (!meTrim || !isNegotiationParticipant) {
-        if (!cancelled) setProposalDeclinedBanner(null);
-        return;
+
+      if (!cancelled) {
+        setCounterReceivedByOfferId(nextCounter);
+        setProposalDeclinedByOfferId(nextProposal);
       }
-      const rowId = getRequestSupabaseRowId(request as Record<string, unknown>);
-      if (!rowId) {
-        if (!cancelled) setProposalDeclinedBanner(null);
-        return;
-      }
-      const rows = await fetchRequestChatMessagesFromSupabase(rowId, offer.id);
-      if (cancelled) return;
-      const timelineKinds = new Set([
-        'initial',
-        'renter_update',
-        'poster_counter',
-        'proposal_declined',
-        'renter_accepts',
-      ]);
-      const timeline = (rows ?? []).filter((r) => timelineKinds.has(String(r.kind ?? '').trim()));
-      if (timeline.length === 0) {
-        setProposalDeclinedBanner(null);
-        return;
-      }
-      const last = timeline[timeline.length - 1];
-      if (String(last.kind ?? '').trim() !== 'proposal_declined') {
-        setProposalDeclinedBanner(null);
-        return;
-      }
-      if (String(last.author_id ?? '').trim() === meTrim) {
-        setProposalDeclinedBanner(null);
-        return;
-      }
-      setProposalDeclinedBanner({ reason: parseProposalDeclinedReason(last.body) });
     })();
     return () => {
       cancelled = true;
     };
   }, [
-    offer?.id,
-    offer?.updatedAt,
-    offer?.status,
+    offersForThreadChatDerived,
     request,
     matched,
     rentalStatus,
     me,
-    isNegotiationParticipant,
+    isViewerPoster,
+    isRenterOnThread,
+    offer,
     tick,
   ]);
 
@@ -812,7 +974,7 @@ export default function OfferDetailScreen() {
   if (!request || !offer) {
     if (offerLookupLoading || !offerLookupAttempted) {
       return (
-        <ScreenWrapper style={styles.screenWrap}>
+        <ScreenWrapper style={offerScreenWrapperStyle} edges={['left', 'right']}>
           <View style={{ flex: 1 }}>
             <ScreenEntrance style={styles.entranceFillCentered}>
               <ActivityIndicator size="small" color={ui.primary} />
@@ -823,7 +985,7 @@ export default function OfferDetailScreen() {
       );
     }
     return (
-      <ScreenWrapper style={styles.screenWrap}>
+      <ScreenWrapper style={offerScreenWrapperStyle} edges={['left', 'right']}>
         <View style={{ flex: 1 }}>
           <ScreenEntrance style={styles.entranceFillCentered}>
             <Text style={styles.muted}>This offer is no longer available.</Text>
@@ -837,14 +999,8 @@ export default function OfferDetailScreen() {
     );
   }
 
-  const requestPricingCtx: RequestPricingContext = {
-    how: request.how,
-    deliveryFee: request.deliveryFee,
-    pickupDate: (request as { pickupDate?: string }).pickupDate,
-    returnDate: (request as { returnDate?: string }).returnDate,
-    location: request.location,
-    pickupRadiusMiles: (request as { pickupRadiusMiles?: number }).pickupRadiusMiles,
-  };
+  const requestPricingCtx = requestPricingForSort as RequestPricingContext;
+
   const {
     method: negMethod,
     delivery: negFee,
@@ -871,10 +1027,7 @@ export default function OfferDetailScreen() {
     extractTermLine(offer.message, 'Description') ??
     (offer.toolDescription?.trim().length ? offer.toolDescription.trim() : null);
   const replacementValueText = extractTermLine(offer.message, 'Replacement value');
-  const dailyLateFeeText = extractTermLine(offer.message, 'Daily late fee');
-  const conditionLine = offer.message?.trim().split('\n').map((l) => l.trim()).find((line) =>
-    !/^(terms \(optional\)|brand and model:|description:|replacement value:|delivery method:|delivery fee:|daily late fee)/i.test(line)
-  ) ?? null;
+  const verificationPhotoUri = readOfferVerificationPhotoUri(offer);
   const currentOfferStatusNote =
     offer.negotiationLocked
       ? 'Closed'
@@ -892,11 +1045,9 @@ export default function OfferDetailScreen() {
     (!(matched && isAcceptedOffer) && currentOfferStatusNote)
   );
   const replacementValueNum = parseMoneyFromTextLine(replacementValueText);
-  const estimatedPreauth = replacementValueNum != null ? Math.max(0, Math.round(replacementValueNum * 0.75)) : null;
+  const estimatedPreauth =
+    replacementValueNum != null ? calculatePreauthAmount(replacementValueNum) : null;
   const offerUser = getOfferUserPreview(offer);
-  const parsedOfferUserAvatar = parseProfileAvatar(offerUser.avatar);
-  const offerUserPreset = parsedOfferUserAvatar.kind === 'preset' ? getPresetById(parsedOfferUserAvatar.id) : null;
-  const ownerCardTitle = isViewerPoster ? 'Owner' : 'Equipment Owner';
   const ownerDistanceLabel =
     typeof (request as { pickupRadiusMiles?: unknown }).pickupRadiusMiles === 'number' &&
     Number.isFinite((request as { pickupRadiusMiles?: number }).pickupRadiusMiles)
@@ -950,782 +1101,89 @@ export default function OfferDetailScreen() {
 
   const showAcceptTransitionBar =
     (finalizeNegotiationBusy || postAcceptRedirectPending) && !matched;
-  const offerUpdatedAgo = getTimeAgo(offer.updatedAt);
+  const requestTitleFull = String(request.toolName ?? '').trim() || 'Equipment request';
+  const { primary: requestPrimaryTitle, context: requestTitleContext } =
+    splitRequestDisplayTitle(requestTitleFull);
+  const offersOnRequestCount = countOffersForRequest(offer.requestId);
+  const requestListedTotal =
+    typeof (request as { totalPrice?: unknown }).totalPrice === 'number' &&
+    Number.isFinite((request as { totalPrice: number }).totalPrice)
+      ? (request as { totalPrice: number }).totalPrice
+      : 0;
+  const listedDailyRate = billDays > 0 ? requestListedTotal / billDays : 0;
+  const extraOfferImages =
+    Array.isArray(offer.offer_images) ? offer.offer_images : [];
+
+  const deepDetailBlock =
+    request && offer ? (
+      <OfferDeepDetailBody
+        scheduleRangeTitle={formatRequestDateRangeLine(pickupDateLabel, returnDateLabel)}
+        durationLabel={formatDurationDisplay(request)}
+        offerDailyRateLabel={`${formatUsd(offerDailyRate)} / day`}
+        negotiatedDeliverySummary={negotiatedDeliverySummary}
+        ownerDistanceLabel={ownerDistanceLabel}
+        requestLocationDisplay={request.location?.trim() ? request.location.trim() : '—'}
+        brandModelText={brandModelText}
+        descriptionText={descriptionText}
+        replacementValueText={replacementValueText}
+        estimatedPreauth={estimatedPreauth}
+        lateFeePerDay={lateFeePerDay}
+        extraOfferImages={extraOfferImages}
+        verificationPhotoUri={verificationPhotoUri}
+        onVerificationPhotoPress={() => {
+          if (verificationPhotoUri) setVerificationViewerUri(verificationPhotoUri);
+        }}
+        historyEntries={historyEntries}
+        hasCurrentOfferDetails={hasCurrentOfferDetails}
+        historyStatusNote={historyStatusNote}
+        offerMessageTrimmed={String(offer.message ?? '').trim()}
+        onGalleryImagePress={(i) => {
+          setViewerIndex(i);
+          setViewerVisible(true);
+        }}
+      />
+    ) : null;
+
+  const decisionRequestSummarySegments: string[] = [];
+  if (listedDailyRate > 0) decisionRequestSummarySegments.push(`${formatUsd(listedDailyRate)}/day`);
+  decisionRequestSummarySegments.push(formatDurationDisplay(request));
+  decisionRequestSummarySegments.push(formatHowDisplay(request));
+  const decisionRequestSummaryLine = `${isViewerPoster ? 'Your request: ' : 'This request: '}${decisionRequestSummarySegments.join(' • ')}`;
+
+  /** Canonical offer thread: deep detail + negotiation controls (same route as `view=full`). */
+  const navigateToThreadDecision = useCallback(
+    (offerId: string) => {
+      const rowId = getRequestSupabaseRowId(request as Record<string, unknown>);
+      const rid =
+        typeof rowId === 'string' && rowId.trim().length > 0 ? rowId.trim() : requestIdStr.trim();
+      router.push({
+        pathname: '/offer-detail',
+        params: {
+          requestId: (rid.length > 0 ? rid : requestIdStr).trim(),
+          offerId,
+          view: 'full',
+        },
+      });
+    },
+    [request, requestIdStr]
+  );
 
   const scrollBottomPad = showAcceptTransitionBar
     ? 64 + insets.bottom
-    : footerShows || showPendingActionBar
-      ? (renterCanRespond && isRenterOnThread ? 120 : 110) + insets.bottom
-      : renterIsWaitingOwnerConfirm
-        ? 120 + insets.bottom
-        : 32 + insets.bottom;
+    : isOfferCompareMode
+      ? 28 + insets.bottom
+      : footerShows || showPendingActionBar
+        ? (renterCanRespond && isRenterOnThread ? 132 : 124) + insets.bottom
+        : renterIsWaitingOwnerConfirm
+          ? 128 + insets.bottom
+          : 28 + insets.bottom;
 
-  return (
-    <ScreenWrapper style={styles.screenWrap}>
-      <View style={{ flex: 1, backgroundColor: ui.surfaceGrouped }}>
-        <ScreenEntrance style={styles.entranceFlex}>
-          <View style={{ flex: 1 }}>
-            <View style={[styles.header, { paddingTop: 8 }]}>
-              <BackHeader title="Offer Details" onBack={() => router.back()} />
-            </View>
+  const declineRoundOffer =
+    (declineTargetOfferId ? offersFromStore.find((x) => x.id === declineTargetOfferId) : undefined) ??
+    offer;
 
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{
-            paddingVertical: 12,
-            paddingHorizontal: 0,
-            paddingBottom: scrollBottomPad,
-          }}
-          showsVerticalScrollIndicator={true}
-          keyboardDismissMode="on-drag"
-          keyboardShouldPersistTaps="handled"
-        >
-        <View style={styles.contentColumn}>
-        {renterIsWaitingOwnerConfirm ? (
-          <View style={styles.notice}>
-            <Text style={styles.noticeText}>
-              Waiting for owner confirmation. You will be notified when they confirm the rental.
-            </Text>
-          </View>
-        ) : null}
-
-        {posterCanConfirmRental ? (
-          <View style={styles.notice}>
-            <Text style={styles.noticeText}>
-              The renter accepted your counter. Confirm the rental below to match and open the
-              agreement.
-            </Text>
-          </View>
-        ) : null}
-
-        {negotiationLockedOut && isRenterOnThread ? (
-          <View style={styles.notice}>
-            <Text style={styles.noticeTitle}>Negotiation closed</Text>
-            <Text style={styles.noticeText}>
-              This request is no longer accepting offers from you.
-            </Text>
-          </View>
-        ) : negotiationLockedOut && isViewerPoster ? (
-          <View style={styles.notice}>
-            <Text style={styles.noticeTitle}>Negotiation closed</Text>
-            <Text style={styles.noticeText}>
-              This thread is permanently closed with this lender.
-            </Text>
-          </View>
-        ) : isTerminalNegotiation && offer.status === 'closed' && !negotiationLockedOut ? (
-          <View style={styles.notice}>
-            <Text style={styles.noticeTitle}>Offer withdrawn</Text>
-            <Text style={styles.noticeText}>This negotiation has been closed.</Text>
-            {cooldownRemainingAfterWithdrawMs(offer, lifecycleNow) > 0 ? (
-              <Text style={[styles.noticeText, { marginTop: 8 }]}>
-                You can make a new offer in{' '}
-                {formatNegotiationCooldownRemaining(cooldownRemainingAfterWithdrawMs(offer, lifecycleNow))}.
-              </Text>
-            ) : null}
-            {isRenterOnThread &&
-            canCreateNewOfferThreadAfterWithdraw(offer, lifecycleNow).ok &&
-            getRequestSupabaseRowId(request as Record<string, unknown>) ? (
-              <Pressable
-                pressOpacityFeedback={false}
-                haptic
-                onPress={() => {
-                  const rowId = getRequestSupabaseRowId(request as Record<string, unknown>);
-                  if (rowId) {
-                    router.push({ pathname: '/make-offer', params: { requestId: rowId } });
-                  }
-                }}
-                style={({ pressed }) => [
-                  styles.agreementActiveButton,
-                  { marginTop: 12 },
-                  pressed && primarySolidPressed,
-                ]}
-              >
-                <Text style={styles.agreementActiveButtonText}>Make New Offer</Text>
-              </Pressable>
-            ) : null}
-          </View>
-        ) : isTerminalNegotiation ? (
-          <View style={styles.notice}>
-            <Text style={styles.noticeTitle}>Negotiation closed</Text>
-            <Text style={styles.noticeText}>
-              {offer.status === 'closed'
-                ? 'This negotiation has ended.'
-                : 'Negotiation limits were reached and this thread is closed.'}
-            </Text>
-          </View>
-        ) : null}
-
-        {proposalDeclinedBanner != null ? (
-          <View style={styles.proposalDeclinedCard}>
-            <Text style={styles.proposalDeclinedTitle}>Proposal declined</Text>
-            {proposalDeclinedBanner.reason ? (
-              <>
-                <Text style={styles.proposalDeclinedSubtitle}>Optional reason:</Text>
-                <Text style={styles.proposalDeclinedReason}>{proposalDeclinedBanner.reason}</Text>
-              </>
-            ) : (
-              <Text style={styles.proposalDeclinedMeta}>No reason was provided.</Text>
-            )}
-            <Text style={styles.proposalDeclinedHint}>
-              You can still accept the last terms, send a counter, or update your offer while negotiation
-              limits allow.
-            </Text>
-          </View>
-        ) : null}
-
-        {counterReceivedLines != null && counterReceivedLines.length > 0 ? (
-          <View style={styles.counterReceivedCard}>
-            <Text style={styles.counterReceivedTitle}>Counter received</Text>
-            <Text style={styles.counterReceivedSubtitle}>Updated terms:</Text>
-            {counterReceivedLines.map((line, i) => (
-              <Text key={`${i}-${line.slice(0, 24)}`} style={styles.counterReceivedBullet}>
-                • {line}
-              </Text>
-            ))}
-          </View>
-        ) : null}
-
-        {offer &&
-        !negotiationLockedOut &&
-        !matched &&
-        rentalStatus === 'pending' &&
-        isNegotiationParticipant &&
-        (offer.status === 'pending' || offer.status === 'pending_confirmation') &&
-        (isFinalDeclineRoundBeforeAction(offer) || (isViewerPoster && posterRemaining === 1)) ? (
-          <View style={styles.finalRoundBanner}>
-            <Text style={styles.finalRoundTitle}>Final negotiation round</Text>
-            {isFinalDeclineRoundBeforeAction(offer) ? (
-              <Text style={styles.finalRoundBody}>
-                If this proposal is declined, the negotiation will close permanently.
-              </Text>
-            ) : null}
-            {isViewerPoster && posterRemaining === 1 ? (
-              <Text
-                style={[
-                  styles.finalRoundBody,
-                  isFinalDeclineRoundBeforeAction(offer) ? { marginTop: 8 } : null,
-                ]}
-              >
-                This is your last counter on this thread.
-              </Text>
-            ) : null}
-          </View>
-        ) : null}
-
-        {!isViewerPoster &&
-        !isRenterOnThread &&
-        !renterCanRespond &&
-        rentalStatus === 'pending' &&
-        !matched ? (
-          <View style={styles.notice}>
-            <Text style={styles.noticeText}>
-              Only the request owner can accept, decline, or counter here.
-            </Text>
-          </View>
-        ) : null}
-
-        {isViewerPoster && isPosterCounter && !matched ? (
-          <View style={styles.notice}>
-            <Text style={styles.noticeText}>
-              This is your counter-offer. It stays in the list with other offers.
-            </Text>
-          </View>
-        ) : null}
-
-        {offer ? (
-          showFinalizedOfferLayout ? (
-          <>
-            <View style={styles.agreementActiveCard}>
-              <Text style={styles.agreementActiveTitle}>✓ Agreement active</Text>
-              <Text style={styles.agreementActiveBody}>
-                You and {counterpartyDisplayName} are now coordinating meetup and rental details.
-              </Text>
-              <Pressable
-                pressOpacityFeedback={false}
-                haptic
-                disabled={linkedRentalLoading}
-                onPress={openRentalWorkspace}
-                style={({ pressed }) => [
-                  styles.agreementActiveButton,
-                  pressed && !linkedRentalLoading && primarySolidPressed,
-                  linkedRentalLoading && styles.agreementActiveButtonDisabled,
-                ]}
-              >
-                <Text style={styles.agreementActiveButtonText}>Open Rental Workspace</Text>
-              </Pressable>
-            </View>
-
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionLabel}>Current Offer</Text>
-              <Text style={styles.sectionMeta}>{offerUpdatedAgo}</Text>
-            </View>
-            <View style={styles.card}>
-              <Text style={styles.priceLine}>{formatUsd(offerTotalWithDelivery)}</Text>
-              <Text style={styles.heroSubline}>
-                {formatDurationDisplay(request)} • {formatUsd(offerDailyRate)}/day
-              </Text>
-              <View style={styles.offerCardDivider} />
-              <View style={styles.heroChipRow}>
-                <View style={styles.heroChip}><Text style={styles.heroChipText}>{negotiatedDeliverySummary}</Text></View>
-                <View style={styles.heroChip}><Text style={styles.heroChipText}>{ownerDistanceLabel}</Text></View>
-              </View>
-            </View>
-
-            <Text style={styles.sectionLabel}>Rental schedule</Text>
-            <View style={styles.card}>
-              <Text style={styles.bodyLine}>Pickup date: {pickupDateLabel || '—'}</Text>
-              <Text style={styles.bodyLine}>Return date: {returnDateLabel || '—'}</Text>
-              <Text style={styles.bodyLine}>Duration: {formatDurationDisplay(request)}</Text>
-            </View>
-
-            <Text style={styles.sectionLabel}>Delivery & Meetup</Text>
-            <View style={styles.card}>
-              <Text style={styles.bodyLine}>
-                {negMethod === 'pickup' ? 'Pickup' : 'Owner delivery'}
-              </Text>
-              {negMethod === 'owner_delivery' ? (
-                <Text style={styles.bodyLine}>
-                  {negFee <= 0 ? 'Free delivery' : `Delivery: ${formatUsd(negFee)}`}
-                </Text>
-              ) : null}
-              <Text style={styles.bodyLine}>
-                Request preference: {formatHowDisplay(request)}
-              </Text>
-              <Text style={styles.bodyLine}>
-                Rental area / meetup area: {request.location?.trim() ? request.location.trim() : '—'}
-              </Text>
-            </View>
-
-            <Text style={styles.sectionLabel}>Item Details</Text>
-            <View style={styles.card}>
-              {brandModelText ? (
-                <View style={styles.detailField}>
-                  <Text style={styles.detailLabel}>Brand & model</Text>
-                  <Text style={styles.detailValue}>{brandModelText}</Text>
-                </View>
-              ) : null}
-              {conditionLine ? (
-                <View style={styles.detailField}>
-                  <Text style={styles.detailLabel}>Condition</Text>
-                  <Text style={styles.detailValue}>{conditionLine}</Text>
-                </View>
-              ) : null}
-              {descriptionText ? (
-                <View style={styles.detailFieldLast}>
-                  <Text style={styles.detailLabel}>Description/specs</Text>
-                  <Text style={styles.detailValue}>{descriptionText}</Text>
-                </View>
-              ) : null}
-            </View>
-
-            <Text style={styles.sectionLabel}>Equipment Value & Terms</Text>
-            <View style={styles.card}>
-              <Pressable
-                pressOpacityFeedback={false}
-                onPress={() => setProtectionExpanded((v) => !v)}
-                style={({ pressed }) => [styles.historyHeaderPressable, pressed && styles.historyRowPressed]}
-              >
-                <Text style={styles.sectionToggleLabel}>Equipment value & terms</Text>
-                <Text style={styles.sectionToggleAction}>{protectionExpanded ? 'Hide' : 'View'}</Text>
-              </Pressable>
-              {protectionExpanded ? (
-                <View style={styles.protectionBody}>
-                  <Text style={styles.bodyLine}>Replacement value: {replacementValueText ?? '—'}</Text>
-                  <Text style={styles.bodyLine}>
-                    Daily late fee per day: {formatUsd(lateFeePerDay)} ({formatUsd(offerDailyRate)} + 20%)
-                  </Text>
-                  <Text style={styles.bodyLine}>
-                    Estimated preauthorization hold: {estimatedPreauth != null ? formatUsd(estimatedPreauth) : '—'}
-                  </Text>
-                  <Text style={styles.mutedSmall}>
-                    No charge is applied unless needed. Preauthorization holds are temporary and only used if the item is
-                    returned late, damaged, materially different, or not returned.
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-
-            <Text style={styles.sectionLabel}>Photos</Text>
-            <View style={[styles.card, styles.photosCard]}>
-              {Array.isArray(offer.offer_images) && offer.offer_images.length > 0 ? (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  {offer.offer_images.map((img, i) => (
-                    <AppImage
-                      key={i}
-                      uri={img}
-                      aspect="square"
-                      width={110}
-                      rounded={10}
-                      style={{ marginRight: 10 }}
-                      accessibilityLabel={`Offer photo ${i + 1}`}
-                      onPress={() => {
-                        setViewerIndex(i);
-                        setViewerVisible(true);
-                      }}
-                    />
-                  ))}
-                </ScrollView>
-              ) : (
-                <Text style={styles.photosEmpty}>No photos attached.</Text>
-              )}
-            </View>
-
-            <Text style={styles.sectionLabel}>{ownerCardTitle}</Text>
-            <View style={styles.card}>
-              <View style={styles.userCardRow}>
-                <View style={[styles.userAvatar, { backgroundColor: offerUserPreset?.color ?? ui.borderLight }]}>
-                  <Text style={styles.userAvatarText}>
-                    {offerUserPreset?.icon?.slice(0, 1).toUpperCase() ?? offerUser.name.slice(0, 1).toUpperCase()}
-                  </Text>
-                </View>
-                <View style={styles.userCardMeta}>
-                  <Text style={styles.currentOfferName}>{offerUser.name}</Text>
-                  <Text style={styles.bodyLine}>Rating: ★ {offerUser.rating.toFixed(1)}</Text>
-                  <Text style={styles.bodyLine}>Completed rentals count: —</Text>
-                  <Text style={styles.bodyLine}>Response speed: —</Text>
-                </View>
-              </View>
-            </View>
-          </>
-          ) : (
-          <>
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionLabel}>Current Offer</Text>
-              <Text style={styles.sectionMeta}>{offerUpdatedAgo}</Text>
-            </View>
-            <View style={styles.card}>
-              <Text style={styles.priceLine}>{formatUsd(offerTotalWithDelivery)}</Text>
-              <Text style={styles.heroSubline}>
-                {formatDurationDisplay(request)} • {formatUsd(offerDailyRate)}/day
-              </Text>
-              <View style={styles.offerCardDivider} />
-              <View style={styles.heroChipRow}>
-                <View style={styles.heroChip}><Text style={styles.heroChipText}>{negotiatedDeliverySummary}</Text></View>
-                <View style={styles.heroChip}><Text style={styles.heroChipText}>{ownerDistanceLabel}</Text></View>
-              </View>
-            </View>
-
-            <Text style={styles.sectionLabel}>Rental Schedule</Text>
-            <View style={styles.card}>
-              <Text style={styles.bodyLine}>Pickup date: {pickupDateLabel || '—'}</Text>
-              <Text style={styles.bodyLine}>Return date: {returnDateLabel || '—'}</Text>
-              <Text style={styles.bodyLine}>Duration: {formatDurationDisplay(request)}</Text>
-            </View>
-
-            <Text style={styles.sectionLabel}>Delivery & Meetup</Text>
-            <View style={styles.card}>
-              <Text style={styles.bodyLine}>
-                {negMethod === 'pickup' ? 'Pickup' : 'Owner delivery'}
-              </Text>
-              {negMethod === 'owner_delivery' ? (
-                <Text style={styles.bodyLine}>
-                  {negFee <= 0 ? 'Free delivery' : `Delivery: ${formatUsd(negFee)}`}
-                </Text>
-              ) : null}
-              <Text style={styles.bodyLine}>
-                Request preference: {formatHowDisplay(request)}
-              </Text>
-              <Text style={styles.bodyLine}>
-                Rental area / meetup area: {request.location?.trim() ? request.location.trim() : '—'}
-              </Text>
-            </View>
-
-            <Text style={styles.sectionLabel}>Item Details</Text>
-            <View style={styles.card}>
-              {brandModelText ? (
-                <View style={styles.detailField}>
-                  <Text style={styles.detailLabel}>Brand & model</Text>
-                  <Text style={styles.detailValue}>{brandModelText}</Text>
-                </View>
-              ) : null}
-              {conditionLine ? (
-                <View style={styles.detailField}>
-                  <Text style={styles.detailLabel}>Condition</Text>
-                  <Text style={styles.detailValue}>{conditionLine}</Text>
-                </View>
-              ) : null}
-              {descriptionText ? (
-                <View style={styles.detailFieldLast}>
-                  <Text style={styles.detailLabel}>Description/specs</Text>
-                  <Text style={styles.detailValue}>{descriptionText}</Text>
-                </View>
-              ) : null}
-            </View>
-
-            <Text style={styles.sectionLabel}>Equipment Value & Terms</Text>
-            <View style={styles.card}>
-              <Pressable
-                pressOpacityFeedback={false}
-                onPress={() => setProtectionExpanded((v) => !v)}
-                style={({ pressed }) => [styles.historyHeaderPressable, pressed && styles.historyRowPressed]}
-              >
-                <Text style={styles.sectionToggleLabel}>Equipment value & terms</Text>
-                <Text style={styles.sectionToggleAction}>{protectionExpanded ? 'Hide' : 'View'}</Text>
-              </Pressable>
-              {protectionExpanded ? (
-                <View style={styles.protectionBody}>
-                  <Text style={styles.bodyLine}>Replacement value: {replacementValueText ?? '—'}</Text>
-                  <Text style={styles.bodyLine}>
-                    Daily late fee per day: {formatUsd(lateFeePerDay)} ({formatUsd(offerDailyRate)} + 20%)
-                  </Text>
-                  <Text style={styles.bodyLine}>
-                    Estimated preauthorization hold: {estimatedPreauth != null ? formatUsd(estimatedPreauth) : '—'}
-                  </Text>
-                  <Text style={styles.mutedSmall}>
-                    No charge is applied unless needed. Preauthorization holds are temporary and only used if the item is
-                    returned late, damaged, materially different, or not returned.
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-
-            <Text style={styles.sectionLabel}>Photos</Text>
-            <View style={[styles.card, styles.photosCard]}>
-              {Array.isArray(offer.offer_images) && offer.offer_images.length > 0 ? (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  {offer.offer_images.map((img, i) => (
-                    <AppImage
-                      key={i}
-                      uri={img}
-                      aspect="square"
-                      width={110}
-                      rounded={10}
-                      style={{ marginRight: 10 }}
-                      accessibilityLabel={`Offer photo ${i + 1}`}
-                      onPress={() => {
-                        setViewerIndex(i);
-                        setViewerVisible(true);
-                      }}
-                    />
-                  ))}
-                </ScrollView>
-              ) : (
-                <Text style={styles.photosEmpty}>No photos attached.</Text>
-              )}
-            </View>
-
-            <Text style={styles.sectionLabel}>{ownerCardTitle}</Text>
-            <View style={styles.card}>
-              <View style={styles.userCardRow}>
-                <View style={[styles.userAvatar, { backgroundColor: offerUserPreset?.color ?? ui.borderLight }]}>
-                  <Text style={styles.userAvatarText}>
-                    {offerUserPreset?.icon?.slice(0, 1).toUpperCase() ?? offerUser.name.slice(0, 1).toUpperCase()}
-                  </Text>
-                </View>
-                <View style={styles.userCardMeta}>
-                  <Text style={styles.currentOfferName}>{offerUser.name}</Text>
-                  <Text style={styles.bodyLine}>Rating: ★ {offerUser.rating.toFixed(1)}</Text>
-                  <Text style={styles.bodyLine}>Completed rentals count: —</Text>
-                  <Text style={styles.bodyLine}>Response speed: —</Text>
-                </View>
-              </View>
-            </View>
-          </>
-          )
-        ) : null}
-
-        <Text style={styles.sectionLabel}>Offer History</Text>
-        {hasCurrentOfferDetails ? (
-          <View style={styles.historyRow}>
-            <Pressable
-              pressOpacityFeedback={false}
-              onPress={() =>
-                setExpandedHistory((prev) => ({
-                  ...prev,
-                  currentOfferDetails: !prev.currentOfferDetails,
-                }))
-              }
-              style={({ pressed }) => [styles.historyHeaderPressable, pressed && styles.historyRowPressed]}
-            >
-              <Text style={styles.historyRowName} numberOfLines={1}>
-                Current offer details
-              </Text>
-              <Text style={styles.historyChevron}>
-                {expandedHistory.currentOfferDetails ? 'Hide' : 'View'}
-              </Text>
-            </Pressable>
-            {expandedHistory.currentOfferDetails ? (
-              <>
-                {offer.message?.trim() ? (
-                  <Text style={styles.historyRowMessage}>{offer.message.trim()}</Text>
-                ) : null}
-                {historyStatusNote ? (
-                  <Text style={styles.historyRowMessage}>{historyStatusNote}</Text>
-                ) : null}
-              </>
-            ) : null}
-          </View>
-        ) : null}
-        {historyEntries.length === 0 && !hasCurrentOfferDetails ? (
-          <Text style={styles.mutedSmall}>No older offers on this request.</Text>
-        ) : (
-          historyEntries.map((h) => (
-            <View key={`${h.at}-${h.authorId}-${h.kind}`} style={styles.historyRow}>
-              <Pressable
-                pressOpacityFeedback={false}
-                onPress={() =>
-                  setExpandedHistory((prev) => {
-                    const key = `${h.at}-${h.authorId}-${h.kind}`;
-                    return { ...prev, [key]: !prev[key] };
-                  })
-                }
-                style={({ pressed }) => [styles.historyHeaderPressable, pressed && styles.historyRowPressed]}
-              >
-                <Text style={styles.historyRowName} numberOfLines={1}>
-                  {h.kind} · {getTimeAgo(h.at)}
-                  {h.price != null && Number.isFinite(h.price) ? ` · ${formatUsd(h.price)}` : ''}
-                </Text>
-                <Text style={styles.historyChevron}>
-                  {expandedHistory[`${h.at}-${h.authorId}-${h.kind}`] ? 'Hide' : 'View'}
-                </Text>
-              </Pressable>
-              {expandedHistory[`${h.at}-${h.authorId}-${h.kind}`] && h.body?.trim() ? (
-                <Text style={styles.historyRowMessage}>{h.body.trim()}</Text>
-              ) : null}
-            </View>
-          ))
-        )}
-
-        {matched && !isAcceptedOffer ? (
-          <View style={styles.notice}>
-            <Text style={styles.noticeText}>
-              This request is already matched with another offer.
-            </Text>
-          </View>
-        ) : null}
-        </View>
-        </ScrollView>
-      </View>
-
-      {showAcceptTransitionBar ? (
-        <View
-          style={[
-            styles.buttonContainer,
-            styles.acceptTransitionFooter,
-            postAcceptRedirectPending && !finalizeNegotiationBusy && styles.acceptTransitionFooterDimmed,
-            { paddingBottom: 12 + insets.bottom },
-          ]}
-          pointerEvents="box-none"
-        >
-          <View style={styles.acceptTransitionRow} pointerEvents="none">
-            <ActivityIndicator size="small" color={ui.primary} />
-            <Text style={styles.acceptTransitionText}>
-              {finalizeNegotiationBusy ? 'Finalizing agreement…' : 'Opening rental workspace…'}
-            </Text>
-          </View>
-        </View>
-      ) : negotiationLockedOut || isTerminalNegotiation ? null : footerShows || showPendingActionBar ? (
-        <View style={[styles.buttonContainer, { paddingBottom: 12 + insets.bottom }]}>
-          {showPendingActionBar ? (
-            showIncomingNegotiationActions ? (
-              <View style={styles.footerActionRow}>
-                <Pressable
-                  pressOpacityFeedback={false}
-                  haptic
-                  disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
-                  onPress={isViewerPoster ? handleAcceptOffer : onAcceptCounter}
-                  style={({ pressed }) => [
-                    styles.footerActionPrimary,
-                    pressed && styles.footerActionPrimaryPressed,
-                    (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
-                  ]}
-                >
-                  <Text style={styles.footerActionPrimaryText}>Accept</Text>
-                </Pressable>
-                <Pressable
-                  pressOpacityFeedback={false}
-                  disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
-                  onPress={onCounterOfferPress}
-                  style={({ pressed }) => [
-                    styles.footerActionSecondary,
-                    pressed && styles.footerActionSecondaryPressed,
-                    (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
-                  ]}
-                >
-                  <Text style={styles.footerActionSecondaryText}>Counter</Text>
-                </Pressable>
-                <Pressable
-                  pressOpacityFeedback={false}
-                  disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
-                  onPress={onDecline}
-                  style={({ pressed }) => [
-                    styles.footerActionDecline,
-                    pressed && styles.footerActionDeclinePressed,
-                    (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
-                  ]}
-                >
-                  <Text style={styles.footerActionDeclineText}>Decline</Text>
-                </Pressable>
-              </View>
-            ) : showOutgoingPendingActions ? (
-              <View style={styles.footerActionRow}>
-                <View style={styles.footerWaitingBlock}>
-                  <Text style={styles.footerWaitingTitle}>Counter sent</Text>
-                  <Text style={styles.footerWaitingText}>
-                    Waiting for response from {isViewerPoster ? offerUser.name : 'the request owner'}
-                  </Text>
-                </View>
-                <Pressable
-                  pressOpacityFeedback={false}
-                  disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
-                  onPress={onCounterOfferPress}
-                  style={({ pressed }) => [
-                    styles.footerActionSecondary,
-                    pressed && styles.footerActionSecondaryPressed,
-                    (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
-                  ]}
-                >
-                  <Text style={styles.footerActionSecondaryText}>Modify Counter</Text>
-                </Pressable>
-                <Pressable
-                  pressOpacityFeedback={false}
-                  disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
-                  onPress={onDecline}
-                  style={({ pressed }) => [
-                    styles.footerActionDecline,
-                    pressed && styles.footerActionDeclinePressed,
-                    (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
-                  ]}
-                >
-                  <Text style={styles.footerActionDeclineText}>Withdraw</Text>
-                </Pressable>
-              </View>
-            ) : (
-              <></>
-            )
-          ) : posterCanConfirmRental ? (
-            <View style={styles.footerActionRow}>
-              <Pressable
-                pressOpacityFeedback={false}
-                haptic
-                disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
-                onPress={() => {
-                  onConfirmRental();
-                }}
-                style={({ pressed }) => [
-                  styles.footerActionPrimaryWide,
-                  pressed && styles.footerActionPrimaryPressed,
-                  (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
-                ]}
-              >
-                <Text style={styles.footerActionPrimaryText}>Confirm Rental</Text>
-              </Pressable>
-              <Pressable
-                pressOpacityFeedback={false}
-                disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
-                onPress={onDecline}
-                style={({ pressed }) => [
-                  styles.footerActionDecline,
-                  pressed && styles.footerActionDeclinePressed,
-                  (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
-                ]}
-              >
-                <Text style={styles.footerActionDeclineText}>Decline</Text>
-              </Pressable>
-            </View>
-          ) : canAcceptCurrent || posterCanManagePendingOffer ? (
-            <View style={styles.footerActionRow}>
-              <Pressable
-                pressOpacityFeedback={false}
-                haptic
-                disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
-                onPress={handleAcceptOffer}
-                style={({ pressed }) => [
-                  styles.footerActionPrimary,
-                  pressed && styles.footerActionPrimaryPressed,
-                  (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
-                ]}
-              >
-                <Text style={styles.footerActionPrimaryText}>Accept</Text>
-              </Pressable>
-              <Pressable
-                pressOpacityFeedback={false}
-                disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
-                onPress={onCounterOfferPress}
-                style={({ pressed }) => [
-                  styles.footerActionSecondary,
-                  pressed && styles.footerActionSecondaryPressed,
-                  (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
-                ]}
-              >
-                <Text style={styles.footerActionSecondaryText}>Counter</Text>
-              </Pressable>
-              <Pressable
-                pressOpacityFeedback={false}
-                disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
-                onPress={onDecline}
-                style={({ pressed }) => [
-                  styles.footerActionDecline,
-                  pressed && styles.footerActionDeclinePressed,
-                  (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
-                ]}
-              >
-                <Text style={styles.footerActionDeclineText}>Decline</Text>
-              </Pressable>
-            </View>
-          ) : isRenterOnThread && renterCanRespond ? (
-            <View style={styles.footerActionRow}>
-              <Pressable
-                pressOpacityFeedback={false}
-                haptic
-                disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
-                onPress={onAcceptCounter}
-                style={({ pressed }) => [
-                  styles.footerActionPrimary,
-                  pressed && styles.footerActionPrimaryPressed,
-                  (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
-                ]}
-              >
-                <Text style={styles.footerActionPrimaryText}>Accept Counter</Text>
-              </Pressable>
-              <Pressable
-                pressOpacityFeedback={false}
-                disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
-                onPress={onCounterOfferPress}
-                style={({ pressed }) => [
-                  styles.footerActionSecondary,
-                  pressed && styles.footerActionSecondaryPressed,
-                  (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
-                ]}
-              >
-                <Text style={styles.footerActionSecondaryText}>Update Offer</Text>
-              </Pressable>
-            </View>
-          ) : (
-            <View style={styles.footerActionRow}>
-              <Pressable
-                pressOpacityFeedback={false}
-                disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
-                onPress={onCounterOfferPress}
-                style={({ pressed }) => [
-                  styles.footerActionSecondary,
-                  styles.footerActionSecondaryGrow,
-                  pressed && styles.footerActionSecondaryPressed,
-                  (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
-                ]}
-              >
-                <Text style={styles.footerActionSecondaryText}>Counter</Text>
-              </Pressable>
-              {isViewerPoster ? (
-                <Pressable
-                  pressOpacityFeedback={false}
-                  disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
-                  onPress={onDecline}
-                  style={({ pressed }) => [
-                    styles.footerActionDecline,
-                    pressed && styles.footerActionDeclinePressed,
-                    (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
-                  ]}
-                >
-                  <Text style={styles.footerActionDeclineText}>Decline</Text>
-                </Pressable>
-              ) : null}
-            </View>
-          )}
-        </View>
-      ) : null}
-      </ScreenEntrance>
-
+  const renderOfferDetailModals = () => (
+    <>
       {Array.isArray(offer.offer_images) && offer.offer_images.length > 0 ? (
         <Modal
           visible={viewerVisible}
@@ -1813,11 +1271,49 @@ export default function OfferDetailScreen() {
         </Modal>
       ) : null}
 
+      {verificationViewerUri ? (
+        <Modal
+          visible={!!verificationViewerUri}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setVerificationViewerUri(null)}
+        >
+          <View style={{ flex: 1, backgroundColor: 'black' }}>
+            <View
+              style={{
+                flex: 1,
+                justifyContent: 'center',
+                alignItems: 'center',
+              }}
+            >
+              <Image
+                source={{ uri: verificationViewerUri }}
+                style={{ width: Dimensions.get('window').width, height: Dimensions.get('window').height * 0.72 }}
+                contentFit="contain"
+              />
+            </View>
+            <Pressable
+              onPress={() => setVerificationViewerUri(null)}
+              style={{
+                position: 'absolute',
+                top: 50,
+                right: 20,
+              }}
+            >
+              <Text style={{ color: 'white', fontSize: 18 }}>Close</Text>
+            </Pressable>
+          </View>
+        </Modal>
+      ) : null}
+
       <Modal
         visible={declineModalVisible}
         transparent
         animationType="fade"
-        onRequestClose={() => setDeclineModalVisible(false)}
+        onRequestClose={() => {
+          setDeclineModalVisible(false);
+          setDeclineTargetOfferId(null);
+        }}
       >
         <View style={styles.declineModalBackdrop}>
           <View style={styles.declineModalCard}>
@@ -1826,7 +1322,7 @@ export default function OfferDetailScreen() {
             <Text style={styles.declineModalHelper}>
               The other user may still submit another counter offer unless negotiation limits are reached.
             </Text>
-            {offer && isFinalDeclineRoundBeforeAction(offer) ? (
+            {declineRoundOffer && isFinalDeclineRoundBeforeAction(declineRoundOffer) ? (
               <View style={styles.declineModalFinalNote}>
                 <Text style={styles.declineModalFinalNoteText}>
                   Final negotiation round: declining will close this negotiation permanently.
@@ -1847,7 +1343,10 @@ export default function OfferDetailScreen() {
             <View style={styles.declineModalActions}>
               <Pressable
                 pressOpacityFeedback={false}
-                onPress={() => setDeclineModalVisible(false)}
+                onPress={() => {
+                  setDeclineModalVisible(false);
+                  setDeclineTargetOfferId(null);
+                }}
                 style={({ pressed }) => [
                   styles.declineModalCancelBtn,
                   pressed && outlinePrimaryPressed,
@@ -1870,6 +1369,580 @@ export default function OfferDetailScreen() {
           </View>
         </View>
       </Modal>
+    </>
+  );
+
+  return (
+    <ScreenWrapper style={offerScreenWrapperStyle} edges={['left', 'right']}>
+      <View style={{ flex: 1, backgroundColor: ui.surfaceGrouped }}>
+        <ScreenEntrance style={styles.entranceFlex}>
+          <View style={{ flex: 1 }}>
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{
+            paddingTop: 0,
+            paddingBottom: scrollBottomPad,
+            paddingHorizontal: 0,
+          }}
+          showsVerticalScrollIndicator={true}
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
+        >
+          {isOfferCompareMode && !showFinalizedOfferLayout ? (
+            <>
+              <View style={styles.compareHeroBlock}>
+                <TransactionHeader
+                  density="compare"
+                  topInset={insets.top}
+                  onBack={() => router.back()}
+                  rightAccessory={<OfferCountPill count={offersOnRequestCount} />}
+                  title={requestPrimaryTitle}
+                  titleContext={requestTitleContext ?? undefined}
+                  subtitle="Browse offers — tap a card to open that lender’s thread"
+                />
+                <View style={styles.contentColumn}>
+                  <OfferDecisionStatusStrip
+                    density="compare"
+                    headline={`${compareSortedOffers.length} OFFER${
+                      compareSortedOffers.length === 1 ? '' : 'S'
+                    } RECEIVED`}
+                    requestLine={decisionRequestSummaryLine}
+                  />
+                </View>
+              </View>
+              <View style={[styles.contentColumn, styles.compareListColumn]}>
+                <View style={styles.compareFutureToolbarSlot} />
+                {compareSortedOffers.map((threadOffer, index) => {
+              const tTotals = negotiatedOfferTotals(threadOffer, requestPricingCtx);
+              const tTotalDelivery = tTotals.total;
+              const tDaily = tTotalDelivery / billDays;
+              const showBestValueBadge = index === 0;
+              const tUser = getOfferUserPreview(threadOffer);
+              const tBrand = extractTermLine(threadOffer.message, 'Brand and model');
+              const tDesc =
+                extractTermLine(threadOffer.message, 'Description') ??
+                (threadOffer.toolDescription?.trim().length
+                  ? threadOffer.toolDescription.trim()
+                  : null);
+              const tCond =
+                threadOffer.message?.trim().split('\n').map((l) => l.trim()).find((line) =>
+                  !/^(terms \(optional\)|brand and model:|description:|replacement value:|delivery method:|delivery fee:|daily late fee|late fees:)/i.test(
+                    line
+                  )
+                ) ?? null;
+              const tUpdated = getTimeAgo(threadOffer.updatedAt);
+              const tImg =
+                Array.isArray(threadOffer.offer_images) && threadOffer.offer_images.length > 0
+                  ? threadOffer.offer_images[0]?.trim() || null
+                  : null;
+              const tMethod = tTotals.method;
+              const tFee = tTotals.delivery;
+              const deliveryMeta =
+                tMethod === 'pickup'
+                  ? 'Pickup'
+                  : tFee <= 0
+                    ? 'Free delivery'
+                    : `${formatUsd(tFee)} delivery`;
+              const ratingLine = compareShowRatingRow(tUser)
+                ? `★ ${tUser.rating.toFixed(1)}`
+                : undefined;
+              const durationLabel = formatDurationDisplay(request);
+              const priceSubline = `${formatUsd(tTotalDelivery)} total · ${durationLabel}`;
+
+              return (
+                <CompareOfferScanCard
+                  key={threadOffer.id}
+                  variant={index === 0 ? 'best' : 'neutral'}
+                  ownerName={tUser.name}
+                  ratingLine={ratingLine}
+                  showBestValueBadge={showBestValueBadge}
+                  pricePrimary={formatUsd(tTotalDelivery)}
+                  priceSubline={priceSubline}
+                  deliveryMeta={deliveryMeta}
+                  distanceMeta={ownerDistanceLabel}
+                  areaMeta={request.location?.trim() ? request.location.trim() : '—'}
+                  listingTitle={tBrand || requestPrimaryTitle}
+                  previewLine={comparePreviewOneLine(tDesc ?? tCond)}
+                  timeAgo={tUpdated}
+                  listingImageUri={tImg}
+                  onPress={() => navigateToThreadDecision(String(threadOffer.id))}
+                />
+              );
+            })}
+                {matched && !isAcceptedOffer ? (
+                  <View style={styles.notice}>
+                    <Text style={styles.noticeText}>
+                      This request is already matched with another offer.
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            </>
+          ) : (
+            <>
+              <TransactionHeader
+                topInset={insets.top}
+                onBack={() => router.back()}
+                rightAccessory={<UserNamePill name={offerUser.name} />}
+                title={requestPrimaryTitle}
+                titleContext={requestTitleContext ?? undefined}
+                subtitle="Review details, photos & terms and respond to the offer"
+                density="compact"
+              />
+              <View style={styles.contentColumn}>
+        {renterIsWaitingOwnerConfirm ? (
+          <View style={styles.notice}>
+            <Text style={styles.noticeText}>
+              Waiting for owner confirmation. You will be notified when they confirm the rental.
+            </Text>
+          </View>
+        ) : null}
+
+        {!isOfferCompareMode && posterCanConfirmRental ? (
+          <View style={styles.notice}>
+            <Text style={styles.noticeText}>
+              The renter accepted your counter. Confirm the rental below to match and open the
+              agreement.
+            </Text>
+          </View>
+        ) : null}
+
+        {negotiationLockedOut && isRenterOnThread ? (
+          <View style={styles.notice}>
+            <Text style={styles.noticeTitle}>Negotiation closed</Text>
+            <Text style={styles.noticeText}>
+              This request is no longer accepting offers from you.
+            </Text>
+          </View>
+        ) : !isOfferCompareMode && negotiationLockedOut && isViewerPoster ? (
+          <View style={styles.notice}>
+            <Text style={styles.noticeTitle}>Negotiation closed</Text>
+            <Text style={styles.noticeText}>
+              This thread is permanently closed with this lender.
+            </Text>
+          </View>
+        ) : !isOfferCompareMode && isTerminalNegotiation && offer.status === 'closed' && !negotiationLockedOut ? (
+          <View style={styles.notice}>
+            <Text style={styles.noticeTitle}>Offer withdrawn</Text>
+            <Text style={styles.noticeText}>This negotiation has been closed.</Text>
+            {cooldownRemainingAfterWithdrawMs(offer, lifecycleNow) > 0 ? (
+              <Text style={[styles.noticeText, { marginTop: 8 }]}>
+                You can make a new offer in{' '}
+                {formatNegotiationCooldownRemaining(cooldownRemainingAfterWithdrawMs(offer, lifecycleNow))}.
+              </Text>
+            ) : null}
+            {isRenterOnThread &&
+            canCreateNewOfferThreadAfterWithdraw(offer, lifecycleNow).ok &&
+            getRequestSupabaseRowId(request as Record<string, unknown>) ? (
+              <Pressable
+                pressOpacityFeedback={false}
+                haptic
+                onPress={() => {
+                  const rowId = getRequestSupabaseRowId(request as Record<string, unknown>);
+                  if (rowId) {
+                    router.push({ pathname: '/make-offer', params: { requestId: rowId } });
+                  }
+                }}
+                style={({ pressed }) => [
+                  styles.agreementActiveButton,
+                  { marginTop: 12 },
+                  pressed && primarySolidPressed,
+                ]}
+              >
+                <Text style={styles.agreementActiveButtonText}>Make New Offer</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : !isOfferCompareMode && isTerminalNegotiation ? (
+          <View style={styles.notice}>
+            <Text style={styles.noticeTitle}>Negotiation closed</Text>
+            <Text style={styles.noticeText}>
+              {offer.status === 'closed'
+                ? 'This negotiation has ended.'
+                : 'Negotiation limits were reached and this thread is closed.'}
+            </Text>
+          </View>
+        ) : null}
+
+        {!isOfferCompareMode &&
+        offer &&
+        !negotiationLockedOut &&
+        !matched &&
+        rentalStatus === 'pending' &&
+        isNegotiationParticipant &&
+        (offer.status === 'pending' || offer.status === 'pending_confirmation') &&
+        (isFinalDeclineRoundBeforeAction(offer) || (isViewerPoster && posterRemaining === 1)) ? (
+          <View style={styles.finalRoundBanner}>
+            <Text style={styles.finalRoundTitle}>Final negotiation round</Text>
+            {isFinalDeclineRoundBeforeAction(offer) ? (
+              <Text style={styles.finalRoundBody}>
+                If this proposal is declined, the negotiation will close permanently.
+              </Text>
+            ) : null}
+            {isViewerPoster && posterRemaining === 1 ? (
+              <Text
+                style={[
+                  styles.finalRoundBody,
+                  isFinalDeclineRoundBeforeAction(offer) ? { marginTop: 8 } : null,
+                ]}
+              >
+                This is your last counter on this thread.
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
+
+        {!isViewerPoster &&
+        !isRenterOnThread &&
+        !renterCanRespond &&
+        rentalStatus === 'pending' &&
+        !matched ? (
+          <View style={styles.notice}>
+            <Text style={styles.noticeText}>
+              Only the request owner can accept, decline, or counter here.
+            </Text>
+          </View>
+        ) : null}
+
+        {!isOfferCompareMode && isViewerPoster && isPosterCounter && !matched ? (
+          <View style={styles.notice}>
+            <Text style={styles.noticeText}>
+              This is your counter-offer. It stays in the list with other offers.
+            </Text>
+          </View>
+        ) : null}
+
+        {offer ? (
+          showFinalizedOfferLayout ? (
+            <>
+              <View style={styles.agreementActiveCard}>
+                <Text style={styles.agreementActiveTitle}>✓ Agreement active</Text>
+                <Text style={styles.agreementActiveBody}>
+                  You and {counterpartyDisplayName} are now coordinating meetup and rental details.
+                </Text>
+                <Pressable
+                  pressOpacityFeedback={false}
+                  haptic
+                  disabled={linkedRentalLoading}
+                  onPress={openRentalWorkspace}
+                  style={({ pressed }) => [
+                    styles.agreementActiveButton,
+                    pressed && !linkedRentalLoading && primarySolidPressed,
+                    linkedRentalLoading && styles.agreementActiveButtonDisabled,
+                  ]}
+                >
+                  <Text style={styles.agreementActiveButtonText}>Open Rental Workspace</Text>
+                </Pressable>
+              </View>
+              {deepDetailBlock}
+            </>
+          ) : (
+            <>
+              {proposalDeclinedByOfferId[offer.id] != null ? (
+                <View style={styles.threadProposalDeclined}>
+                  <Text style={styles.threadProposalDeclinedTitle}>Proposal declined</Text>
+                  {proposalDeclinedByOfferId[offer.id]?.reason ? (
+                    <>
+                      <Text style={styles.threadProposalDeclinedSubtitle}>Optional reason:</Text>
+                      <Text style={styles.threadProposalDeclinedReason}>
+                        {proposalDeclinedByOfferId[offer.id]?.reason}
+                      </Text>
+                    </>
+                  ) : (
+                    <Text style={styles.threadProposalDeclinedMeta}>No reason was provided.</Text>
+                  )}
+                  <Text style={styles.threadProposalDeclinedHint}>
+                    You can still accept the last terms or send a counter while negotiation limits allow.
+                  </Text>
+                </View>
+              ) : null}
+              {(counterReceivedByOfferId[offer.id] ?? []).length > 0 ? (
+                <View style={styles.threadCounterInset}>
+                  <Text style={styles.threadCounterInsetTitle}>Counter updated</Text>
+                  <Text style={styles.threadCounterInsetSubtitle}>Updated terms:</Text>
+                  {(counterReceivedByOfferId[offer.id] ?? []).map((line, i) => (
+                    <Text key={`${i}-${line.slice(0, 24)}`} style={styles.threadCounterInsetBullet}>
+                      • {line}
+                    </Text>
+                  ))}
+                </View>
+              ) : null}
+              {deepDetailBlock}
+            </>
+          )
+        ) : null}
+
+        {matched && !isAcceptedOffer ? (
+          <View style={styles.notice}>
+            <Text style={styles.noticeText}>
+              This request is already matched with another offer.
+            </Text>
+          </View>
+        ) : null}
+              </View>
+            </>
+          )}
+        </ScrollView>
+      </View>
+
+      {showAcceptTransitionBar ? (
+        <StickyActionBar bottomInset={insets.bottom} contentPaddingTop={10}>
+          <View
+            style={[
+              styles.acceptTransitionFooter,
+              postAcceptRedirectPending && !finalizeNegotiationBusy && styles.acceptTransitionFooterDimmed,
+            ]}
+            pointerEvents="none"
+          >
+            <View style={styles.acceptTransitionRow}>
+              <ActivityIndicator size="small" color={ui.primary} />
+              <Text style={styles.acceptTransitionText}>
+                {finalizeNegotiationBusy ? 'Finalizing agreement…' : 'Opening rental workspace…'}
+              </Text>
+            </View>
+          </View>
+        </StickyActionBar>
+      ) : isOfferCompareMode ? null : negotiationLockedOut || isTerminalNegotiation ? null : footerShows || showPendingActionBar ? (
+        <StickyActionBar bottomInset={insets.bottom} contentPaddingTop={10}>
+          {showPendingActionBar ? (
+            showIncomingNegotiationActions ? (
+              <View style={styles.footerActionRow}>
+                <Pressable
+                  pressOpacityFeedback={false}
+                  disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
+                  onPress={onDecline}
+                  style={({ pressed }) => [
+                    styles.footerActionDestructive,
+                    pressed && styles.footerActionDestructivePressed,
+                    (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
+                  ]}
+                >
+                  <Text style={styles.footerActionDestructiveText}>Decline</Text>
+                </Pressable>
+                <Pressable
+                  pressOpacityFeedback={false}
+                  haptic
+                  disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
+                  onPress={isViewerPoster ? handleAcceptOffer : onAcceptCounter}
+                  style={({ pressed }) => [
+                    styles.footerActionPrimary,
+                    pressed && styles.footerActionPrimaryPressed,
+                    (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
+                  ]}
+                >
+                  <Text style={styles.footerActionPrimaryText}>
+                    {isViewerPoster ? 'Accept Offer' : 'Accept'}
+                  </Text>
+                </Pressable>
+                {!isViewerPoster || showStickyPosterCounterButton ? (
+                  <Pressable
+                    pressOpacityFeedback={false}
+                    disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
+                    onPress={onCounterOfferPress}
+                    style={({ pressed }) => [
+                      styles.footerActionCounter,
+                      pressed && styles.footerActionCounterPressed,
+                      (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
+                    ]}
+                  >
+                    <View style={styles.footerCounterInner}>
+                      <Ionicons name="chatbubble-ellipses-outline" size={15} color="rgba(11, 31, 58, 0.58)" />
+                      <Text style={styles.footerActionCounterText}>Counter</Text>
+                    </View>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : showOutgoingPendingActions ? (
+              <View style={styles.footerOutgoingColumn}>
+                <View style={styles.footerWaitingBlock}>
+                  <Text style={styles.footerWaitingTitle}>Counter sent</Text>
+                  <Text style={styles.footerWaitingText}>
+                    Waiting for response from {isViewerPoster ? offerUser.name : 'the request owner'}
+                  </Text>
+                </View>
+                <View style={styles.footerActionRow}>
+                  {!isViewerPoster || showStickyPosterCounterButton ? (
+                    <Pressable
+                      pressOpacityFeedback={false}
+                      disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
+                      onPress={onCounterOfferPress}
+                      style={({ pressed }) => [
+                        styles.footerActionCounter,
+                        styles.footerActionCounterGrow,
+                        pressed && styles.footerActionCounterPressed,
+                        (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
+                      ]}
+                    >
+                      <View style={styles.footerCounterInner}>
+                        <Ionicons name="chatbubble-ellipses-outline" size={15} color="rgba(11, 31, 58, 0.58)" />
+                        <Text style={styles.footerActionCounterText}>Modify Counter</Text>
+                      </View>
+                    </Pressable>
+                  ) : null}
+                  <Pressable
+                    pressOpacityFeedback={false}
+                    disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
+                    onPress={onDecline}
+                    style={({ pressed }) => [
+                      styles.footerActionDestructive,
+                      pressed && styles.footerActionDestructivePressed,
+                      (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
+                    ]}
+                  >
+                    <Text style={styles.footerActionDestructiveText}>Withdraw</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : (
+              <></>
+            )
+          ) : posterCanConfirmRental ? (
+            <View style={styles.footerActionRow}>
+              <Pressable
+                pressOpacityFeedback={false}
+                disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
+                onPress={onDecline}
+                style={({ pressed }) => [
+                  styles.footerActionDestructive,
+                  pressed && styles.footerActionDestructivePressed,
+                  (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
+                ]}
+              >
+                <Text style={styles.footerActionDestructiveText}>Decline</Text>
+              </Pressable>
+              <Pressable
+                pressOpacityFeedback={false}
+                haptic
+                disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
+                onPress={() => {
+                  onConfirmRental();
+                }}
+                style={({ pressed }) => [
+                  styles.footerActionPrimaryWide,
+                  pressed && styles.footerActionPrimaryPressed,
+                  (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
+                ]}
+              >
+                <Text style={styles.footerActionPrimaryText}>Confirm Rental</Text>
+              </Pressable>
+            </View>
+          ) : canAcceptCurrent || posterCanManagePendingOffer ? (
+            <View style={styles.footerActionRow}>
+              <Pressable
+                pressOpacityFeedback={false}
+                disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
+                onPress={onDecline}
+                style={({ pressed }) => [
+                  styles.footerActionDestructive,
+                  pressed && styles.footerActionDestructivePressed,
+                  (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
+                ]}
+              >
+                <Text style={styles.footerActionDestructiveText}>Decline</Text>
+              </Pressable>
+              <Pressable
+                pressOpacityFeedback={false}
+                haptic
+                disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
+                onPress={handleAcceptOffer}
+                style={({ pressed }) => [
+                  styles.footerActionPrimary,
+                  pressed && styles.footerActionPrimaryPressed,
+                  (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
+                ]}
+              >
+                <Text style={styles.footerActionPrimaryText}>Accept Offer</Text>
+              </Pressable>
+              {!isViewerPoster || showStickyPosterCounterButton ? (
+                <Pressable
+                  pressOpacityFeedback={false}
+                  disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
+                  onPress={onCounterOfferPress}
+                  style={({ pressed }) => [
+                    styles.footerActionCounter,
+                    pressed && styles.footerActionCounterPressed,
+                    (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
+                  ]}
+                >
+                  <View style={styles.footerCounterInner}>
+                    <Ionicons name="chatbubble-ellipses-outline" size={15} color="rgba(11, 31, 58, 0.58)" />
+                    <Text style={styles.footerActionCounterText}>Counter</Text>
+                  </View>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : isRenterOnThread && renterCanRespond ? (
+            <View style={styles.footerActionRow}>
+              <Pressable
+                pressOpacityFeedback={false}
+                haptic
+                disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
+                onPress={onAcceptCounter}
+                style={({ pressed }) => [
+                  styles.footerActionPrimary,
+                  pressed && styles.footerActionPrimaryPressed,
+                  (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
+                ]}
+              >
+                <Text style={styles.footerActionPrimaryText}>Accept Counter</Text>
+              </Pressable>
+              <Pressable
+                pressOpacityFeedback={false}
+                disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
+                onPress={onCounterOfferPress}
+                style={({ pressed }) => [
+                  styles.footerActionSecondary,
+                  pressed && styles.footerActionSecondaryPressed,
+                  (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
+                ]}
+              >
+                <View style={styles.footerCounterInner}>
+                  <Ionicons name="chatbubble-ellipses-outline" size={17} color={ui.primary} />
+                  <Text style={styles.footerActionSecondaryText}>Update Offer</Text>
+                </View>
+              </Pressable>
+            </View>
+          ) : (
+            <View style={styles.footerActionRow}>
+              {isViewerPoster ? (
+                <Pressable
+                  pressOpacityFeedback={false}
+                  disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
+                  onPress={onDecline}
+                  style={({ pressed }) => [
+                    styles.footerActionDestructive,
+                    pressed && styles.footerActionDestructivePressed,
+                    (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
+                  ]}
+                >
+                  <Text style={styles.footerActionDestructiveText}>Decline</Text>
+                </Pressable>
+              ) : null}
+              {!isViewerPoster || showStickyPosterCounterButton ? (
+                <Pressable
+                  pressOpacityFeedback={false}
+                  disabled={finalizeNegotiationBusy || postAcceptRedirectPending}
+                  onPress={onCounterOfferPress}
+                  style={({ pressed }) => [
+                    styles.footerActionCounter,
+                    styles.footerActionCounterGrow,
+                    pressed && styles.footerActionCounterPressed,
+                    (finalizeNegotiationBusy || postAcceptRedirectPending) && styles.footerActionDisabled,
+                  ]}
+                >
+                  <View style={styles.footerCounterInner}>
+                    <Ionicons name="chatbubble-ellipses-outline" size={15} color="rgba(11, 31, 58, 0.58)" />
+                    <Text style={styles.footerActionCounterText}>Counter</Text>
+                  </View>
+                </Pressable>
+              ) : null}
+            </View>
+          )}
+        </StickyActionBar>
+      ) : null}
+      </ScreenEntrance>
+
+      {renderOfferDetailModals()}
       </View>
     </ScreenWrapper>
   );
@@ -1903,13 +1976,38 @@ const styles = StyleSheet.create({
     maxWidth: 820,
     alignSelf: 'center',
     paddingHorizontal: ui.padScreenH,
+    paddingTop: 6,
   },
-  header: {
-    paddingHorizontal: 0,
-    paddingBottom: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: ui.border,
+  compareHeroBlock: {
     backgroundColor: ui.surfaceGrouped,
+  },
+  compareListColumn: {
+    paddingTop: 2,
+  },
+  compareFutureToolbarSlot: {
+    minHeight: 18,
+  },
+  metadataRowDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: ui.border,
+    marginLeft: 56,
+  },
+  listedPriceLine: {
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  listedPriceMuted: {
+    color: ui.textSecondary,
+    fontWeight: '500',
+  },
+  listedPriceStrong: {
+    color: ui.textPrimary,
+    fontWeight: '800',
+  },
+  footerCounterInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
   },
   backHit: {
     marginBottom: 6,
@@ -2157,75 +2255,6 @@ const styles = StyleSheet.create({
     color: '#5D4037',
     lineHeight: 22,
   },
-  counterReceivedCard: {
-    backgroundColor: ui.surfaceTintPrimary,
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(11,31,58,0.12)',
-    marginBottom: 16,
-    marginHorizontal: ui.padScreenH,
-  },
-  counterReceivedTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: ui.primary,
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-    marginBottom: 6,
-  },
-  counterReceivedSubtitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: ui.textSecondary,
-    marginBottom: 6,
-  },
-  counterReceivedBullet: {
-    fontSize: 15,
-    color: ui.textPrimary,
-    lineHeight: 22,
-    marginBottom: 2,
-  },
-  proposalDeclinedCard: {
-    backgroundColor: '#FFFBEB',
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#FCD34D',
-    marginBottom: 16,
-    marginHorizontal: ui.padScreenH,
-  },
-  proposalDeclinedTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#92400E',
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-    marginBottom: 8,
-  },
-  proposalDeclinedSubtitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#78350F',
-    marginBottom: 4,
-  },
-  proposalDeclinedReason: {
-    fontSize: 15,
-    color: '#451A03',
-    lineHeight: 22,
-  },
-  proposalDeclinedMeta: {
-    fontSize: 14,
-    color: '#92400E',
-    lineHeight: 20,
-    fontStyle: 'italic',
-  },
-  proposalDeclinedHint: {
-    marginTop: 12,
-    fontSize: 13,
-    color: '#92400E',
-    lineHeight: 18,
-  },
   finalRoundBanner: {
     backgroundColor: '#FFFBEB',
     borderRadius: 12,
@@ -2245,6 +2274,75 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#78350F',
     lineHeight: 20,
+  },
+  threadProposalDeclined: {
+    marginBottom: 16,
+    marginHorizontal: ui.padScreenH,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+  },
+  threadProposalDeclinedTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#92400E',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    marginBottom: 8,
+  },
+  threadProposalDeclinedSubtitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#78350F',
+    marginBottom: 4,
+  },
+  threadProposalDeclinedReason: {
+    fontSize: 15,
+    color: '#451A03',
+    lineHeight: 22,
+  },
+  threadProposalDeclinedMeta: {
+    fontSize: 14,
+    color: '#92400E',
+    lineHeight: 20,
+    fontStyle: 'italic',
+  },
+  threadProposalDeclinedHint: {
+    marginTop: 10,
+    fontSize: 13,
+    color: '#92400E',
+    lineHeight: 18,
+  },
+  threadCounterInset: {
+    marginBottom: 16,
+    marginHorizontal: ui.padScreenH,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: ui.surfaceTintPrimary,
+    borderWidth: 1,
+    borderColor: 'rgba(11,31,58,0.12)',
+  },
+  threadCounterInsetTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: ui.primary,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  threadCounterInsetSubtitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: ui.textSecondary,
+    marginBottom: 6,
+  },
+  threadCounterInsetBullet: {
+    fontSize: 15,
+    color: ui.textPrimary,
+    lineHeight: 22,
+    marginBottom: 2,
   },
   declineModalBackdrop: {
     flex: 1,
@@ -2398,26 +2496,20 @@ const styles = StyleSheet.create({
   footerActionDisabled: {
     opacity: 0.48,
   },
-  buttonContainer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    paddingVertical: 12,
-    paddingHorizontal: ui.padScreenH,
-    backgroundColor: 'transparent',
-    borderTopWidth: 0,
-    gap: 10,
-  },
   footerActionRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: 8,
+    flexWrap: 'nowrap',
+    alignItems: 'stretch',
+    gap: 7,
+    width: '100%',
+  },
+  footerOutgoingColumn: {
+    width: '100%',
+    gap: 10,
   },
   footerWaitingBlock: {
     width: '100%',
-    marginBottom: 2,
+    marginBottom: 0,
   },
   footerWaitingTitle: {
     fontSize: 13,
@@ -2430,76 +2522,104 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   footerActionPrimary: {
-    flexGrow: 1,
-    flexBasis: '28%',
-    minWidth: 88,
+    flex: 1,
+    minWidth: 0,
     backgroundColor: ui.primary,
     borderRadius: ui.radiusButton,
-    minHeight: 44,
+    minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 8,
   },
   footerActionPrimaryWide: {
     flex: 1,
-    minWidth: 120,
+    minWidth: 0,
     backgroundColor: ui.primary,
     borderRadius: ui.radiusButton,
-    minHeight: 44,
+    minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 12,
   },
   footerActionPrimaryPressed: {
     ...primarySolidPressed,
   },
   footerActionPrimaryText: {
-    fontSize: 14,
-    fontWeight: '700',
+    fontSize: 16,
+    fontWeight: '800',
     color: ui.primaryOn,
+    textAlign: 'center',
+    letterSpacing: 0.2,
+  },
+  footerActionCounter: {
+    minWidth: 90,
+    maxWidth: 128,
+    borderRadius: ui.radiusButton,
+    minHeight: 48,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.25,
+    borderColor: 'rgba(11, 31, 58, 0.3)',
+    backgroundColor: ui.background,
+  },
+  footerActionCounterGrow: {
+    flex: 1,
+    minWidth: 0,
+  },
+  footerActionCounterPressed: {
+    backgroundColor: 'rgba(11, 31, 58, 0.06)',
+  },
+  footerActionCounterText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: 'rgba(11, 31, 58, 0.82)',
+    letterSpacing: 0.15,
   },
   footerActionSecondary: {
-    flexGrow: 1,
-    flexBasis: '28%',
-    minWidth: 88,
+    minWidth: 100,
+    maxWidth: 140,
     borderRadius: ui.radiusButton,
     borderWidth: 2,
     borderColor: ui.primary,
-    minHeight: 44,
+    minHeight: 48,
+    paddingHorizontal: 10,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: ui.background,
   },
   footerActionSecondaryGrow: {
-    flexGrow: 1,
-    minWidth: 120,
+    flex: 1,
+    minWidth: 0,
   },
   footerActionSecondaryPressed: {
     ...outlinePrimaryPressed,
   },
   footerActionSecondaryText: {
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '800',
     color: ui.primary,
   },
-  footerActionDecline: {
-    flexGrow: 1,
-    flexBasis: '28%',
+  footerActionDestructive: {
     minWidth: 88,
-    backgroundColor: ui.surfaceNeutral,
+    maxWidth: 112,
     borderRadius: ui.radiusButton,
-    minHeight: 44,
-    paddingHorizontal: 12,
+    minHeight: 48,
+    paddingHorizontal: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: ui.border,
+    borderWidth: 1.5,
+    borderColor: 'rgba(220, 38, 38, 0.42)',
+    backgroundColor: ui.background,
   },
-  footerActionDeclinePressed: {
-    ...subtleControlPressed,
+  footerActionDestructivePressed: {
+    backgroundColor: '#FFEBEE',
   },
-  footerActionDeclineText: {
+  footerActionDestructiveText: {
     fontSize: 14,
     fontWeight: '700',
-    color: ui.textPrimary,
+    color: ui.danger,
+    opacity: 0.92,
   },
   muted: {
     fontSize: 15,

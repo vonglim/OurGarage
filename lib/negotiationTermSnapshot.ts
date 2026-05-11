@@ -143,6 +143,62 @@ export function negotiatedOfferTotals(
   return { base, delivery: del, total, method };
 }
 
+/** Build pricing context from a persisted request row (store / Supabase shape). */
+export function buildRequestPricingContextFromRequest(
+  request: Record<string, unknown> | null | undefined
+): RequestPricingContext | null {
+  if (!request || typeof request !== 'object') return null;
+  const how = typeof request.how === 'string' ? request.how : undefined;
+  const pickupDate = typeof request.pickupDate === 'string' ? request.pickupDate : undefined;
+  const returnDate = typeof request.returnDate === 'string' ? request.returnDate : undefined;
+  const location = typeof request.location === 'string' ? request.location : undefined;
+  const durationType = typeof request.durationType === 'string' ? request.durationType : undefined;
+  const durationValueRaw = request.durationValue;
+  const durationValue =
+    typeof durationValueRaw === 'number' && Number.isFinite(durationValueRaw)
+      ? durationValueRaw
+      : undefined;
+  const pickupRadiusMilesRaw = request.pickupRadiusMiles;
+  const pickupRadiusMiles =
+    typeof pickupRadiusMilesRaw === 'number' && Number.isFinite(pickupRadiusMilesRaw)
+      ? pickupRadiusMilesRaw
+      : undefined;
+  const deliveryFeeRaw = request.deliveryFee;
+  let deliveryFee: number | null | undefined;
+  if (typeof deliveryFeeRaw === 'number' && Number.isFinite(deliveryFeeRaw)) {
+    deliveryFee = deliveryFeeRaw;
+  } else if (deliveryFeeRaw != null && String(deliveryFeeRaw).trim() !== '') {
+    const n = Number(String(deliveryFeeRaw).replace(/[^0-9.]/g, ''));
+    deliveryFee = Number.isFinite(n) ? n : undefined;
+  }
+  return {
+    how,
+    pickupDate,
+    returnDate,
+    location,
+    durationType,
+    durationValue,
+    pickupRadiusMiles,
+    deliveryFee,
+  };
+}
+
+/**
+ * Compare / poster list sort: lowest full transaction total first (rental + delivery when applicable).
+ */
+export function sortOffersByLowestNegotiatedTotal(
+  offers: Offer[],
+  request: RequestPricingContext
+): Offer[] {
+  return [...offers].sort((a, b) => {
+    const ta = negotiatedOfferTotals(a, request).total;
+    const tb = negotiatedOfferTotals(b, request).total;
+    if (Math.abs(ta - tb) > EPS) return ta - tb;
+    // Stable tie-break only — not recency (compare order must reflect total cost alone).
+    return String(a.id).localeCompare(String(b.id));
+  });
+}
+
 function buildUserNegotiationSnapshot(args: {
   totalPrice: number;
   negotiatedDeliveryMethod: NegotiationDeliveryMethod;

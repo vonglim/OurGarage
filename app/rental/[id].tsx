@@ -57,13 +57,23 @@ import {
 } from '@/lib/proposalDurationChange';
 import { isUuidString } from '@/lib/requestOwnership';
 import { normalizeLegalName } from '@/lib/legalName';
+import {
+  DEV_TOOLS_ENABLED,
+  mockAgreementSignatureName,
+  mockOwnerPickupInstruction,
+  mockRenterNoteParagraph,
+  useDevPageAutofill,
+} from '@/lib/devTools';
 import { deriveLifecyclePhaseFromRentalStatus } from '@/lib/rentalLifecyclePhase';
 import { insertRentalAgreementSnapshot } from '@/lib/rentalAgreement';
 import {
   RENTAL_EVIDENCE_BUCKET_MISSING_MESSAGE,
   uploadRentalEvidencePhoto,
 } from '@/lib/rentalEvidenceUpload';
-import { isPhotoUploadWindowOpen } from '@/lib/rentalPhotoWindow';
+import {
+  isPhotoUploadWindowOpen,
+  RENTAL_PHOTO_WINDOW_HOURS_BEFORE_EVENT,
+} from '@/lib/rentalPhotoWindow';
 import { formatDurationDisplay } from '@/lib/durationFormat';
 import { calculatePreauthAmount } from '@/lib/rentalProtection';
 import { agreedScheduleIsoPairFromRequest } from '@/lib/agreedRentalScheduleFromRequest';
@@ -113,6 +123,7 @@ import {
 } from '@/lib/rentalPickupViewerFlags';
 import { formatSupabaseMutationFailure } from '@/lib/supabaseSchemaMismatchMessage';
 import { getSupabase } from '@/lib/supabase';
+import { useDevToolsStore } from '@/store/devToolsStore';
 import { getOfferById, useOffersStore } from '@/store/offersStore';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
@@ -675,6 +686,7 @@ function ChecklistRow({
   onToggle,
   disabled = false,
   readOnly = false,
+  onDisabledPress,
   helperText,
   light = false,
 }: {
@@ -684,6 +696,8 @@ function ChecklistRow({
   disabled?: boolean;
   /** System-driven row: no tap, muted label. */
   readOnly?: boolean;
+  /** When set with `disabled`, row stays tappable and explains why toggling is blocked. */
+  onDisabledPress?: () => void;
   helperText?: string;
   /** Lighter visual weight (e.g. renter pickup). */
   light?: boolean;
@@ -695,13 +709,17 @@ function ChecklistRow({
       Animated.timing(scale, { toValue: 1, duration: 120, useNativeDriver: true }),
     ]).start();
   };
-  const inactive = disabled || readOnly;
+  const pressableDisabled = readOnly;
   return (
     <Pressable
       pressOpacityFeedback={false}
-      disabled={inactive}
+      disabled={pressableDisabled}
       onPress={() => {
-        if (inactive) return;
+        if (readOnly) return;
+        if (disabled) {
+          onDisabledPress?.();
+          return;
+        }
         onToggle();
         pulse();
       }}
@@ -710,7 +728,7 @@ function ChecklistRow({
         light && styles.checklistRowLight,
         disabled && styles.checklistRowDisabled,
         readOnly && !disabled && styles.checklistRowReadOnly,
-        pressed && !inactive && { opacity: 0.92 },
+        pressed && !pressableDisabled && { opacity: 0.92 },
       ]}
     >
       <Animated.View
@@ -829,7 +847,7 @@ function VerificationPhotosSubsection({
         })}
         <Pressable
           pressOpacityFeedback={false}
-          disabled={uploading || Boolean(addDisabled)}
+          disabled={uploading}
           style={({ pressed }) => [
             styles.photoTileAdd,
             (pressed || uploading) && { opacity: 0.85 },
@@ -1285,10 +1303,22 @@ export default function RentalScreen() {
   const proposalEditorRef = useRef<RentalDetailsCardHandle | null>(null);
   const workflowViewKeyRef = useRef<string>('');
   const offersFromStore = useOffersStore((s) => s.offers);
+  const devLifecycleOverride = useDevToolsStore((s) => s.rentalLifecycleOverride);
 
   const onLifecycleSectionLayout = useCallback((key: string) => (e: LayoutChangeEvent) => {
     lifecycleSectionYRef.current[key] = e.nativeEvent.layout.y;
   }, []);
+
+  const devAutofillRentalScreen = useCallback(() => {
+    setSignatureName(mockAgreementSignatureName());
+    setAgreementConsent(true);
+    setRenterNoteDraft(mockRenterNoteParagraph());
+    setOwnerNoteDraft(mockOwnerPickupInstruction());
+    setOwnerHandoffLinkDraft('https://example.com/dev-handoff');
+    setOwnerHandoffLinkFieldError(null);
+    showFeedbackToast('Dev autofill: agreement + notes');
+  }, []);
+  useDevPageAutofill(devAutofillRentalScreen, { screenLabel: 'Rental details' });
 
   const offerForRental = useMemo(() => {
     if (!rental?.offer_id) return undefined;
@@ -2164,7 +2194,9 @@ export default function RentalScreen() {
   const showMeetingPendingPill = hasPendingProposal && iProposedLast;
   const pickupAtIso = rental.pickup_datetime ?? rental.meetup_time;
   const pickupAtMs = pickupAtIso ? Date.parse(pickupAtIso) : NaN;
-  const editLockedByPickupWindow = Number.isFinite(pickupAtMs) && pickupAtMs - Date.now() <= 24 * 60 * 60 * 1000;
+  const editLockedByPickupWindow =
+    Number.isFinite(pickupAtMs) &&
+    pickupAtMs - Date.now() <= RENTAL_PHOTO_WINDOW_HOURS_BEFORE_EVENT * 60 * 60 * 1000;
   const showMeetingConfirmedActions = agreementStatus === 'confirmed';
   const canEditConfirmed = !proposalBusy && !editLockedByPickupWindow;
   const canOpenMeetingProposal =
@@ -2172,7 +2204,10 @@ export default function RentalScreen() {
     !proposalBusy &&
     (showMeetingAccept || showMeetingPrimaryAction || (showMeetingConfirmedActions && canEditConfirmed));
   const meetingCompleted = agreementStatus === 'confirmed' && !hasPendingProposal;
-  const lifecyclePhase = deriveLifecyclePhaseFromRentalStatus(rental.status);
+  const lifecyclePhase =
+    DEV_TOOLS_ENABLED && devLifecycleOverride != null
+      ? devLifecycleOverride
+      : deriveLifecyclePhaseFromRentalStatus(rental.status);
   const lifecycleStatusForLayout = String(rental.status ?? 'pending').trim().toLowerCase();
   const returnWorkflowEnabledForLayout = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
     lifecycleStatusForLayout
@@ -2375,6 +2410,15 @@ export default function RentalScreen() {
   const returnWindow = isPhotoUploadWindowOpen('return', rental.pickup_datetime, rental.return_datetime);
   const canUploadPickup = viewerRole === 'owner' && !handoffCompleted && pickupWindow.allowed;
   const canUploadReturn = viewerRole === 'renter' && returnWorkflowEnabled && !returnCompleted && returnWindow.allowed;
+  const returnPhotoUploadBlockedExplanation: string | null = canUploadReturn
+    ? null
+    : viewerRole !== 'renter'
+      ? 'Only the renter adds return verification photos.'
+      : !returnWorkflowEnabled
+        ? 'Return details unlock after handoff is confirmed.'
+        : returnCompleted
+          ? 'Return is complete. Evidence is read-only.'
+          : returnWindow.helperText ?? 'Return photo upload is not available yet.';
 
   const lifecycleSteps = [
     { key: 'matched', label: 'Match' },
@@ -2938,7 +2982,10 @@ export default function RentalScreen() {
       return;
     }
     if (phase === 'return' && !canUploadReturn) {
-      Alert.alert('Return photos locked', returnWindow.helperText ?? 'Return photo upload is not available yet.');
+      Alert.alert(
+        'Return photos locked',
+        returnPhotoUploadBlockedExplanation ?? 'Return photo upload is not available yet.'
+      );
       return;
     }
     if (Platform.OS === 'web') {
@@ -3088,6 +3135,14 @@ export default function RentalScreen() {
               }
               style={styles.rentalBackHeader}
             />
+
+            {DEV_TOOLS_ENABLED && devLifecycleOverride != null ? (
+              <View style={styles.devLifecycleBanner} accessibilityRole="text">
+                <Text style={styles.devLifecycleBannerText}>
+                  Dev: lifecycle preview — {devLifecycleOverride}
+                </Text>
+              </View>
+            ) : null}
 
             <View style={styles.lifecycleNavigatorWrap} onLayout={onLifecycleSectionLayout('banner')}>
               <RentalLifecycleNavigator
@@ -3332,8 +3387,17 @@ export default function RentalScreen() {
                           <Pressable
                             pressOpacityFeedback={false}
                             haptic
-                            disabled={!canEditConfirmed}
-                            onPress={openMeetingProposalEditor}
+                            disabled={proposalBusy}
+                            onPress={() => {
+                              if (editLockedByPickupWindow) {
+                                Alert.alert(
+                                  'Meetup edit locked',
+                                  `The confirmed meetup can’t be edited within ${RENTAL_PHOTO_WINDOW_HOURS_BEFORE_EVENT} hours of pickup.`
+                                );
+                                return;
+                              }
+                              openMeetingProposalEditor();
+                            }}
                             style={({ pressed }) => [
                               styles.meetingSecondaryBtn,
                               pressed && styles.meetingSecondaryBtnPressed,
@@ -3345,7 +3409,9 @@ export default function RentalScreen() {
                         </View>
                       ) : null}
                       {showMeetingConfirmedActions && editLockedByPickupWindow ? (
-                        <Text style={styles.confirmedAtText}>Edit locked 24h before pickup</Text>
+                        <Text style={styles.confirmedAtText}>
+                          Edit locked {RENTAL_PHOTO_WINDOW_HOURS_BEFORE_EVENT}h before pickup
+                        </Text>
                       ) : null}
                       {rental.confirmed_at ? (
                         <Text style={styles.confirmedAtText}>Confirmed {formatDateTime(rental.confirmed_at)}</Text>
@@ -3417,19 +3483,16 @@ export default function RentalScreen() {
                         Each tile saves to a fixed category so nothing gets mixed up. Preview below matches what the
                         renter sees.
                       </Text>
-                      <ScrollView
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        contentContainerStyle={styles.handoffTileScroll}
-                      >
+                      <View style={styles.handoffTileRow}>
                         <Pressable
                           pressOpacityFeedback={false}
-                          disabled={!canUploadPickup}
                           onPress={() => openEvidenceCamera('pickup', 'item')}
                           style={({ pressed }) => [
                             styles.handoffPhotoTile,
                             ownerItemPhotosComplete && styles.handoffPhotoTileHighlight,
-                            pressed && { opacity: 0.92 },
+                            !canUploadPickup && styles.handoffPhotoTileLocked,
+                            pressed && canUploadPickup && { opacity: 0.92 },
+                            pressed && !canUploadPickup && { opacity: 0.78 },
                           ]}
                         >
                           {ownerItemPhotosComplete ? (
@@ -3451,12 +3514,13 @@ export default function RentalScreen() {
                         </Pressable>
                         <Pressable
                           pressOpacityFeedback={false}
-                          disabled={!canUploadPickup}
                           onPress={() => openEvidenceCamera('pickup', 'serial')}
                           style={({ pressed }) => [
                             styles.handoffPhotoTile,
                             ownerSerialPhotoComplete && styles.handoffPhotoTileHighlight,
-                            pressed && { opacity: 0.92 },
+                            !canUploadPickup && styles.handoffPhotoTileLocked,
+                            pressed && canUploadPickup && { opacity: 0.92 },
+                            pressed && !canUploadPickup && { opacity: 0.78 },
                           ]}
                         >
                           {ownerSerialPhotoComplete ? (
@@ -3478,12 +3542,13 @@ export default function RentalScreen() {
                         </Pressable>
                         <Pressable
                           pressOpacityFeedback={false}
-                          disabled={!canUploadPickup}
                           onPress={() => openEvidenceCamera('pickup', 'timestamp_proof')}
                           style={({ pressed }) => [
                             styles.handoffPhotoTile,
                             ownerTimestampPhotoComplete && styles.handoffPhotoTileHighlight,
-                            pressed && { opacity: 0.92 },
+                            !canUploadPickup && styles.handoffPhotoTileLocked,
+                            pressed && canUploadPickup && { opacity: 0.92 },
+                            pressed && !canUploadPickup && { opacity: 0.78 },
                           ]}
                         >
                           {ownerTimestampPhotoComplete ? (
@@ -3505,9 +3570,13 @@ export default function RentalScreen() {
                         </Pressable>
                         <Pressable
                           pressOpacityFeedback={false}
-                          disabled={!canUploadPickup}
                           onPress={() => openEvidenceCamera('pickup', 'additional')}
-                          style={({ pressed }) => [styles.handoffPhotoTile, pressed && { opacity: 0.92 }]}
+                          style={({ pressed }) => [
+                            styles.handoffPhotoTile,
+                            !canUploadPickup && styles.handoffPhotoTileLocked,
+                            pressed && canUploadPickup && { opacity: 0.92 },
+                            pressed && !canUploadPickup && { opacity: 0.78 },
+                          ]}
                         >
                           <Ionicons name="add" size={26} color={ui.textSecondary} />
                           <Text style={styles.handoffTileLabel}>Additional Photos</Text>
@@ -3517,7 +3586,7 @@ export default function RentalScreen() {
                               : ' '}
                           </Text>
                         </Pressable>
-                      </ScrollView>
+                      </View>
 
                       {showPickupEvidenceExamplePanel ? (
                         <View style={styles.handoffExamplePanel}>
@@ -3872,6 +3941,9 @@ export default function RentalScreen() {
                                 item.control === 'auto' ? pickupAutoRowHelper(item.id, viewerRole) : undefined
                               }
                               disabled={handoffCompleted}
+                              onDisabledPress={() =>
+                                Alert.alert('Pickup complete', 'Pickup is complete. This checklist can no longer be edited.')
+                              }
                             />
                           ))}
                         </>
@@ -4115,6 +4187,9 @@ export default function RentalScreen() {
                                 item.control === 'auto' ? pickupAutoRowHelper(item.id, viewerRole) : undefined
                               }
                               disabled={handoffCompleted}
+                              onDisabledPress={() =>
+                                Alert.alert('Pickup complete', 'Pickup is complete. This checklist can no longer be edited.')
+                              }
                               light
                             />
                           ))}
@@ -4205,8 +4280,16 @@ export default function RentalScreen() {
             >
               <Pressable
                 pressOpacityFeedback={false}
-                disabled={!returnWorkflowEnabled}
-                onPress={() => setReturnExpanded((v) => !v)}
+                onPress={() => {
+                  if (!returnWorkflowEnabled) {
+                    Alert.alert(
+                      'Return locked',
+                      'Return details unlock after handoff is confirmed.'
+                    );
+                    return;
+                  }
+                  setReturnExpanded((v) => !v);
+                }}
                 style={({ pressed }) => [styles.verificationTitleRow, pressed && { opacity: 0.9 }]}
               >
                 <Text style={styles.verificationSectionTitle}>Return / Drop-off Details</Text>
@@ -4261,7 +4344,7 @@ export default function RentalScreen() {
                     }}
                     canDeletePhoto={(photo) => canDeletePhoto(photo)}
                     addDisabled={!canUploadReturn}
-                    addDisabledReason={!canUploadReturn ? returnWindow.helperText : null}
+                    addDisabledReason={returnPhotoUploadBlockedExplanation}
                   />
                   <Text style={styles.photoWindowHelper}>
                     {returnCompleted
@@ -4280,8 +4363,14 @@ export default function RentalScreen() {
                     <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Checklist</Text>
                     <Pressable
                       pressOpacityFeedback={false}
-                      disabled={!returnWorkflowEnabled || returnCompleted}
                       onPress={() => {
+                        if (returnCompleted) {
+                          Alert.alert(
+                            'Return checklist locked',
+                            'Return is complete. This checklist can no longer be edited.'
+                          );
+                          return;
+                        }
                         const allTrue = Object.fromEntries(returnItems.map((item) => [item.id, true]));
                         if (!me) return;
                         void (async () => {
@@ -4295,7 +4384,7 @@ export default function RentalScreen() {
                         })();
                       }}
                     >
-                      <Text style={[styles.markAllText, (!returnWorkflowEnabled || returnCompleted) && styles.markAllTextDisabled]}>
+                      <Text style={[styles.markAllText, returnCompleted && styles.markAllTextDisabled]}>
                         Check All
                       </Text>
                     </Pressable>
@@ -4310,6 +4399,14 @@ export default function RentalScreen() {
                             checked={Boolean(returnDoneForRole[item.id])}
                             onToggle={() => toggleReturnItem(item.id)}
                             disabled={!returnWorkflowEnabled || returnCompleted}
+                            onDisabledPress={() =>
+                              Alert.alert(
+                                'Return checklist locked',
+                                returnCompleted
+                                  ? 'Return is complete. This checklist can no longer be edited.'
+                                  : 'Return details unlock after handoff is confirmed.'
+                              )
+                            }
                             light
                           />
                         ))}
@@ -4322,6 +4419,14 @@ export default function RentalScreen() {
                             checked={Boolean(returnDoneForRole[item.id])}
                             onToggle={() => toggleReturnItem(item.id)}
                             disabled={!returnWorkflowEnabled || returnCompleted}
+                            onDisabledPress={() =>
+                              Alert.alert(
+                                'Return checklist locked',
+                                returnCompleted
+                                  ? 'Return is complete. This checklist can no longer be edited.'
+                                  : 'Return details unlock after handoff is confirmed.'
+                              )
+                            }
                             light
                           />
                         ))}
@@ -4335,6 +4440,14 @@ export default function RentalScreen() {
                         checked={Boolean(returnDoneForRole[item.id])}
                         onToggle={() => toggleReturnItem(item.id)}
                         disabled={!returnWorkflowEnabled || returnCompleted}
+                        onDisabledPress={() =>
+                          Alert.alert(
+                            'Return checklist locked',
+                            returnCompleted
+                              ? 'Return is complete. This checklist can no longer be edited.'
+                              : 'Return details unlock after handoff is confirmed.'
+                          )
+                        }
                         light
                       />
                     ))
@@ -4738,6 +4851,20 @@ const styles = StyleSheet.create({
   },
   rentalBackHeader: {
     marginBottom: 6,
+  },
+  devLifecycleBanner: {
+    marginBottom: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: ui.radiusCard,
+    backgroundColor: '#FFF7ED',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(234, 88, 12, 0.35)',
+  },
+  devLifecycleBannerText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#9A3412',
   },
   lifecycleNavigatorWrap: {
     marginBottom: 12,
@@ -6161,11 +6288,13 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     lineHeight: 18,
   },
-  handoffTileScroll: {
+  /** Row of category tiles — use flexWrap instead of horizontal ScrollView so taps aren’t eaten by nested scroll. */
+  handoffTileRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'stretch',
     gap: 10,
     paddingVertical: 9,
-    paddingRight: 4,
   },
   handoffPhotoTile: {
     width: 108,
@@ -6184,6 +6313,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(34, 197, 94, 0.12)',
     borderColor: 'rgba(34, 197, 94, 0.55)',
     borderStyle: 'solid',
+  },
+  /** Window closed or handoff done — still tappable so openEvidenceCamera can show an alert. */
+  handoffPhotoTileLocked: {
+    opacity: 0.55,
   },
   handoffTileCountComplete: {
     color: '#15803d',

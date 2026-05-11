@@ -1,11 +1,10 @@
 import { RootScreenHeader } from '@/components/AppHeaders';
+import { ActivityOwnerRequestCard } from '@/components/activity/ActivityOwnerRequestCard';
+import { ActivityRequestSectionHeader } from '@/components/activity/ActivityRequestSectionHeader';
+import { ActivitySegmentedTabs } from '@/components/activity/ActivitySegmentedTabs';
 import { CardPressable } from '@/components/CardPressable';
 import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
 import { Pressable } from '@/components/Pressable';
-import {
-  RequestListCardInner,
-  requestListCardSurface,
-} from '@/components/RequestListCardInner';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import {
@@ -21,6 +20,7 @@ import {
   getRequestOwnerId,
   offerCountsForActivityRow,
 } from '@/lib/activityScope';
+import { isRequestExpired } from '@/lib/requestCardStatus';
 import { useAuthUserId } from '@/lib/authUser';
 import {
   fetchPendingRentalRequestsForOwner,
@@ -34,6 +34,7 @@ import {
 import { pickRentalWorkspaceNudgeRow } from '@/lib/rentalWorkspaceNudge';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { markAllNonMessageNotificationsAsRead } from '@/lib/markNotificationsRead';
+import { buildRequestPricingContextFromRequest } from '@/lib/negotiationTermSnapshot';
 import { formatUsd, getNumericOfferPrice } from '@/lib/money';
 import { PROFILE_NAME_FALLBACK } from '@/lib/profileConstants';
 import { getPublicProfileForView } from '@/lib/publicProfiles';
@@ -51,10 +52,12 @@ import { useMessageUnreadStore, useUnreadMessagesTotal } from '@/store/messageUn
 import type { AppNotification } from '@/store/notificationsStore';
 import { useNotificationsStore } from '@/store/notificationsStore';
 import type { Offer } from '@/store/offersStore';
-import { removeOffersForRequest, useOffersStore } from '@/store/offersStore';
+import { getOffersForRequest, useOffersStore } from '@/store/offersStore';
+import { showFeedbackToast } from '@/store/feedbackToastStore';
 import {
+  deactivateRequest,
   getEffectiveRentalStatus,
-  removeRequest,
+  isOwnerRequestHiddenFromActivity,
   resolveRequestFromRouteId,
   useRequestsStore,
 } from '@/store/requestsStore';
@@ -63,15 +66,19 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { LayoutChangeEvent, NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
-import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
-import { Swipeable } from 'react-native-gesture-handler';
+import {
+  Alert,
+  Modal,
+  Pressable as RNPressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { RectButton, ScrollView as GHScrollView, Swipeable } from 'react-native-gesture-handler';
 
 declare const __DEV__: boolean;
-
-function formatOffersReceived(n: number): string {
-  if (n === 1) return '1 offer received';
-  return `${n} offers received`;
-}
 
 function visibleUnreadForUser(n: AppNotification, userId: string): boolean {
   return !n.read && (n.forUserId == null || n.forUserId === '' || n.forUserId === userId);
@@ -242,6 +249,8 @@ function getOutgoingOfferStatus(o: Offer, req: unknown): OutgoingOfferStatus {
 
 type ActivityTab = 'requests' | 'offers' | 'rentals';
 
+type RequestsOwnerSubView = 'active' | 'completed';
+
 const ACTIVITY_TABS: ActivityTab[] = ['requests', 'offers', 'rentals'];
 const ACTIVITY_LAST_TAB_STORAGE_KEY = 'activity_last_tab_v1';
 const ACTIVITY_RENTAL_WORKSPACE_NUDGE_DISMISSED_KEY = 'activity_rental_workspace_nudge_dismissed_v1';
@@ -338,13 +347,17 @@ export default function ActivityScreen() {
   const { width: windowWidth } = useWindowDimensions();
   const [tab, setTab] = useState<ActivityTab>('requests');
   const [activityTabHydrated, setActivityTabHydrated] = useState(false);
-  const activityTabPagerRef = useRef<ScrollView>(null);
+  const activityTabPagerRef = useRef<GHScrollView>(null);
   const didApplyInitialPagerOffsetRef = useRef(false);
   const [activityPagerViewportW, setActivityPagerViewportW] = useState(0);
   /** Pager strip width; matches `ScreenWrapper` horizontal inset until layout measures. */
   const activityPageWidth =
     activityPagerViewportW > 0 ? activityPagerViewportW : Math.max(0, windowWidth - 32);
   const [rentalsSubView, setRentalsSubView] = useState<RentalsSubView>('renting');
+  const [requestsOwnerSubView, setRequestsOwnerSubView] = useState<RequestsOwnerSubView>('active');
+  const [offersWaitingExpanded, setOffersWaitingExpanded] = useState(true);
+  const [openRequestsExpanded, setOpenRequestsExpanded] = useState(true);
+  const [inProgressExpanded, setInProgressExpanded] = useState(true);
   const me = useAuthUserId();
   const listings = useListingsStore((s) => s.listings);
   const offers = useOffersStore((state) => state.offers);
@@ -362,6 +375,8 @@ export default function ActivityScreen() {
   const [dismissedWorkspaceNudgeIds, setDismissedWorkspaceNudgeIds] = useState<Set<string>>(
     () => new Set()
   );
+  const [requestDeleteConfirmTs, setRequestDeleteConfirmTs] = useState<number | null>(null);
+  const [requestDeleteBusy, setRequestDeleteBusy] = useState(false);
 
   const refreshListingRentalRequests = useCallback(async () => {
     const uid = me.trim();
@@ -511,7 +526,9 @@ export default function ActivityScreen() {
   const ownedRequestsSorted = useMemo(
     () =>
       sortedActivityPool.filter(
-        (r) => getRequestOwnerId(r as Record<string, unknown>) === me
+        (r) =>
+          getRequestOwnerId(r as Record<string, unknown>) === me &&
+          !isOwnerRequestHiddenFromActivity(r)
       ),
     [sortedActivityPool, me]
   );
@@ -598,6 +615,21 @@ export default function ActivityScreen() {
     }, [goToActivityTab, refreshListingRentalRequests, refreshUnifiedRentals])
   );
 
+  /** Close open swipe rows when leaving Activity so rows don’t stay stuck after navigation or refresh. */
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        swipeRefs.current.forEach((s) => {
+          try {
+            s.close();
+          } catch {
+            /* noop */
+          }
+        });
+      };
+    }, [])
+  );
+
   const onActivityPagerScrollEnd = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
       const w = activityPageWidth > 0 ? activityPageWidth : 1;
@@ -623,21 +655,120 @@ export default function ActivityScreen() {
     [unifiedRentals, me]
   );
 
-  const activeRequestsSorted = useMemo(
+  const completedTabRequestsSorted = useMemo(
     () =>
       [...ownedRequestsSorted]
-        .filter((r) => getEffectiveRentalStatus(r) !== 'completed')
+        .filter((r) => {
+          const life = getEffectiveRentalStatus(r);
+          if (life === 'completed') return true;
+          if (life === 'pending' && isRequestExpired(r)) return true;
+          return false;
+        })
         .sort(byTimestampDesc),
     [ownedRequestsSorted]
   );
 
-  const pastRequestsSorted = useMemo(
+  const activeTabRequestsPool = useMemo(
     () =>
-      [...ownedRequestsSorted]
-        .filter((r) => getEffectiveRentalStatus(r) === 'completed')
-        .sort(byTimestampDesc),
+      [...ownedRequestsSorted].filter((r) => {
+        const life = getEffectiveRentalStatus(r);
+        if (life === 'completed') return false;
+        if (life === 'pending' && isRequestExpired(r)) return false;
+        return true;
+      }),
     [ownedRequestsSorted]
   );
+
+  const countOffersForOwnerRequest = useCallback(
+    (request: (typeof ownedRequestsSorted)[number]) => {
+      const ts = request.timestamp;
+      if (ts == null || !Number.isFinite(ts)) return 0;
+      return offers.filter(
+        (o) =>
+          o.requestId === ts &&
+          offerCountsForActivityRow(o, request as Record<string, unknown>, me)
+      ).length;
+    },
+    [offers, me]
+  );
+
+  const hasUnreadOfferForRequestTs = useCallback(
+    (ts: number) =>
+      notifications.some(
+        (x) =>
+          visibleUnreadForUser(x, me) &&
+          (x.type === 'new_offer' || x.type === 'counter_offer') &&
+          resolveRequestFromRouteId(x.requestId)?.timestamp === ts
+      ),
+    [notifications, me]
+  );
+
+  /** Matched, accepted, rental started, or lifecycle matched/active — not “open” searching. */
+  const isRequestInProgressBucket = useCallback((r: (typeof ownedRequestsSorted)[number]) => {
+    if (r.matched === true) return true;
+    const life = getEffectiveRentalStatus(r);
+    return life === 'matched' || life === 'active';
+  }, []);
+
+  const compareOffersWaiting = useCallback(
+    (a: (typeof ownedRequestsSorted)[number], b: (typeof ownedRequestsSorted)[number]): number => {
+      const tsA = a.timestamp;
+      const tsB = b.timestamp;
+      const ocA = countOffersForOwnerRequest(a);
+      const ocB = countOffersForOwnerRequest(b);
+      const unreadA =
+        tsA != null && Number.isFinite(tsA) && hasUnreadOfferForRequestTs(tsA) && ocA > 0;
+      const unreadB =
+        tsB != null && Number.isFinite(tsB) && hasUnreadOfferForRequestTs(tsB) && ocB > 0;
+      if (unreadA !== unreadB) return unreadA ? -1 : 1;
+      return byTimestampDesc(a, b);
+    },
+    [countOffersForOwnerRequest, hasUnreadOfferForRequestTs]
+  );
+
+  const compareInProgress = useCallback(
+    (a: (typeof ownedRequestsSorted)[number], b: (typeof ownedRequestsSorted)[number]): number => {
+      const la = getEffectiveRentalStatus(a);
+      const lb = getEffectiveRentalStatus(b);
+      if (la !== lb) {
+        if (la === 'active') return -1;
+        if (lb === 'active') return 1;
+        if (la === 'matched') return -1;
+        if (lb === 'matched') return 1;
+      }
+      return byTimestampDesc(a, b);
+    },
+    []
+  );
+
+  const { offersWaitingSorted, openRequestsSorted, inProgressSorted } = useMemo(() => {
+    const inProgress = activeTabRequestsPool.filter((r) => isRequestInProgressBucket(r));
+    const notInProgress = activeTabRequestsPool.filter((r) => !isRequestInProgressBucket(r));
+    const offersWaiting = notInProgress.filter((r) => countOffersForOwnerRequest(r) > 0);
+    const open = notInProgress.filter((r) => countOffersForOwnerRequest(r) === 0);
+    offersWaiting.sort(compareOffersWaiting);
+    open.sort(byTimestampDesc);
+    inProgress.sort(compareInProgress);
+    return {
+      offersWaitingSorted: offersWaiting,
+      openRequestsSorted: open,
+      inProgressSorted: inProgress,
+    };
+  }, [
+    activeTabRequestsPool,
+    isRequestInProgressBucket,
+    countOffersForOwnerRequest,
+    compareOffersWaiting,
+    compareInProgress,
+  ]);
+
+  const offersWaitingOfferBadgeCount = useMemo(() => {
+    let n = 0;
+    for (const r of offersWaitingSorted) {
+      n += countOffersForOwnerRequest(r);
+    }
+    return n;
+  }, [offersWaitingSorted, countOffersForOwnerRequest]);
 
   const myLenderOffers = useMemo(
     () =>
@@ -717,46 +848,93 @@ export default function ActivityScreen() {
     router.push('/(tabs)/chats');
   }, [router]);
 
-  function renderRequestRow(request: (typeof ownedRequestsSorted)[number], idx: number) {
+  function renderOwnerRequestRow(
+    request: (typeof ownedRequestsSorted)[number],
+    idx: number,
+    cardVariant: 'offers_waiting' | 'open' | 'in_progress' | 'archive'
+  ) {
     const matched = !!request.matched;
-    const rowKey = request.timestamp ?? idx;
     const ts = request.timestamp;
     const requestDetailsId = getRequestSupabaseRowId(request as Record<string, unknown>);
-    const offerCount =
-      ts != null && Number.isFinite(ts)
-        ? offers.filter(
-            (o) =>
-              o.requestId === ts &&
-              offerCountsForActivityRow(o, request as Record<string, unknown>, me)
-          ).length
-        : 0;
-    const card = (
-      <CardPressable
-        style={[
-          requestListCardSurface.card,
-          matched && styles.requestCardMatched,
-        ]}
-        onPress={() => {
-          if (!requestDetailsId) return;
+    const rowKey =
+      (typeof requestDetailsId === 'string' && requestDetailsId.trim() !== ''
+        ? requestDetailsId.trim()
+        : null) ??
+      (ts != null && Number.isFinite(ts) ? `ts-${ts}` : `idx-${idx}`);
+    const offerCount = countOffersForOwnerRequest(request);
+
+    const openRequestDetails = () => {
+      if (!requestDetailsId) return;
+
+      if (matched) {
+        const accId = String((request as { acceptedOfferId?: unknown }).acceptedOfferId ?? '').trim();
+        if (accId.length > 0) {
           router.push({
-            pathname: '/request-details',
-            params: { requestId: requestDetailsId },
+            pathname: '/offer-detail',
+            params: { requestId: requestDetailsId, offerId: accId },
           });
-        }}
-        disabled={!requestDetailsId}
-      >
-        <RequestListCardInner
-          insideParentPressable
-          req={request}
-          matched={matched}
-          timeAgoText={
-            request.timestamp != null ? getTimeAgo(request.timestamp) : null
+          return;
+        }
+      }
+
+      if (cardVariant === 'offers_waiting' && offerCount > 0 && ts != null && Number.isFinite(ts)) {
+        const pricingCtx = buildRequestPricingContextFromRequest(request as Record<string, unknown>);
+        const sorted = getOffersForRequest(ts, pricingCtx ?? undefined);
+        if (sorted.length > 1) {
+          const primary = sorted[0];
+          if (primary?.id) {
+            router.push({
+              pathname: '/offer-detail',
+              params: {
+                requestId: requestDetailsId,
+                offerId: primary.id,
+                compare: '1',
+              },
+            });
+            return;
           }
-        />
-        {request.timestamp != null && (
-          <Text style={styles.offersReceived}>{formatOffersReceived(offerCount)}</Text>
-        )}
-      </CardPressable>
+        }
+        const primary = sorted[0];
+        if (primary?.id) {
+          router.push({
+            pathname: '/offer-detail',
+            params: { requestId: requestDetailsId, offerId: primary.id },
+          });
+          return;
+        }
+      }
+
+      router.push({
+        pathname: '/request-details',
+        params: { requestId: requestDetailsId },
+      });
+    };
+
+    const timeAgoText = request.timestamp != null ? getTimeAgo(request.timestamp) : null;
+
+    const card = (
+      <ActivityOwnerRequestCard
+        req={request}
+        matched={matched}
+        timeAgoText={timeAgoText}
+        variant={cardVariant}
+        offerCount={offerCount}
+        onPress={openRequestDetails}
+        disabled={!requestDetailsId}
+      />
+    );
+
+    const cardForSwipe = (
+      <ActivityOwnerRequestCard
+        req={request}
+        matched={matched}
+        timeAgoText={timeAgoText}
+        variant={cardVariant}
+        offerCount={offerCount}
+        onPress={openRequestDetails}
+        disabled={!requestDetailsId}
+        nestedInSwipeable
+      />
     );
 
     if (matched) {
@@ -767,8 +945,7 @@ export default function ActivityScreen() {
       );
     }
 
-    const isOwner =
-      getRequestOwnerId(request as Record<string, unknown>) === me;
+    const isOwner = getRequestOwnerId(request as Record<string, unknown>) === me;
     if (!isOwner) {
       return (
         <View key={rowKey} style={styles.cardRowWrap}>
@@ -781,41 +958,48 @@ export default function ActivityScreen() {
       <View key={rowKey} style={styles.cardRowWrap}>
         <Swipeable
           ref={(el) => {
-            const ts = request.timestamp;
             if (ts == null) return;
             if (el) swipeRefs.current.set(ts, el);
             else swipeRefs.current.delete(ts);
           }}
           overshootRight={false}
+          friction={2}
+          enableTrackpadTwoFingerGesture={false}
           renderRightActions={() => (
             <View style={styles.rightActionsRow}>
-              <Pressable
+              <RectButton
                 style={styles.editAction}
                 onPress={() => {
-                  if (request.timestamp == null) return;
-                  swipeRefs.current.get(request.timestamp)?.close();
+                  if (ts == null) return;
+                  swipeRefs.current.get(ts)?.close();
                   router.push({
                     pathname: '/request',
-                    params: { editTimestamp: String(request.timestamp) },
+                    params: { editTimestamp: String(ts) },
                   });
                 }}
               >
                 <Text style={styles.editActionText}>Edit</Text>
-              </Pressable>
-              <Pressable
+              </RectButton>
+              <RectButton
                 style={styles.deleteAction}
                 onPress={() => {
-                  if (request.timestamp == null) return;
-                  removeOffersForRequest(request.timestamp);
-                  removeRequest(request.timestamp);
+                  if (ts == null) return;
+                  swipeRefs.current.get(ts)?.close();
+                  setRequestDeleteConfirmTs(ts);
                 }}
               >
                 <Text style={styles.deleteActionText}>Delete</Text>
-              </Pressable>
+              </RectButton>
             </View>
           )}
         >
-          {card}
+          <RectButton
+            enabled={!!requestDetailsId}
+            style={styles.ownerRequestSwipeHit}
+            onPress={openRequestDetails}
+          >
+            {cardForSwipe}
+          </RectButton>
         </Swipeable>
       </View>
     );
@@ -1091,7 +1275,7 @@ export default function ActivityScreen() {
             </View>
 
             <View style={styles.tabPagerViewport} onLayout={onActivityPagerViewportLayout}>
-              <ScrollView
+              <GHScrollView
                 ref={activityTabPagerRef}
                 horizontal
                 pagingEnabled
@@ -1109,106 +1293,193 @@ export default function ActivityScreen() {
                       styles.tabPanelScrollContent,
                       { paddingBottom: fabBottomReserve },
                     ]}
+                    stickyHeaderIndices={[1]}
                     keyboardShouldPersistTaps="handled"
                     showsVerticalScrollIndicator={false}
                     bounces
                     nestedScrollEnabled
                   >
+                    <View style={styles.requestsScrollPreamble}>
+                      <Text style={styles.tabPanelSubline}>
+                        See which requests need a response, which are still open, and your archive.
+                      </Text>
+                      {pendingListingRentals.length > 0 ? (
+                        <>
+                          <Text style={styles.activePastHeading}>Pending listing rentals</Text>
+                          <Text style={styles.pendingListingSubtext}>
+                            Someone requested to rent your equipment · approve or decline
+                          </Text>
+                          {pendingListingRentals.map((row) => {
+                            const title = pendingListingTitle(row);
+                            const priceNum = Number(row.price);
+                            const priceLabel = Number.isFinite(priceNum) ? formatUsd(priceNum) : '—';
+                            const duration = listingRentalDurationLabel(row.duration_type);
+                            const busy = busyRentalRequestId === row.id;
+                            return (
+                              <View key={row.id} style={styles.pendingListingRentalCard}>
+                                <Text style={styles.matchedRentalTitle} numberOfLines={2}>
+                                  {title}
+                                </Text>
+                                <Text style={styles.matchedRentalHint}>{priceLabel}</Text>
+                                <Text style={styles.matchedRentalHint}>{duration}</Text>
+                                <View style={styles.pendingRentalBtnRow}>
+                                  <Pressable
+                                    disabled={busy}
+                                    pressOpacityFeedback={false}
+                                    haptic
+                                    style={({ pressed }) => [
+                                      styles.pendingRentalBtn,
+                                      styles.pendingRentalBtnApprove,
+                                      busy && styles.pendingRentalBtnDisabled,
+                                      pressed && !busy && styles.pendingRentalBtnApprovePressed,
+                                    ]}
+                                    onPress={() => void onApproveListingRental(row.id)}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={`Approve rental request for ${title}`}
+                                  >
+                                    <Text style={styles.pendingRentalBtnApproveText}>Approve</Text>
+                                  </Pressable>
+                                  <Pressable
+                                    disabled={busy}
+                                    pressOpacityFeedback={false}
+                                    haptic
+                                    style={({ pressed }) => [
+                                      styles.pendingRentalBtn,
+                                      styles.pendingRentalBtnDecline,
+                                      busy && styles.pendingRentalBtnDisabled,
+                                      pressed && !busy && styles.pendingRentalBtnDeclinePressed,
+                                    ]}
+                                    onPress={() => void onDeclineListingRental(row.id)}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={`Decline rental request for ${title}`}
+                                  >
+                                    <Text style={styles.pendingRentalBtnDeclineText}>Decline</Text>
+                                  </Pressable>
+                                </View>
+                              </View>
+                            );
+                          })}
+                          <View style={[styles.sectionRule, styles.sectionRuleTight]} />
+                        </>
+                      ) : null}
+                      {ownedRequestsSorted.length === 0 && pendingListingRentals.length === 0 ? (
+                        <Text style={[styles.emptyText, { marginBottom: 12 }]}>
+                          No requests yet. Tap + to request equipment.
+                        </Text>
+                      ) : null}
+                    </View>
+                    <View style={styles.requestsStickyTabsHost}>
+                      <ActivitySegmentedTabs
+                        tabs={[
+                          {
+                            key: 'active',
+                            label: 'Active',
+                            badgeCount: activeTabRequestsPool.length,
+                            accessibilityLabel: `Active requests, ${activeTabRequestsPool.length} items`,
+                          },
+                          {
+                            key: 'completed',
+                            label: 'Completed',
+                            badgeCount: completedTabRequestsSorted.length,
+                            accessibilityLabel: `Completed archive, ${completedTabRequestsSorted.length} items`,
+                          },
+                        ]}
+                        value={requestsOwnerSubView}
+                        onChange={setRequestsOwnerSubView}
+                      />
+                    </View>
                     <View
                       style={[
                         styles.tabPanel,
                         requestsActivityCount > 0 && styles.tabPanelAttention,
                       ]}
                     >
-              <Text style={styles.tabPanelSubline}>
-                Your open and past requests · offers received on each card
-              </Text>
-              {pendingListingRentals.length > 0 ? (
+              {requestsOwnerSubView === 'active' ? (
                 <>
-                  <Text style={styles.activePastHeading}>Pending listing rentals</Text>
-                  <Text style={styles.pendingListingSubtext}>
-                    Someone requested to rent your equipment · approve or decline
-                  </Text>
-                  {pendingListingRentals.map((row) => {
-                    const title = pendingListingTitle(row);
-                    const priceNum = Number(row.price);
-                    const priceLabel = Number.isFinite(priceNum) ? formatUsd(priceNum) : '—';
-                    const duration = listingRentalDurationLabel(row.duration_type);
-                    const busy = busyRentalRequestId === row.id;
-                    return (
-                      <View key={row.id} style={styles.pendingListingRentalCard}>
-                        <Text style={styles.matchedRentalTitle} numberOfLines={2}>
-                          {title}
-                        </Text>
-                        <Text style={styles.matchedRentalHint}>{priceLabel}</Text>
-                        <Text style={styles.matchedRentalHint}>{duration}</Text>
-                        <View style={styles.pendingRentalBtnRow}>
-                          <Pressable
-                            disabled={busy}
-                            pressOpacityFeedback={false}
-                            haptic
-                            style={({ pressed }) => [
-                              styles.pendingRentalBtn,
-                              styles.pendingRentalBtnApprove,
-                              busy && styles.pendingRentalBtnDisabled,
-                              pressed && !busy && styles.pendingRentalBtnApprovePressed,
-                            ]}
-                            onPress={() => void onApproveListingRental(row.id)}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Approve rental request for ${title}`}
-                          >
-                            <Text style={styles.pendingRentalBtnApproveText}>Approve</Text>
-                          </Pressable>
-                          <Pressable
-                            disabled={busy}
-                            pressOpacityFeedback={false}
-                            haptic
-                            style={({ pressed }) => [
-                              styles.pendingRentalBtn,
-                              styles.pendingRentalBtnDecline,
-                              busy && styles.pendingRentalBtnDisabled,
-                              pressed && !busy && styles.pendingRentalBtnDeclinePressed,
-                            ]}
-                            onPress={() => void onDeclineListingRental(row.id)}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Decline rental request for ${title}`}
-                          >
-                            <Text style={styles.pendingRentalBtnDeclineText}>Decline</Text>
-                          </Pressable>
-                        </View>
+                  {activeTabRequestsPool.length === 0 && pendingListingRentals.length === 0 ? (
+                    <Text style={styles.emptyText}>
+                      No active requests. Post a request with + New Request.
+                    </Text>
+                  ) : activeTabRequestsPool.length === 0 ? null : (
+                    <>
+                      <ActivityRequestSectionHeader
+                        iconName="flash"
+                        iconBg="#FEE2E2"
+                        iconColor="#DC2626"
+                        title="OFFERS WAITING"
+                        count={offersWaitingOfferBadgeCount}
+                        description="Requests that have offers awaiting your response"
+                        expanded={offersWaitingExpanded}
+                        onToggleExpand={() => setOffersWaitingExpanded((v) => !v)}
+                        countTone="danger"
+                      />
+                      {offersWaitingExpanded
+                        ? offersWaitingSorted.map((request, idx) =>
+                            renderOwnerRequestRow(request, idx, 'offers_waiting')
+                          )
+                        : null}
+                      <View style={styles.activityRequestsSecondSection}>
+                        <ActivityRequestSectionHeader
+                          iconName="time-outline"
+                          iconBg="#DBEAFE"
+                          iconColor="#2563EB"
+                          title="OPEN REQUESTS"
+                          count={openRequestsSorted.length}
+                          description="No offers yet — still searching for lenders"
+                          expanded={openRequestsExpanded}
+                          onToggleExpand={() => setOpenRequestsExpanded((v) => !v)}
+                          countTone="sky"
+                        />
+                        {openRequestsExpanded
+                          ? openRequestsSorted.map((request, idx) =>
+                              renderOwnerRequestRow(
+                                request,
+                                idx + offersWaitingSorted.length,
+                                'open'
+                              )
+                            )
+                          : null}
                       </View>
-                    );
-                  })}
-                  <View style={[styles.sectionRule, styles.sectionRuleTight]} />
+                      <View style={styles.activityRequestsSecondSection}>
+                        <ActivityRequestSectionHeader
+                          iconName="checkmark-circle-outline"
+                          iconBg="#DCFCE7"
+                          iconColor="#15803D"
+                          title="IN PROGRESS"
+                          count={inProgressSorted.length}
+                          description="Match accepted or rental underway — pickup, delivery, or active"
+                          expanded={inProgressExpanded}
+                          onToggleExpand={() => setInProgressExpanded((v) => !v)}
+                          countTone="success"
+                        />
+                        {inProgressExpanded
+                          ? inProgressSorted.map((request, idx) =>
+                              renderOwnerRequestRow(
+                                request,
+                                idx + offersWaitingSorted.length + openRequestsSorted.length,
+                                'in_progress'
+                              )
+                            )
+                          : null}
+                      </View>
+                    </>
+                  )}
                 </>
-              ) : null}
-              {activeRequestsSorted.length === 0 && pastRequestsSorted.length === 0 ? (
-                pendingListingRentals.length === 0 ? (
-                  <Text style={styles.emptyText}>No requests yet. Tap + to request equipment.</Text>
-                ) : null
               ) : (
                 <>
-                  {activeRequestsSorted.length > 0 ? (
-                    <>
-                      <Text style={styles.activePastHeading}>Active</Text>
-                      {activeRequestsSorted.map((request, idx) => renderRequestRow(request, idx))}
-                    </>
-                  ) : null}
-                  {pastRequestsSorted.length > 0 ? (
-                    <>
-                      {activeRequestsSorted.length > 0 ? (
-                        <View style={[styles.sectionRule, styles.sectionRuleTight]} />
-                      ) : null}
-                      <Text style={styles.activePastHeading}>Past</Text>
-                      {pastRequestsSorted.map((request, idx) =>
-                        renderRequestRow(request, idx + activeRequestsSorted.length)
-                      )}
-                    </>
-                  ) : null}
+                  {completedTabRequestsSorted.length === 0 ? (
+                    <Text style={styles.emptyText}>
+                      No completed, expired, or archived requests yet.
+                    </Text>
+                  ) : (
+                    completedTabRequestsSorted.map((request, idx) =>
+                      renderOwnerRequestRow(request, idx, 'archive')
+                    )
+                  )}
                 </>
               )}
               <View style={[styles.sectionRule, styles.sectionRuleTight]} />
-              <Text style={styles.activePastHeading}>Your equipment</Text>
+              <Text style={styles.activePastHeading}>YOUR EQUIPMENT</Text>
               {myEquipment.length === 0 ? (
                 <Text style={styles.emptyText}>
                   No equipment listed yet. Tap + and choose List equipment.
@@ -1242,12 +1513,12 @@ export default function ActivityScreen() {
                   </CardPressable>
                 ))
               )}
-            </View>
+                    </View>
                   </ScrollView>
                 </View>
 
                 <View style={{ width: activityPageWidth }}>
-                  <ScrollView
+                  <GHScrollView
                     style={styles.scroll}
                     contentContainerStyle={[
                       styles.tabPanelScrollContent,
@@ -1273,11 +1544,11 @@ export default function ActivityScreen() {
                 myLenderOffers.map((o) => renderMyOfferRow(o))
               )}
                     </View>
-                  </ScrollView>
+                  </GHScrollView>
                 </View>
 
                 <View style={{ width: activityPageWidth }}>
-                  <ScrollView
+                  <GHScrollView
                     style={styles.scroll}
                     contentContainerStyle={[
                       styles.tabPanelScrollContent,
@@ -1410,15 +1681,88 @@ export default function ActivityScreen() {
                 </>
               )}
                     </View>
-                  </ScrollView>
+                  </GHScrollView>
                 </View>
-              </ScrollView>
+              </GHScrollView>
             </View>
           </View>
 
           <MainTabFab />
         </ScreenEntrance>
       </View>
+
+      <Modal
+        visible={requestDeleteConfirmTs != null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!requestDeleteBusy) setRequestDeleteConfirmTs(null);
+        }}
+      >
+        <View style={styles.requestDeleteModalBackdrop}>
+          <RNPressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => {
+              if (!requestDeleteBusy) setRequestDeleteConfirmTs(null);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss"
+          />
+          <View style={styles.requestDeleteModalCard}>
+            <Text style={styles.requestDeleteModalTitle}>Delete request?</Text>
+            <Text style={styles.requestDeleteModalBody}>
+              This will remove your request from Browse and Activity.
+            </Text>
+            <View style={styles.requestDeleteModalActions}>
+              <Pressable
+                pressOpacityFeedback={false}
+                disabled={requestDeleteBusy}
+                onPress={() => {
+                  if (!requestDeleteBusy) setRequestDeleteConfirmTs(null);
+                }}
+                style={({ pressed }) => [
+                  styles.requestDeleteModalBtnCancel,
+                  pressed && !requestDeleteBusy && styles.requestDeleteModalBtnPressed,
+                  requestDeleteBusy && styles.requestDeleteModalBtnDisabled,
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel"
+              >
+                <Text style={styles.requestDeleteModalBtnCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                pressOpacityFeedback={false}
+                disabled={requestDeleteBusy}
+                onPress={() => {
+                  void (async () => {
+                    const ts = requestDeleteConfirmTs;
+                    if (ts == null || requestDeleteBusy) return;
+                    setRequestDeleteBusy(true);
+                    try {
+                      const ok = await deactivateRequest(ts);
+                      setRequestDeleteConfirmTs(null);
+                      if (ok) showFeedbackToast('Request deleted');
+                      else
+                        Alert.alert('Could not delete', 'Check your connection and try again.');
+                    } finally {
+                      setRequestDeleteBusy(false);
+                    }
+                  })();
+                }}
+                style={({ pressed }) => [
+                  styles.requestDeleteModalBtnDestructive,
+                  pressed && !requestDeleteBusy && styles.requestDeleteModalBtnDestructivePressed,
+                  requestDeleteBusy && styles.requestDeleteModalBtnDisabled,
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel="Delete request"
+              >
+                <Text style={styles.requestDeleteModalBtnDestructiveText}>Delete Request</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScreenWrapper>
   );
 }
@@ -1793,6 +2137,12 @@ const styles = StyleSheet.create({
     marginBottom: 9,
     marginTop: 2,
   },
+  activityRequestsSecondSection: {
+    marginTop: 18,
+  },
+  ownerRequestSwipeHit: {
+    backgroundColor: 'transparent',
+  },
   rentalRowCard: {
     ...cardChrome,
     marginBottom: 6,
@@ -1918,6 +2268,26 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     paddingHorizontal: 0,
   },
+  /** Requests tab: intro content above sticky Active / Completed control. */
+  requestsScrollPreamble: {
+    paddingHorizontal: ui.padCard + 2,
+    paddingBottom: 4,
+  },
+  /** Pinned row for segmented tabs only (Requests tab). */
+  requestsStickyTabsHost: {
+    backgroundColor: ui.surfaceGrouped,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: ui.border,
+    paddingTop: 8,
+    paddingBottom: 10,
+    paddingHorizontal: ui.padCard + 2,
+    zIndex: 2,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.07,
+    shadowRadius: 3,
+  },
   tabPagerViewport: {
     flex: 1,
     minHeight: 0,
@@ -1961,17 +2331,6 @@ const styles = StyleSheet.create({
   },
   cardRowWrap: {
     marginBottom: 14,
-  },
-  requestCardMatched: {
-    backgroundColor: '#F4FAF4',
-    borderColor: '#C5E0C7',
-  },
-  offersReceived: {
-    fontSize: 13,
-    color: ui.textPrimary,
-    marginTop: 10,
-    fontWeight: '600',
-    letterSpacing: -0.1,
   },
   rightActionsRow: {
     flexDirection: 'row',
@@ -2149,5 +2508,67 @@ const styles = StyleSheet.create({
   listingDesc: {
     fontSize: 14,
     color: ui.textSecondary,
+  },
+  requestDeleteModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  requestDeleteModalCard: {
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 20,
+  },
+  requestDeleteModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    marginBottom: 10,
+  },
+  requestDeleteModalBody: {
+    fontSize: 15,
+    color: ui.textSecondary,
+    lineHeight: 22,
+    marginBottom: 20,
+  },
+  requestDeleteModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+  },
+  requestDeleteModalBtnCancel: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: ui.radiusButton,
+    backgroundColor: ui.surfaceNeutral,
+  },
+  requestDeleteModalBtnCancelText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: ui.textPrimary,
+  },
+  requestDeleteModalBtnDestructive: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: ui.radiusButton,
+    backgroundColor: ui.danger,
+  },
+  requestDeleteModalBtnDestructivePressed: {
+    opacity: 0.88,
+  },
+  requestDeleteModalBtnDestructiveText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  requestDeleteModalBtnPressed: {
+    opacity: 0.88,
+  },
+  requestDeleteModalBtnDisabled: {
+    opacity: 0.5,
   },
 });

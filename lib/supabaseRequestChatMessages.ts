@@ -92,8 +92,8 @@ async function fetchOfferMessagesByOfferId(offerId: string): Promise<SupabaseReq
 }
 
 /**
- * Loads the message thread: prefers `request_id` (all rows for that request), with no per-user or kind filter.
- * If that returns no rows (or errors), falls back to `offer_id` only. Never ANDs the two in one query.
+ * Loads the negotiation thread for one offer: prefers `request_id` + `offer_id` (one thread on that request).
+ * If that returns no rows (or errors), falls back to `offer_id` only.
  * Always `order by created_at asc` on each attempt.
  */
 export async function fetchRequestChatMessagesFromSupabase(
@@ -111,10 +111,11 @@ export async function fetchRequestChatMessagesFromSupabase(
       .from('offer_messages')
       .select('*')
       .eq('request_id', rid)
+      .eq('offer_id', oid)
       .order('created_at', { ascending: true });
     if (error) {
       if (__DEV__) {
-        console.warn('[offer_messages] fetch by request_id (will try offer_id):', error.message);
+        console.warn('[offer_messages] fetch by request_id+offer_id (will try offer_id):', error.message);
       }
       return await fetchOfferMessagesByOfferId(oid);
     }

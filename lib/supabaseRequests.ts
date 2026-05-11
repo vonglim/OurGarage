@@ -3,6 +3,7 @@ import {
   resolveScheduleFieldsForPersistence,
   validateRequestPayloadSchedule,
 } from '@/lib/requestSchedulePersistence';
+import { getAuthUserIdSync } from '@/lib/authUser';
 import { fetchAndMergeProfileNames } from '@/lib/remoteProfileCache';
 import { getSupabase } from '@/lib/supabase';
 
@@ -15,6 +16,8 @@ export type SupabaseRequestRow = {
   price: number;
   user_id: string;
   created_at: string;
+  is_active?: boolean;
+  deleted_at?: string | null;
 };
 
 export type RequestPayload = {
@@ -136,6 +139,12 @@ export function mapSupabaseRowToAppRequest(row: SupabaseRequestRow): Record<stri
   }
   const ts = new Date(row.created_at).getTime();
   const expiresAt = ts + 7 * MS_PER_DAY;
+  const rowActive = (row as { is_active?: boolean }).is_active;
+  const deletedAtRaw = (row as { deleted_at?: string | null }).deleted_at;
+  const deletedAtMs =
+    typeof deletedAtRaw === 'string' && deletedAtRaw.trim() !== ''
+      ? Date.parse(deletedAtRaw)
+      : null;
   return {
     remoteId: row.id,
     id: row.id,
@@ -152,6 +161,8 @@ export function mapSupabaseRowToAppRequest(row: SupabaseRequestRow): Record<stri
     status: 'active',
     expiresAt,
     ...extras,
+    isActive: rowActive !== false,
+    deletedAt: deletedAtMs != null && Number.isFinite(deletedAtMs) ? deletedAtMs : null,
   };
 }
 
@@ -171,6 +182,8 @@ export function mapSupabaseRequestSelectRowToApp(row: Record<string, unknown>): 
     matched?: boolean;
     accepted_offer_id?: string;
     accepted_price?: number;
+    is_active?: boolean;
+    deleted_at?: string | null;
   };
   const authorId = String(
     (typeof r.user_id === 'string' && r.user_id.trim() !== '' ? r.user_id : r.owner_id) ?? ''
@@ -182,11 +195,18 @@ export function mapSupabaseRequestSelectRowToApp(row: Record<string, unknown>): 
     price: Number(r.price ?? 0),
     user_id: authorId,
     created_at: String(r.created_at ?? new Date().toISOString()),
+    is_active: r.is_active,
+    deleted_at: r.deleted_at ?? null,
   } as SupabaseRequestRow);
   const matched = r.matched === true;
   const ap = r.accepted_price;
   const acceptedPrice =
     typeof ap === 'number' && Number.isFinite(ap) ? ap : (base as { acceptedPrice?: number }).acceptedPrice;
+  const deletedAtRaw = r.deleted_at;
+  const deletedAtMs =
+    typeof deletedAtRaw === 'string' && deletedAtRaw.trim() !== ''
+      ? Date.parse(deletedAtRaw)
+      : null;
   return {
     ...base,
     matched,
@@ -196,7 +216,36 @@ export function mapSupabaseRequestSelectRowToApp(row: Record<string, unknown>): 
         : null,
     acceptedPrice: acceptedPrice ?? null,
     rentalStatus: matched ? 'matched' : 'pending',
+    isActive: r.is_active !== false,
+    deletedAt: deletedAtMs != null && Number.isFinite(deletedAtMs) ? deletedAtMs : null,
   };
+}
+
+async function fetchRequestIdsLinkedToMyOffers(sb: NonNullable<ReturnType<typeof getSupabase>>, userId: string) {
+  const uid = userId.trim();
+  if (uid === '') return [] as string[];
+  const { data, error } = await sb.from('offers').select('request_id').eq('user_id', uid);
+  if (error != null || data == null) {
+    if (__DEV__) console.warn('[Supabase requests] offer-linked request ids:', error?.message);
+    return [];
+  }
+  const ids = new Set<string>();
+  for (const raw of data as { request_id?: string }[]) {
+    const rid = typeof raw.request_id === 'string' ? raw.request_id.trim() : '';
+    if (rid !== '') ids.add(rid);
+  }
+  return [...ids];
+}
+
+function buildRequestsSelectOrFilter(me: string, linkedRequestIds: string[]): string {
+  const parts: string[] = ['is_active.eq.true'];
+  if (me.trim() !== '') {
+    parts.push(`and(is_active.eq.false,user_id.eq.${me.trim()})`);
+  }
+  if (linkedRequestIds.length > 0) {
+    parts.push(`id.in.(${linkedRequestIds.join(',')})`);
+  }
+  return parts.join(',');
 }
 
 function mergePreservingLocalRental(
@@ -230,10 +279,12 @@ export async function fetchRemoteRequestsMerged(
   const sb = getSupabase();
   if (!sb) return null;
 
-  const { data, error } = await sb
-    .from('requests')
-    .select('*')
-    .order('created_at', { ascending: false });
+  const meRaw = getAuthUserIdSync();
+  const me = typeof meRaw === 'string' ? meRaw.trim() : '';
+  const linkedIds = me !== '' ? await fetchRequestIdsLinkedToMyOffers(sb, me) : [];
+  const orFilter = buildRequestsSelectOrFilter(me, linkedIds);
+
+  const { data, error } = await sb.from('requests').select('*').or(orFilter).order('created_at', { ascending: false });
 
   if (error) {
     if (__DEV__) console.warn('[Supabase requests] fetch error:', error.message);
@@ -325,6 +376,24 @@ export async function updateRequestInSupabase(requestRowId: string, payload: Req
   return true;
 }
 
+/** Sets is_active = false and deleted_at = now(). Does not remove the row. */
+export async function softDeleteRequestInSupabase(requestRowId: string): Promise<boolean> {
+  const sb = getSupabase();
+  if (!sb) return false;
+  const { error } = await sb
+    .from('requests')
+    .update({
+      is_active: false,
+      deleted_at: new Date().toISOString(),
+    })
+    .eq('id', requestRowId);
+  if (error != null) {
+    if (__DEV__) console.warn('[Supabase requests] soft delete error:', error.message);
+    return false;
+  }
+  return true;
+}
+
 export async function insertRequestToSupabase(
   payload: RequestPayload,
   ownerId: string
@@ -356,6 +425,7 @@ export async function insertRequestToSupabase(
     description: descriptionJson,
     price: payload.totalPrice,
     user_id: ownerId,
+    is_active: true,
   };
 
   const { data, error } = await sb.from('requests').insert(insert).select('*').single();

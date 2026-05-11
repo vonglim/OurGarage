@@ -431,7 +431,10 @@ export default function CounterOfferScreen() {
               </View>
               {negotiationDeliveryMethod === 'owner_delivery' ? (
                 <>
-                  <Text style={[styles.label, styles.labelSpaced]}>Delivery fee (0 = free)</Text>
+                  <Text style={[styles.label, styles.labelSpaced]}>Delivery compensation (one-time)</Text>
+                  <Text style={styles.deliveryCompHint}>
+                    Optional logistics fee — not open-ended pricing. Use 0 for free delivery.
+                  </Text>
                   <View style={styles.moneyRow}>
                     <Text style={styles.dollar}>$</Text>
                     <TextInput
@@ -592,6 +595,12 @@ const styles = StyleSheet.create({
   },
   labelSpaced: {
     marginTop: 12,
+  },
+  deliveryCompHint: {
+    marginTop: 6,
+    fontSize: 12,
+    lineHeight: 17,
+    color: ui.textSecondary,
   },
   moneyRow: {
     flexDirection: 'row',

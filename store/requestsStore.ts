@@ -9,6 +9,7 @@ import {
   appRequestRowToPayload,
   fetchRemoteRequestsMerged,
   insertRequestToSupabase,
+  softDeleteRequestInSupabase,
   updateRequestInSupabase,
 } from '@/lib/supabaseRequests';
 import { getRequestOwnerId, getRequestSupabaseRowId, isUuidString } from '@/lib/requestOwnership';
@@ -96,7 +97,13 @@ export function resolveRequestFromRouteId(raw: string | number | null | undefine
 export function requestAcceptsOffers(timestamp: number): boolean {
   const r = getRequestByTimestamp(timestamp);
   if (!r) return false;
+  if ((r as { isActive?: boolean }).isActive === false) return false;
   return getEffectiveRentalStatus(r) === 'pending';
+}
+
+/** Owner's Activity "Requests" tab: hide soft-deleted requests. */
+export function isOwnerRequestHiddenFromActivity(req: unknown): boolean {
+  return typeof req === 'object' && req != null && (req as { isActive?: boolean }).isActive === false;
 }
 
 /**
@@ -214,6 +221,7 @@ export async function addRequest(request: any): Promise<void> {
     posterUserId,
     ownerId: posterUserId,
     rentalStatus: 'pending' satisfies RentalStatus,
+    isActive: true,
   };
   useRequestsStore.setState((s) => ({
     requests: [...s.requests, row],
@@ -232,6 +240,27 @@ export function removeRequest(timestamp: number) {
   useRequestsStore.setState((s) => ({
     requests: s.requests.filter((r) => r.timestamp !== timestamp),
   }));
+}
+
+/**
+ * Soft-deletes the request on Supabase (is_active = false, deleted_at = now), syncs offers
+ * (negotiation threads close server-side), and updates local store. Local-only rows are removed.
+ */
+export async function deactivateRequest(timestamp: number): Promise<boolean> {
+  const prev = getRequestByTimestamp(timestamp);
+  if (prev == null) return false;
+  const remoteId = getRequestSupabaseRowId(prev as Record<string, unknown>);
+  if (remoteId != null && isSupabaseConfigured()) {
+    const ok = await softDeleteRequestInSupabase(remoteId);
+    if (!ok) return false;
+    const { syncRequestAndOffersFromSupabase } = await import('@/lib/supabaseOfferSync');
+    await syncRequestAndOffersFromSupabase(remoteId, timestamp);
+    return true;
+  }
+  const { removeOffersForRequest } = await import('@/store/offersStore');
+  removeOffersForRequest(timestamp);
+  removeRequest(timestamp);
+  return true;
 }
 
 /** Wipe all requests (including matched / active / completed “rentals”). */

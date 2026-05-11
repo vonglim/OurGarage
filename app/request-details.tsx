@@ -19,7 +19,12 @@ import {
 import { useAuthUserId } from '@/lib/authUser';
 import { formatHowDisplay, needsDeliveryFee } from '@/lib/deliveryFormat';
 import { formatNegotiatedDeliverySummary } from '@/lib/negotiationDelivery';
-import { negotiatedOfferTotals, type RequestPricingContext } from '@/lib/negotiationTermSnapshot';
+import {
+  buildRequestPricingContextFromRequest,
+  negotiatedOfferTotals,
+  sortOffersByLowestNegotiatedTotal,
+  type RequestPricingContext,
+} from '@/lib/negotiationTermSnapshot';
 import { formatDurationDisplay } from '@/lib/durationFormat';
 import { formatUsd, getNumericTotalPrice } from '@/lib/money';
 import { openChatForRequest } from '@/lib/openRequestChat';
@@ -58,7 +63,8 @@ function formatOwnerOfferCountMessage(count: number): string {
 function mergeOfferThreadsForRequest(
   fromServer: Offer[],
   fromStore: Offer[],
-  requestTs: number
+  requestTs: number,
+  pricingCtx?: RequestPricingContext | null
 ): Offer[] {
   const byRenter = new Map<string, Offer>();
   for (const o of fromServer) {
@@ -71,7 +77,9 @@ function mergeOfferThreadsForRequest(
     const prev = byRenter.get(o.renterId);
     if (!prev || o.updatedAt >= prev.updatedAt) byRenter.set(o.renterId, o);
   }
-  return sortOffersForPoster([...byRenter.values()]);
+  const merged = [...byRenter.values()];
+  if (pricingCtx) return sortOffersByLowestNegotiatedTotal(merged, pricingCtx);
+  return sortOffersForPoster(merged);
 }
 
 function getTimeAgo(timestamp: number): string {
@@ -111,7 +119,7 @@ function offerConditionSnippet(message: string | null | undefined): string | nul
       .map((l) => l.trim())
       .find(
         (l) =>
-          !/^(terms \(optional\)|brand and model:|description:|replacement value:|delivery method:|delivery fee:|daily late fee)/i.test(
+          !/^(terms \(optional\)|brand and model:|description:|replacement value:|delivery method:|delivery fee:|daily late fee|late fees:)/i.test(
             l
           )
       ) ?? null;
@@ -211,13 +219,18 @@ export default function RequestDetailsScreen() {
     return out.length === 0 ? EMPTY_OFFERS : out;
   }, [storeOffers, requestTimestamp]);
 
+  const requestPricingForSort = useMemo(
+    () => (request ? buildRequestPricingContextFromRequest(request as Record<string, unknown>) : null),
+    [request]
+  );
+
   const displayOffers = useMemo(() => {
     const ts = requestTimestamp;
     if (typeof ts !== 'number' || !Number.isFinite(ts)) {
       return sortOffersForPoster(offers);
     }
-    return mergeOfferThreadsForRequest(offers, offersFromStore, ts);
-  }, [offers, offersFromStore, requestTimestamp]);
+    return mergeOfferThreadsForRequest(offers, offersFromStore, ts, requestPricingForSort);
+  }, [offers, offersFromStore, requestTimestamp, requestPricingForSort]);
 
   /** Owner sees all negotiation threads; renters only see their own thread. */
   const visibleOffers = useMemo(() => {

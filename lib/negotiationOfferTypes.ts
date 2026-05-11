@@ -47,6 +47,8 @@ export type Offer = {
   profiles?: { id: string; name: string } | null;
   offerUserName?: string;
   offerUserRating?: number;
+  /** When synced from server; 0 = no public reviews yet (hide rating row in compare). */
+  offerUserRatingCount?: number | null;
   offerUserAvatar?: string;
   offerUserLastActive?: number;
   /** Owner declines on this renter+request row; at 3, negotiation locks. */

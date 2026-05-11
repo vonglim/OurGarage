@@ -26,6 +26,16 @@ import { primarySolidPressed, ui } from '@/constants/appUi';
 import { getCreateListingPricingGuidance } from '@/lib/createListingPricingGuide';
 import { parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
 import { calculatePreauthAmount } from '@/lib/rentalProtection';
+import {
+  mockLateFeeCapInput,
+  mockLateFeeInput,
+  mockListingDescription,
+  mockListingLocation,
+  mockListingPriceInput,
+  mockListingTitle,
+  mockReplacementValueInput,
+  useDevPageAutofill,
+} from '@/lib/devTools';
 
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -126,6 +136,23 @@ export default function CreateListingScreen() {
       return next;
     });
   }, []);
+
+  const devAutofillCreateListing = useCallback(() => {
+    setTitle(mockListingTitle());
+    setPriceInput(mockListingPriceInput());
+    setDescription(mockListingDescription());
+    setLocation(mockListingLocation());
+    setReplacementValueInput(mockReplacementValueInput());
+    setDailyLateFeeInput(mockLateFeeInput());
+    setMaxLateFeeCapInput(mockLateFeeCapInput());
+    setQualityClean(true);
+    setQualityFunctional(true);
+    setQualityPhotos(true);
+    setErrors({});
+    showFeedbackToast('Dev: listing form filled');
+  }, []);
+
+  useDevPageAutofill(devAutofillCreateListing, { screenLabel: 'Create listing' });
 
   const onSubmit = () => {
     const next = validate(title, priceInput, description, location, quality);

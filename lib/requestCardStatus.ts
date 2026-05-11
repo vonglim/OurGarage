@@ -10,7 +10,7 @@ function lifetimeMsForWhen(when: string | null | undefined): number {
   return 7 * MS_PER_DAY;
 }
 
-function isRequestExpired(req: { timestamp?: number | null; when?: string | null }): boolean {
+export function isRequestExpired(req: { timestamp?: number | null; when?: string | null }): boolean {
   if (req.timestamp == null) return true;
   return Date.now() >= req.timestamp + lifetimeMsForWhen(req.when);
 }

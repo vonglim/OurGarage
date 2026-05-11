@@ -37,7 +37,9 @@ export function isRequestActiveForBrowse(req: unknown): boolean {
     when?: string | null;
     expiresAt?: number | null;
     status?: string | null | number;
+    isActive?: boolean;
   };
+  if (r.isActive === false) return false;
   const rawSt = r.status;
   if (rawSt != null && String(rawSt).trim() !== '') {
     const st = String(rawSt).toLowerCase();

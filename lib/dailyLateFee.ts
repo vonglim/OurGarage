@@ -1,5 +1,3 @@
-import { formatUsd } from '@/lib/money';
-
 /**
  * Penalty applied to the daily rental rate for each calendar day the item is late.
  * Not compounded across the booking period — per late day only.
@@ -22,8 +20,4 @@ export function calculateDailyLateFee(args: {
   const mult = args.multiplier ?? DAILY_LATE_FEE_MULTIPLIER;
   const raw = dailyRate * mult;
   return Math.round(raw * 100) / 100;
-}
-
-export function formatDailyLateFeeAutoTermsLine(lateFeePerDay: number): string {
-  return `Daily late fee (auto): ${formatUsd(lateFeePerDay)} (+20% of daily rate)`;
 }
