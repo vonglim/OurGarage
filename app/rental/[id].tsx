@@ -79,6 +79,10 @@ import { calculatePreauthAmount } from '@/lib/rentalProtection';
 import { agreedScheduleIsoPairFromRequest } from '@/lib/agreedRentalScheduleFromRequest';
 import { deleteRentalEvidencePhoto } from '@/lib/deleteRentalEvidencePhoto';
 import {
+  isOfferEvidencePickupDisplayId,
+  mergeOfferEvidenceIntoPickupRows,
+} from '@/lib/offerEvidencePhotos';
+import {
   bucketOwnerPickupPhotos,
   normalizePickupPhotoCategory,
   OWNER_ITEM_PHOTO_TARGET,
@@ -1535,7 +1539,8 @@ export default function RentalScreen() {
         return out;
       };
       const [pickupPhotos, returnPhotos] = await Promise.all([signList(pickupPhotosRaw), signList(returnPhotosRaw)]);
-      setPickupEvidenceDisplay([...pickupPhotos]);
+      const mergedPickup = mergeOfferEvidenceIntoPickupRows(pickupPhotos, offerForRental);
+      setPickupEvidenceDisplay([...mergedPickup]);
       setReturnEvidenceDisplay([...returnPhotos]);
       if (__DEV__) {
         console.log('[verification refresh applied]', freshRows.length, pickupPhotos.length + returnPhotos.length, Date.now());
@@ -1551,7 +1556,7 @@ export default function RentalScreen() {
     });
     refreshInFlightRef.current = task;
     return task;
-  }, [me, rentalId, supabase]);
+  }, [me, rentalId, supabase, offerForRental]);
 
   useEffect(() => {
     if (!rental?.id || !me) return;
@@ -2487,7 +2492,8 @@ export default function RentalScreen() {
     setPhotoViewerIndex(index);
     setPhotoViewerVisible(true);
   };
-  const canDeletePhoto = (photo: { role?: PartyRole; phase?: VerificationPhase; userId?: string }): boolean => {
+  const canDeletePhoto = (photo: { id?: string; role?: PartyRole; phase?: VerificationPhase; userId?: string }): boolean => {
+    if (photo.id && isOfferEvidencePickupDisplayId(photo.id)) return false;
     if (!me) return false;
     const uploader = typeof photo.userId === 'string' ? photo.userId.trim() : '';
     if (!uploader || uploader !== me.trim()) return false;
@@ -2831,11 +2837,13 @@ export default function RentalScreen() {
     setSignHandoffBusy(true);
     const typedNorm = normalizeLegalName(signatureName);
     const signedAt = new Date().toISOString();
-    const signingPhotoRefs = [...pickupEvidenceDisplay, ...returnEvidenceDisplay].map((p) => ({
-      id: p.id,
-      path: p.path ?? null,
-      phase: p.phase ?? null,
-    }));
+    const signingPhotoRefs = [...pickupEvidenceDisplay, ...returnEvidenceDisplay]
+      .filter((p) => !isOfferEvidencePickupDisplayId(p.id))
+      .map((p) => ({
+        id: p.id,
+        path: p.path ?? null,
+        phase: p.phase ?? null,
+      }));
     try {
       const snapshot = await insertRentalAgreementSnapshot(supabase, {
         rentalId: rental.id,

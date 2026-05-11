@@ -1,18 +1,16 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import React from 'react';
-import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 
 import { Pressable } from '@/components/Pressable';
-import { cardChrome, ui } from '@/constants/appUi';
+import { ui } from '@/constants/appUi';
 import { formatDurationDisplay } from '@/lib/durationFormat';
 import { formatUsd, getNumericTotalPrice } from '@/lib/money';
 import { getRequestCardUiStatus } from '@/lib/requestCardStatus';
 import { formatMilesShort, milesFromViewerToRequest } from '@/lib/requestDistance';
+import { splitRequestDisplayTitle } from '@/lib/splitRequestDisplayTitle';
 
 export type ActivityRequestCardVariant = 'offers_waiting' | 'open' | 'in_progress' | 'archive';
-
-/** Viewport width below this uses stacked mobile layout (SE / narrow phones included). */
-const COMPACT_LAYOUT_MAX_WIDTH = 640;
 
 type Req = {
   toolName?: string | null;
@@ -61,44 +59,40 @@ function statusPresentation(
     return { label: 'Archived', dot: '#9CA3AF', fg: '#4B5563', bg: '#F3F4F6' };
   }
   if (variant === 'in_progress') {
-    if (cardKey === 'active') return { label: 'Active Rental', dot: '#22C55E', fg: '#14532D', bg: '#ECFDF5' };
+    if (cardKey === 'active') return { label: 'Active rental', dot: '#22C55E', fg: '#14532D', bg: '#ECFDF5' };
     if (cardKey === 'matched') return { label: 'Confirmed', dot: '#22C55E', fg: '#14532D', bg: '#ECFDF5' };
-    if (cardKey === 'pending') return { label: 'Pending', dot: '#F59E0B', fg: '#92400E', bg: '#FFFBEB' };
-    if (cardKey === 'open') return { label: 'Open', dot: '#60A5FA', fg: '#1E3A5F', bg: '#EFF6FF' };
+    if (cardKey === 'pending') return { label: 'Pending', dot: '#F59E0B', fg: '#7C2D12', bg: '#FFFBEB' };
+    if (cardKey === 'open') return { label: 'Open', dot: '#93C5FA', fg: '#1E3A8A', bg: '#F0F9FF' };
     return { label: 'In progress', dot: '#22C55E', fg: '#14532D', bg: '#ECFDF5' };
   }
   switch (cardKey) {
     case 'pending':
-      return { label: 'Pending', dot: '#F59E0B', fg: '#92400E', bg: '#FFFBEB' };
+      return { label: 'Pending', dot: '#F59E0B', fg: '#7C2D12', bg: '#FFFBEB' };
     case 'matched':
       return { label: 'Confirmed', dot: '#22C55E', fg: '#14532D', bg: '#ECFDF5' };
     case 'active':
-      return { label: 'Active', dot: '#3B82F6', fg: '#1E40AF', bg: '#EFF6FF' };
+      return { label: 'Active', dot: '#60A5FA', fg: '#1E3A8A', bg: '#EFF6FF' };
     case 'archived':
-      return { label: 'Expired', dot: '#9CA3AF', fg: '#374151', bg: '#F3F4F6' };
+      return { label: 'Expired', dot: '#9CA3AF', fg: '#4B5563', bg: '#F3F4F6' };
     case 'completed':
-      return { label: 'Completed', dot: '#9CA3AF', fg: '#374151', bg: '#F3F4F6' };
+      return { label: 'Completed', dot: '#9CA3AF', fg: '#4B5563', bg: '#F3F4F6' };
     default:
-      return { label: 'Open', dot: '#60A5FA', fg: '#1E3A5F', bg: '#EFF6FF' };
+      return { label: 'Open', dot: '#93C5FA', fg: '#1E3A8A', bg: '#F0F9FF' };
   }
 }
 
 type OfferBadgeProps = { count: number; compact?: boolean; fullWidth?: boolean };
 
+/** Compact offer count hint (no emoji) — optional use outside the card. */
 export function ActivityRequestOfferBadge({ count, compact, fullWidth }: OfferBadgeProps) {
-  const label = count === 1 ? '1 OFFER WAITING' : `${count} OFFERS WAITING`;
+  const label = count === 1 ? '1 offer waiting' : `${count} offers waiting`;
   return (
     <View
-      style={[styles.offerBadge, fullWidth && styles.offerBadgeFullWidth]}
+      style={[styles.offerHintChip, fullWidth && styles.offerHintChipFull]}
       accessibilityRole="text"
     >
-      <Text
-        style={[styles.offerBadgeText, compact && styles.offerBadgeTextCompact]}
-        numberOfLines={2}
-        adjustsFontSizeToFit
-        minimumFontScale={0.85}
-      >
-        🔥 {label}
+      <Text style={[styles.offerHintChipText, compact && styles.offerHintChipTextCompact]} numberOfLines={1}>
+        {label}
       </Text>
     </View>
   );
@@ -116,9 +110,6 @@ type CardProps = {
   nestedInSwipeable?: boolean;
 };
 
-const CTA_SIZE = 44;
-const CTA_HIT = 44;
-
 export function ActivityOwnerRequestCard({
   req,
   matched,
@@ -129,12 +120,10 @@ export function ActivityOwnerRequestCard({
   disabled,
   nestedInSwipeable,
 }: CardProps) {
-  const { width: windowWidth } = useWindowDimensions();
-  const isCompact = windowWidth < COMPACT_LAYOUT_MAX_WIDTH;
-
   const cardUi = getRequestCardUiStatus(req);
   const status = statusPresentation(cardUi.key, variant);
-  const title = req.toolName?.trim() || 'Equipment request';
+  const rawTitle = req.toolName?.trim() || 'Equipment request';
+  const { primary: titlePrimary, context: titleContext } = splitRequestDisplayTitle(rawTitle);
   const duration = formatDurationDisplay(req);
   const price = displayPrice(req, matched);
   const priceLine = price === '—' ? price : price.startsWith('$') ? price : `$${price}`;
@@ -142,53 +131,13 @@ export function ActivityOwnerRequestCard({
     typeof req.pickupRadiusMiles === 'number' && Number.isFinite(req.pickupRadiusMiles)
       ? Math.max(1, Math.round(req.pickupRadiusMiles))
       : null;
-  const deliveryLine = req.how === 'delivery_only' ? 'Needs delivery' : 'Pickup / meetup';
+  const deliveryLine = req.how === 'delivery_only' ? 'Delivery' : 'Pickup';
   const distanceLine =
-    pickupRadius != null ? `Within ${pickupRadius} miles` : formatMilesShort(milesFromViewerToRequest(req), '~ nearby');
+    pickupRadius != null ? `Within ${pickupRadius} mi` : formatMilesShort(milesFromViewerToRequest(req), '~ nearby');
   const timePart = timeAgoText != null && timeAgoText !== '' ? timeCompact(timeAgoText) : null;
 
-  const leftAccent =
-    variant === 'offers_waiting'
-      ? styles.cardAccentOffers
-      : variant === 'open'
-        ? styles.cardAccentOpen
-        : variant === 'in_progress'
-          ? styles.cardAccentInProgress
-          : styles.cardAccentArchive;
-  const thumbBg =
-    variant === 'offers_waiting'
-      ? '#FEF3C7'
-      : variant === 'open'
-        ? '#DBEAFE'
-        : variant === 'in_progress'
-          ? '#DCFCE7'
-          : '#E5E7EB';
-  const thumbIcon =
-    variant === 'archive'
-      ? '#6B7280'
-      : variant === 'offers_waiting'
-        ? '#B45309'
-        : variant === 'in_progress'
-          ? '#15803D'
-          : ui.primary;
-  const ctaBg =
-    variant === 'offers_waiting'
-      ? 'rgba(254, 226, 226, 0.95)'
-      : variant === 'open'
-        ? 'rgba(219, 234, 254, 0.95)'
-        : variant === 'in_progress'
-          ? 'rgba(220, 252, 231, 0.95)'
-          : '#F3F4F6';
-  const ctaIcon =
-    variant === 'offers_waiting'
-      ? '#DC2626'
-      : variant === 'open'
-        ? ui.primary
-        : variant === 'in_progress'
-          ? '#166534'
-          : '#6B7280';
-
-  const showOfferBadge = variant === 'offers_waiting' && offerCount > 0 && !matched;
+  const showOfferHint = variant === 'offers_waiting' && offerCount > 0 && !matched;
+  const showSubtitle = Boolean(titleContext?.trim());
 
   const statusPillEl = (
     <View style={[styles.statusPill, { backgroundColor: status.bg }]}>
@@ -199,122 +148,74 @@ export function ActivityOwnerRequestCard({
     </View>
   );
 
-  const titleEl = (
-    <Text
-      style={[
-        styles.title,
-        variant === 'archive' && styles.titleArchive,
-        isCompact && styles.titleCompact,
-        !isCompact && styles.titleWide,
-      ]}
-      numberOfLines={2}
-    >
-      {title}
-    </Text>
-  );
+  const metaArchive = variant === 'archive';
 
-  const priceEl = (
-    <Text style={[styles.priceRow, variant === 'archive' && styles.metaArchive]} numberOfLines={1}>
-      <Text style={[styles.priceEm, isCompact && styles.priceEmCompact]}>{priceLine}</Text>
-      <Text style={[styles.durationPart, isCompact && styles.durationPartCompact]}> • {duration}</Text>
-    </Text>
-  );
-
-  const metaEl = (
-    <View style={[styles.metaRow, isCompact && styles.metaRowCompact]}>
-      <View style={styles.metaItem}>
-        <Ionicons
-          name={req.how === 'delivery_only' ? 'car-outline' : 'hand-left-outline'}
-          size={14}
-          color={variant === 'archive' ? '#9CA3AF' : ui.textSecondary}
-        />
-        <Text style={[styles.metaText, variant === 'archive' && styles.metaArchive]} numberOfLines={1}>
-          {deliveryLine}
-        </Text>
-      </View>
-      <Text style={[styles.metaDot, variant === 'archive' && styles.metaArchive]}>·</Text>
-      <View style={styles.metaItem}>
-        <Ionicons name="location-outline" size={14} color={variant === 'archive' ? '#9CA3AF' : ui.textSecondary} />
-        <Text style={[styles.metaText, variant === 'archive' && styles.metaArchive]} numberOfLines={1}>
-          {distanceLine}
-        </Text>
-      </View>
-      {timePart != null ? (
-        <>
-          <Text style={[styles.metaDot, variant === 'archive' && styles.metaArchive]}>·</Text>
-          <Text style={[styles.metaText, variant === 'archive' && styles.metaArchive]} numberOfLines={1}>
-            {timePart}
+  const inner = (
+    <View style={styles.cardInner}>
+      <View style={styles.topRow}>
+        <View style={styles.titleBlock}>
+          <Text style={[styles.cardTitle, metaArchive && styles.cardTitleArchive]} numberOfLines={2}>
+            {titlePrimary}
           </Text>
-        </>
-      ) : null}
-    </View>
-  );
-
-  const thumbEl = (
-    <View style={[styles.thumb, { backgroundColor: thumbBg }]}>
-      <Ionicons name="construct" size={isCompact ? 24 : 26} color={thumbIcon} />
-    </View>
-  );
-
-  const ctaEl = (
-    <View
-      style={[styles.ctaCircle, { backgroundColor: ctaBg }, isCompact && styles.ctaCircleCompact]}
-      accessibilityElementsHidden
-      importantForAccessibility="no-hide-descendants"
-    >
-      <Ionicons name="chevron-forward" size={isCompact ? 20 : 22} color={ctaIcon} />
-    </View>
-  );
-
-  const inner = isCompact ? (
-    <View style={styles.cardInnerCompact}>
-      {showOfferBadge ? (
-        <View style={styles.compactOfferBanner}>
-          <ActivityRequestOfferBadge count={offerCount} compact fullWidth />
+          {showSubtitle ? (
+            <Text style={styles.cardSubtitle} numberOfLines={1}>
+              {titleContext}
+            </Text>
+          ) : null}
+          {showOfferHint ? (
+            <Text style={styles.offerHint} accessibilityLabel={`${offerCount} offers awaiting your response`}>
+              {offerCount === 1 ? '1 offer awaiting your response' : `${offerCount} offers awaiting your response`}
+            </Text>
+          ) : null}
+          <View style={styles.pillRow}>{statusPillEl}</View>
         </View>
-      ) : null}
+        <Ionicons
+          name="chevron-forward"
+          size={18}
+          color={metaArchive ? '#9CA3AF' : 'rgba(11, 31, 58, 0.56)'}
+          style={styles.chevron}
+        />
+      </View>
 
-      <View style={styles.compactMainRelative}>
-        <View style={[styles.compactTextBlock, { paddingRight: CTA_HIT + 4 }]}>
-          <View style={styles.compactThumbTitleRow}>
-            {thumbEl}
-            <View style={styles.compactTitleColumn}>
-              {titleEl}
-              <View style={styles.compactStatusWrap}>{statusPillEl}</View>
-            </View>
-          </View>
-          <View style={styles.compactPriceWrap}>{priceEl}</View>
-          {metaEl}
+      <View style={[styles.metaRow, metaArchive && styles.metaRowArchive]}>
+        <Text style={[styles.metaStrong, metaArchive && styles.metaMuted]} numberOfLines={1}>
+          {priceLine}
+        </Text>
+        <Text style={[styles.metaSep, metaArchive && styles.metaMuted]}>·</Text>
+        <Text style={[styles.metaRest, metaArchive && styles.metaMuted]} numberOfLines={1}>
+          {duration}
+        </Text>
+        <Text style={[styles.metaSep, metaArchive && styles.metaMuted]}>·</Text>
+        <View style={styles.metaIconPair}>
+          <Ionicons
+            name={req.how === 'delivery_only' ? 'car-outline' : 'hand-left-outline'}
+            size={12}
+            color={metaArchive ? '#9CA3AF' : 'rgba(11, 31, 58, 0.52)'}
+          />
+          <Text style={[styles.metaRest, metaArchive && styles.metaMuted]} numberOfLines={1}>
+            {deliveryLine}
+          </Text>
         </View>
-        <View style={styles.compactCtaAnchor} pointerEvents="none">
-          {ctaEl}
+        <Text style={[styles.metaSep, metaArchive && styles.metaMuted]}>·</Text>
+        <View style={styles.metaIconPair}>
+          <Ionicons name="location-outline" size={12} color={metaArchive ? '#9CA3AF' : 'rgba(11, 31, 58, 0.52)'} />
+          <Text style={[styles.metaRest, metaArchive && styles.metaMuted]} numberOfLines={1}>
+            {distanceLine}
+          </Text>
         </View>
+        {timePart != null ? (
+          <>
+            <Text style={[styles.metaSep, metaArchive && styles.metaMuted]}>·</Text>
+            <Text style={[styles.metaRest, metaArchive && styles.metaMuted]} numberOfLines={1}>
+              {timePart}
+            </Text>
+          </>
+        ) : null}
       </View>
     </View>
-  ) : (
-    <View style={styles.cardInnerWide}>
-      {thumbEl}
-      <View style={styles.wideMainCol}>
-        <View style={styles.wideTopRow}>
-          <View style={styles.wideBadgeSlot}>
-            {showOfferBadge ? <ActivityRequestOfferBadge count={offerCount} /> : null}
-          </View>
-          {statusPillEl}
-        </View>
-        {titleEl}
-        {priceEl}
-        {metaEl}
-      </View>
-      <View style={styles.wideCtaCol}>{ctaEl}</View>
-    </View>
   );
 
-  const shellStyle = [
-    styles.cardWrap,
-    leftAccent,
-    variant === 'archive' && styles.cardArchive,
-    disabled && { opacity: 0.55 },
-  ];
+  const shellStyle = [styles.cardWrap, metaArchive && styles.cardWrapArchive, disabled && { opacity: 0.55 }];
 
   if (nestedInSwipeable) {
     return <View style={shellStyle}>{inner}</View>;
@@ -331,265 +232,166 @@ export function ActivityOwnerRequestCard({
   );
 }
 
+const cardShadow = Platform.select({
+  ios: {
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  android: { elevation: 2 },
+  default: {},
+});
+
 const styles = StyleSheet.create({
   cardWrap: {
-    ...cardChrome,
-    marginBottom: 12,
-    borderLeftWidth: 4,
-    borderLeftColor: 'transparent',
-    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(11, 31, 58, 0.14)',
+    marginBottom: 8,
+    overflow: 'visible',
+    ...cardShadow,
   },
-  cardAccentOffers: {
-    borderLeftColor: '#FCA5A5',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  cardAccentOpen: {
-    borderLeftColor: '#93C5FD',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-    elevation: 1,
-  },
-  cardAccentInProgress: {
-    borderLeftColor: '#86EFAC',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 5,
-    elevation: 1,
-  },
-  cardAccentArchive: {
-    borderLeftColor: '#D1D5DB',
-    opacity: 0.92,
-  },
-  cardArchive: {
-    backgroundColor: '#FAFAFA',
+  cardWrapArchive: {
+    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(11, 31, 58, 0.14)',
+    ...cardShadow,
   },
   cardPressed: {
     opacity: 0.94,
+    backgroundColor: ui.surfaceInput,
   },
-
-  /** ---- Mobile-first (compact) ---- */
-  cardInnerCompact: {
-    flexDirection: 'column',
-    alignItems: 'stretch',
-    paddingVertical: 14,
-    paddingHorizontal: 12,
+  cardInner: {
+    paddingTop: 9,
+    paddingBottom: 9,
+    paddingLeft: 14,
+    paddingRight: 10,
   },
-  compactOfferBanner: {
-    marginBottom: 12,
-    alignSelf: 'stretch',
-    maxWidth: '100%',
-  },
-  offerBadge: {
-    alignSelf: 'flex-start',
-    flexShrink: 0,
-    flexGrow: 0,
-    maxWidth: '100%',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: '#FEE2E2',
-    borderWidth: 1,
-    borderColor: 'rgba(220, 38, 38, 0.25)',
-  },
-  offerBadgeFullWidth: {
-    alignSelf: 'stretch',
-  },
-  offerBadgeText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#B91C1C',
-    letterSpacing: 0.15,
-    flexShrink: 0,
-  },
-  offerBadgeTextCompact: {
-    fontSize: 11,
-    letterSpacing: 0.1,
-  },
-  compactMainRelative: {
-    position: 'relative',
-    alignSelf: 'stretch',
-  },
-  compactTextBlock: {
-    minWidth: 0,
-    flexShrink: 1,
-  },
-  compactThumbTitleRow: {
+  topRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-  },
-  compactTitleColumn: {
-    flex: 1,
-    minWidth: 0,
-  },
-  compactStatusWrap: {
-    marginTop: 10,
-    alignSelf: 'flex-start',
-    flexShrink: 0,
-  },
-  compactPriceWrap: {
-    marginTop: 12,
-  },
-  compactCtaAnchor: {
-    position: 'absolute',
-    right: 0,
-    bottom: 0,
-    width: CTA_HIT,
-    height: CTA_HIT,
     alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  /** ---- Tablet / desktop (wide) ---- */
-  cardInnerWide: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    paddingVertical: 14,
-    paddingHorizontal: 12,
-    gap: 12,
-  },
-  wideMainCol: {
-    flex: 1,
-    minWidth: 0,
-  },
-  wideTopRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
     justifyContent: 'space-between',
-    gap: 10,
-    marginBottom: 8,
+    gap: 4,
   },
-  wideBadgeSlot: {
+  titleBlock: {
     flex: 1,
     minWidth: 0,
-    marginRight: 8,
-    flexShrink: 1,
-    maxWidth: '72%',
+    paddingRight: 2,
   },
-  wideCtaCol: {
-    justifyContent: 'center',
+  chevron: {
     flexShrink: 0,
+    alignSelf: 'center',
+    opacity: 1,
   },
-
-  thumb: {
-    width: 56,
-    height: 56,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
+  cardTitle: {
+    fontSize: 19,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    lineHeight: 25,
+    letterSpacing: -0.2,
+  },
+  cardTitleArchive: {
+    color: '#6B7280',
+  },
+  cardSubtitle: {
+    marginTop: 3,
+    fontSize: 13,
+    fontWeight: '500',
+    color: ui.textSecondary,
+    lineHeight: 18,
+    opacity: 0.95,
+  },
+  offerHint: {
+    marginTop: 5,
+    fontSize: 12,
+    fontWeight: '600',
+    color: ui.textSecondary,
+    opacity: 0.88,
+  },
+  offerHintChip: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(254, 242, 242, 0.85)',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(0,0,0,0.06)',
-    flexShrink: 0,
+    borderColor: 'rgba(220, 38, 38, 0.12)',
+  },
+  offerHintChipFull: {
+    alignSelf: 'stretch',
+  },
+  offerHintChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#9B1C1C',
+    letterSpacing: 0.12,
+  },
+  offerHintChipTextCompact: {
+    fontSize: 11,
+  },
+  pillRow: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
   },
   statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
     borderRadius: 999,
-    flexShrink: 0,
-    flexGrow: 0,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(11, 31, 58, 0.10)',
   },
   statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
     flexShrink: 0,
   },
   statusPillText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
     flexShrink: 0,
-  },
-  title: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: ui.textPrimary,
-    lineHeight: 21,
-  },
-  titleCompact: {
-    fontSize: 15,
-    lineHeight: 20,
-  },
-  titleArchive: {
-    color: '#6B7280',
-  },
-  titleWide: {
-    marginTop: 4,
-  },
-  priceRow: {
-    flexShrink: 1,
-  },
-  priceEm: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: ui.textPrimary,
-    letterSpacing: -0.4,
-  },
-  priceEmCompact: {
-    fontSize: 16,
-  },
-  durationPart: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: ui.textSecondary,
-  },
-  durationPartCompact: {
-    fontSize: 13,
-  },
-  metaArchive: {
-    color: '#9CA3AF',
   },
   metaRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
     gap: 4,
-    marginTop: 10,
+    marginTop: 8,
+    rowGap: 3,
   },
-  metaRowCompact: {
-    marginTop: 12,
+  metaRowArchive: {
+    opacity: 0.95,
   },
-  metaItem: {
+  metaStrong: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: 'rgba(17, 24, 39, 0.96)',
+    flexShrink: 0,
+  },
+  metaSep: {
+    fontSize: 11,
+    color: 'rgba(55, 65, 81, 0.62)',
+    fontWeight: '600',
+    flexShrink: 0,
+  },
+  metaRest: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: 'rgba(55, 65, 81, 0.94)',
+    flexShrink: 1,
+  },
+  metaMuted: {
+    color: '#9CA3AF',
+  },
+  metaIconPair: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    maxWidth: '100%',
+    gap: 3,
     flexShrink: 1,
-  },
-  metaText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: ui.textSecondary,
-    flexShrink: 1,
-  },
-  metaDot: {
-    fontSize: 12,
-    color: ui.textMuted,
-    fontWeight: '700',
-    flexShrink: 0,
-  },
-  ctaCircle: {
-    width: CTA_SIZE,
-    height: CTA_SIZE,
-    borderRadius: CTA_SIZE / 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(0,0,0,0.06)',
-    flexShrink: 0,
-  },
-  ctaCircleCompact: {
-    width: CTA_HIT,
-    height: CTA_HIT,
-    borderRadius: CTA_HIT / 2,
+    minWidth: 0,
   },
 });

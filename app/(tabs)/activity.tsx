@@ -1024,6 +1024,9 @@ export default function ActivityScreen() {
 
   function renderMyOfferRow(o: Offer) {
     const req = requests.find((r) => r.timestamp === o.requestId);
+    const rowId = req ? getRequestSupabaseRowId(req as Record<string, unknown>) : null;
+    const requestIdForOffer =
+      typeof rowId === 'string' && rowId.trim().length > 0 ? rowId.trim() : String(o.requestId);
     const title = String((req as { toolName?: string } | undefined)?.toolName ?? '').trim() || 'Equipment request';
     const st = getOutgoingOfferStatus(o, req);
     const pill = statusPillStyle(st);
@@ -1034,7 +1037,11 @@ export default function ActivityScreen() {
         onPress={() =>
           router.push({
             pathname: '/offer-detail',
-            params: { requestId: String(o.requestId), offerId: o.id },
+            params: {
+              requestId: requestIdForOffer,
+              offerId: o.id,
+              view: 'full',
+            },
           })
         }
         style={({ pressed }) => [styles.offerRowCard, pressed && styles.offerRowCardPressed]}
@@ -1402,26 +1409,28 @@ export default function ActivityScreen() {
                     </Text>
                   ) : activeTabRequestsPool.length === 0 ? null : (
                     <>
-                      <ActivityRequestSectionHeader
-                        iconName="flash"
-                        iconBg="#FEE2E2"
-                        iconColor="#DC2626"
-                        title="OFFERS WAITING"
-                        count={offersWaitingOfferBadgeCount}
-                        description="Requests that have offers awaiting your response"
-                        expanded={offersWaitingExpanded}
-                        onToggleExpand={() => setOffersWaitingExpanded((v) => !v)}
-                        countTone="danger"
-                      />
-                      {offersWaitingExpanded
-                        ? offersWaitingSorted.map((request, idx) =>
-                            renderOwnerRequestRow(request, idx, 'offers_waiting')
-                          )
-                        : null}
-                      <View style={styles.activityRequestsSecondSection}>
+                      <View style={styles.ownerRequestSectionShell}>
+                        <ActivityRequestSectionHeader
+                          iconName="flash"
+                          iconBg="rgba(254, 242, 242, 0.9)"
+                          iconColor="#C2410C"
+                          title="OFFERS WAITING"
+                          count={offersWaitingOfferBadgeCount}
+                          description="Requests with offers awaiting your response"
+                          expanded={offersWaitingExpanded}
+                          onToggleExpand={() => setOffersWaitingExpanded((v) => !v)}
+                          countTone="danger"
+                        />
+                        {offersWaitingExpanded
+                          ? offersWaitingSorted.map((request, idx) =>
+                              renderOwnerRequestRow(request, idx, 'offers_waiting')
+                            )
+                          : null}
+                      </View>
+                      <View style={[styles.ownerRequestSectionShell, styles.ownerRequestSectionShellSpaced]}>
                         <ActivityRequestSectionHeader
                           iconName="time-outline"
-                          iconBg="#DBEAFE"
+                          iconBg="rgba(239, 246, 255, 0.95)"
                           iconColor="#2563EB"
                           title="OPEN REQUESTS"
                           count={openRequestsSorted.length}
@@ -1440,14 +1449,14 @@ export default function ActivityScreen() {
                             )
                           : null}
                       </View>
-                      <View style={styles.activityRequestsSecondSection}>
+                      <View style={[styles.ownerRequestSectionShell, styles.ownerRequestSectionShellSpaced]}>
                         <ActivityRequestSectionHeader
                           iconName="checkmark-circle-outline"
-                          iconBg="#DCFCE7"
+                          iconBg="rgba(236, 253, 245, 0.95)"
                           iconColor="#15803D"
                           title="IN PROGRESS"
                           count={inProgressSorted.length}
-                          description="Match accepted or rental underway — pickup, delivery, or active"
+                          description="Match accepted or rental underway"
                           expanded={inProgressExpanded}
                           onToggleExpand={() => setInProgressExpanded((v) => !v)}
                           countTone="success"
@@ -2137,7 +2146,14 @@ const styles = StyleSheet.create({
     marginBottom: 9,
     marginTop: 2,
   },
-  activityRequestsSecondSection: {
+  /** Transparent grouping only — request cards carry surface; avoids nested rounded compositing. */
+  ownerRequestSectionShell: {
+    backgroundColor: 'transparent',
+    paddingHorizontal: 12,
+    paddingTop: 7,
+    paddingBottom: 12,
+  },
+  ownerRequestSectionShellSpaced: {
     marginTop: 18,
   },
   ownerRequestSwipeHit: {
@@ -2330,7 +2346,7 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   cardRowWrap: {
-    marginBottom: 14,
+    marginBottom: 15,
   },
   rightActionsRow: {
     flexDirection: 'row',

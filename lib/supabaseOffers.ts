@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import type { NegotiationDeliveryMethod } from '@/lib/negotiationDelivery';
 import type { NegotiationOfferStatus, Offer } from '@/lib/negotiationOfferTypes';
+import { OFFER_EVIDENCE_SCHEMA_VERSION, parseStoredOfferEvidence } from '@/lib/offerEvidencePhotos';
 import { PROFILE_NAME_FALLBACK } from '@/lib/profileConstants';
 import { fetchAndMergeProfileNames, mergeProfileRowsFromServer, getRemoteDisplayNameForUserId } from '@/lib/remoteProfileCache';
 import { isUuidString } from '@/lib/requestOwnership';
@@ -229,6 +230,14 @@ export function mapSupabaseOfferRowToOffer(
       .filter((x): x is string => typeof x === 'string' && x.trim() !== '')
       .map((s) => s.trim());
     if (urls.length > 0) out.offer_images = urls;
+  }
+
+  const rawEv = row.offer_evidence ?? row.offerEvidence;
+  if (rawEv != null && typeof rawEv === 'object') {
+    const photos = parseStoredOfferEvidence(rawEv);
+    if (photos.length > 0) {
+      out.offer_evidence = { v: OFFER_EVIDENCE_SCHEMA_VERSION, photos };
+    }
   }
 
   const prof = readProfilesFromOfferRow(row);

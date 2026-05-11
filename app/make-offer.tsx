@@ -1,12 +1,12 @@
-import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import { Alert, Keyboard, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { numberPadAccessoryProps } from '@/components/NumberPadKeyboardAccessory';
+import { MakeOfferVerificationPhotosSection } from '@/components/makeOffer/MakeOfferVerificationPhotosSection';
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
@@ -39,16 +39,21 @@ import {
   mockMakeOfferReplacementValueInput,
   useDevPageAutofill,
 } from '@/lib/devTools';
+import {
+  bucketsToStoredEvidence,
+  emptyOfferEvidenceBuckets,
+  evidenceBucketsFromEntries,
+  flattenOfferImageUrlsFromEvidence,
+  getOfferEvidenceEntriesForOffer,
+} from '@/lib/offerEvidencePhotos';
+import type { PickupPhotoCategory } from '@/lib/pickupVerificationPhotoBuckets';
 import { uploadOfferImage } from '@/lib/uploadOfferImage';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { addOffer, getOfferByRequestAndRenterId, posterCounterOffersRemainingForRenter, useOffersStore } from '@/store/offersStore';
 import { getRequestBySupabaseId } from '@/store/requestsStore';
 
-const THUMB = 60;
-const THUMB_GAP = 8;
 const PHOTO_BORDER = '#D1D5DB';
-const HELPER_GRAY = '#6B7280';
 const MAKE_OFFER_WEB_FILE_INPUT_ID = 'make-offer-file-input';
 function firstParam(v: string | string[] | undefined): string | undefined {
   if (v == null) return undefined;
@@ -114,7 +119,9 @@ export default function MakeOfferScreen() {
   const [messageDraft, setMessageDraft] = useState('');
   const [brandModelDraft, setBrandModelDraft] = useState('');
   const [descriptionDraft, setDescriptionDraft] = useState('');
-  const [images, setImages] = useState<string[]>([]);
+  const [evidenceBuckets, setEvidenceBuckets] = useState(() => emptyOfferEvidenceBuckets());
+  const webEvidenceCategoryRef = useRef<PickupPhotoCategory | null>(null);
+  const hydratedOfferIdRef = useRef<string | null>(null);
   const [uploadingPhotos, setUploadingPhotos] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [replacementValueDraft, setReplacementValueDraft] = useState('');
@@ -157,24 +164,49 @@ export default function MakeOfferScreen() {
     );
   }, [requestIdStr, request]);
 
+  React.useEffect(() => {
+    hydratedOfferIdRef.current = null;
+    setEvidenceBuckets(emptyOfferEvidenceBuckets());
+  }, [requestIdStr]);
+
+  React.useEffect(() => {
+    const ex = existingForThread;
+    if (!ex?.id) return;
+    if (hydratedOfferIdRef.current === ex.id) return;
+    const entries = getOfferEvidenceEntriesForOffer(ex);
+    if (entries.length === 0) return;
+    hydratedOfferIdRef.current = ex.id;
+    setEvidenceBuckets(evidenceBucketsFromEntries(entries));
+  }, [existingForThread?.id, existingForThread?.offer_evidence, existingForThread?.offer_images]);
+
   useFocusEffect(
     useCallback(() => {
-      const { capturedPhotoUris, setCapturedPhotoUris } = useCameraSessionStore.getState();
+      const st = useCameraSessionStore.getState();
+      const { capturedPhotoUris, setCapturedPhotoUris } = st;
       if (capturedPhotoUris.length === 0) return;
+      const category = st.makeOfferEvidenceCategory ?? 'item';
       void (async () => {
         setUploadingPhotos(true);
         try {
+          const uploaded: string[] = [];
           for (const uri of capturedPhotoUris) {
             if (!uri) continue;
-            const url = await uploadOfferImage(uri);
-            setImages((prev) => [...prev, url]);
+            uploaded.push(await uploadOfferImage(uri));
           }
+          setEvidenceBuckets((prev) => {
+            if (category === 'serial' || category === 'timestamp_proof') {
+              const last = uploaded[uploaded.length - 1];
+              return { ...prev, [category]: last ? [last] : [] };
+            }
+            return { ...prev, [category]: [...(prev[category] ?? []), ...uploaded] };
+          });
         } catch (e) {
           console.error('[make-offer] camera session upload failed', e);
           showFeedbackToast('Could not upload one or more photos. Try again.');
         } finally {
           setUploadingPhotos(false);
           setCapturedPhotoUris([]);
+          st.setMakeOfferEvidenceCategory(null);
         }
       })();
     }, [])
@@ -207,38 +239,33 @@ export default function MakeOfferScreen() {
 
   useDevPageAutofill(devAutofillMakeOffer, { screenLabel: 'Make offer' });
 
-  const goToCamera = useCallback(() => {
-    if (Platform.OS === 'web') {
-      document.getElementById(MAKE_OFFER_WEB_FILE_INPUT_ID)?.click();
-      return;
-    }
-    useCameraSessionStore.getState().setRentalEvidenceSession(null);
-    routerNav.push('/camera');
-  }, [routerNav]);
-
-  const handlePickImages = async () => {
-    if (Platform.OS === 'web') {
-      document.getElementById(MAKE_OFFER_WEB_FILE_INPUT_ID)?.click();
-      return;
-    }
+  const pickEvidenceFromLibrary = useCallback(async (category: PickupPhotoCategory) => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
       Alert.alert('Photos access', 'Allow photo library access in Settings to attach photos to your offer.');
       return;
     }
+    const multiple = category === 'item' || category === 'additional';
     setUploadingPhotos(true);
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsMultipleSelection: true,
+        allowsMultipleSelection: multiple,
         quality: 0.85,
       });
       if (!result.canceled) {
+        const uploaded: string[] = [];
         for (const asset of result.assets) {
           if (!asset.uri) continue;
-          const url = await uploadOfferImage(asset.uri);
-          setImages((prev) => [...prev, url]);
+          uploaded.push(await uploadOfferImage(asset.uri));
         }
+        setEvidenceBuckets((prev) => {
+          if (category === 'serial' || category === 'timestamp_proof') {
+            const last = uploaded[uploaded.length - 1];
+            return { ...prev, [category]: last ? [last] : [] };
+          }
+          return { ...prev, [category]: [...(prev[category] ?? []), ...uploaded] };
+        });
       }
     } catch (e) {
       console.error('[make-offer] image upload failed', e);
@@ -246,7 +273,36 @@ export default function MakeOfferScreen() {
     } finally {
       setUploadingPhotos(false);
     }
-  };
+  }, []);
+
+  const openEvidenceAddMenu = useCallback(
+    (category: PickupPhotoCategory) => {
+      const runLibrary = () => {
+        void pickEvidenceFromLibrary(category);
+      };
+      const runCamera = () => {
+        const st = useCameraSessionStore.getState();
+        st.setRentalEvidenceSession(null);
+        st.setMakeOfferEvidenceCategory(category);
+        routerNav.push('/camera');
+      };
+      if (Platform.OS === 'web') {
+        webEvidenceCategoryRef.current = category;
+        const el = document.getElementById(MAKE_OFFER_WEB_FILE_INPUT_ID) as HTMLInputElement | null;
+        if (el) {
+          el.multiple = category === 'item' || category === 'additional';
+        }
+        el?.click();
+        return;
+      }
+      Alert.alert('Add verification photo', 'Choose a source.', [
+        { text: 'Take photo', onPress: runCamera },
+        { text: 'Photo library', onPress: runLibrary },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    },
+    [routerNav, pickEvidenceFromLibrary]
+  );
 
   const onSubmit = () => {
     if (!request || !requestIdStr || isPoster) return;
@@ -276,6 +332,8 @@ export default function MakeOfferScreen() {
       .join('\n\n');
 
     void (async () => {
+      const storedEvidence = bucketsToStoredEvidence(evidenceBuckets);
+      const flatUrls = storedEvidence ? flattenOfferImageUrlsFromEvidence(storedEvidence.photos) : [];
       const ok = await addOffer(request.timestamp, requestIdStr, {
         price: n,
         message: finalMessage || undefined,
@@ -283,7 +341,8 @@ export default function MakeOfferScreen() {
           method: negotiationDeliveryMethod,
           fee: negotiationDeliveryMethod === 'owner_delivery' ? deliveryFeeNum : null,
         },
-        ...(images.length > 0 ? { offer_images: images } : {}),
+        offer_images: flatUrls,
+        offer_evidence: storedEvidence,
       });
       if (!ok) {
         showFeedbackToast('Could not send offer. Check connection and that the request is open.');
@@ -447,54 +506,56 @@ export default function MakeOfferScreen() {
               <TextInput value={messageDraft} onChangeText={setMessageDraft} style={[styles.input, { height: 100 }]} multiline />
             </View>
 
-            <View style={styles.sectionCard}>
-              <Text style={styles.fieldLabel}>Photos</Text>
-              <View style={styles.photoActionRow}>
-                <Pressable style={[styles.compactBtn, uploadingPhotos && { opacity: 0.72 }]} onPress={goToCamera} disabled={uploadingPhotos}>
-                  <Text style={styles.compactBtnText}>Add Photos</Text>
-                </Pressable>
-                <Pressable style={styles.compactBtn} onPress={handlePickImages} disabled={uploadingPhotos} pressOpacityFeedback={false}>
-                  <Text style={styles.compactBtnText}>{uploadingPhotos ? 'Uploading…' : 'Library'}</Text>
-                </Pressable>
-              </View>
-              {Platform.OS === 'web' ? (
-                <input id={MAKE_OFFER_WEB_FILE_INPUT_ID} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+            {Platform.OS === 'web' ? (
+              <input
+                id={MAKE_OFFER_WEB_FILE_INPUT_ID}
+                type="file"
+                accept="image/*"
+                multiple
+                style={{ display: 'none' }}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                   const files = e.target.files;
+                  const category = webEvidenceCategoryRef.current ?? 'item';
                   if (!files?.length) return;
                   void (async () => {
                     setUploadingPhotos(true);
                     try {
+                      const uploaded: string[] = [];
                       for (const file of Array.from(files)) {
                         const uri = URL.createObjectURL(file);
-                        const url = await uploadOfferImage(uri);
-                        setImages((prev) => [...prev, url]);
+                        uploaded.push(await uploadOfferImage(uri));
                       }
+                      setEvidenceBuckets((prev) => {
+                        if (category === 'serial' || category === 'timestamp_proof') {
+                          const last = uploaded[uploaded.length - 1];
+                          return { ...prev, [category]: last ? [last] : [] };
+                        }
+                        return { ...prev, [category]: [...(prev[category] ?? []), ...uploaded] };
+                      });
                     } catch (err) {
                       console.error('[make-offer] web file upload failed', err);
                       showFeedbackToast('Could not upload one or more photos. Try again.');
                     } finally {
                       setUploadingPhotos(false);
                       e.target.value = '';
+                      webEvidenceCategoryRef.current = null;
                     }
                   })();
-                }} />
-              ) : null}
-              <Text style={styles.photoHelperText}>Photos are optional, but helpful for negotiation context.</Text>
-              {images.length > 0 ? (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.thumbStrip} contentContainerStyle={styles.thumbStripContent}>
-                  {images.map((uri, i) => (
-                    <View key={`${uri}-${i}`} style={styles.thumbWrap}>
-                      <Pressable onPress={() => setPreviewImage(uri)} style={styles.thumbTap}>
-                        <Image source={{ uri }} style={styles.thumb} contentFit="cover" transition={0} />
-                      </Pressable>
-                      <Pressable onPress={() => setImages((prev) => prev.filter((_, idx) => idx !== i))} style={styles.thumbDelete}>
-                        <Ionicons name="close" size={12} color="#fff" />
-                      </Pressable>
-                    </View>
-                  ))}
-                </ScrollView>
-              ) : null}
-            </View>
+                }}
+              />
+            ) : null}
+            <MakeOfferVerificationPhotosSection
+              evidenceBuckets={evidenceBuckets}
+              uploading={uploadingPhotos}
+              onAddCategory={openEvidenceAddMenu}
+              onRemove={(category, index) =>
+                setEvidenceBuckets((prev) => ({
+                  ...prev,
+                  [category]: (prev[category] ?? []).filter((_, i) => i !== index),
+                }))
+              }
+              onPreviewUrl={(uri) => setPreviewImage(uri)}
+            />
 
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Protection & offer terms</Text>
@@ -559,18 +620,7 @@ const styles = StyleSheet.create({
   fieldHint: { marginTop: 6, marginBottom: 8, color: ui.textSecondary, fontSize: 13 },
   stackedFieldLabel: { marginTop: 12 },
   descriptionInput: { height: 100 },
-  fieldLabel: { fontSize: 14, fontWeight: '600', color: '#111827', marginBottom: 6 },
-  photoActionRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
-  compactBtn: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: ui.border, backgroundColor: ui.surfaceInput },
-  compactBtnText: { fontWeight: '600', color: ui.textPrimary, fontSize: 13 },
   termsToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  photoHelperText: { fontSize: 13, lineHeight: 18, color: HELPER_GRAY, marginTop: 4, marginBottom: 8 },
-  thumbStrip: { marginTop: 4, maxHeight: THUMB + 16 },
-  thumbStripContent: { paddingVertical: 4, alignItems: 'center', paddingRight: 8 },
-  thumbWrap: { marginRight: THUMB_GAP },
-  thumbTap: { borderRadius: 8, overflow: 'hidden' },
-  thumb: { width: THUMB, height: THUMB, borderRadius: 8, backgroundColor: '#1F2937' },
-  thumbDelete: { position: 'absolute', top: -5, right: -5, width: 18, height: 18, borderRadius: 9, backgroundColor: 'rgba(17,24,39,0.92)', alignItems: 'center', justifyContent: 'center' },
   input: { borderWidth: 1, padding: 10, borderRadius: 8, marginTop: 6, borderColor: PHOTO_BORDER, color: ui.textPrimary, backgroundColor: ui.surfaceInput },
   breakdownBox: {
     marginTop: 10,

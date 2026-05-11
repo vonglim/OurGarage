@@ -19,6 +19,9 @@ type CameraSessionState = {
   /** When set, `/camera` return should upload to rental verification evidence (not listing/offer). */
   rentalEvidenceSession: RentalEvidenceCameraSession | null;
   setRentalEvidenceSession: (session: RentalEvidenceCameraSession | null) => void;
+  /** When set, `/camera` return on Make Offer flows into this pickup category bucket. */
+  makeOfferEvidenceCategory: PickupPhotoCategory | null;
+  setMakeOfferEvidenceCategory: (category: PickupPhotoCategory | null) => void;
 };
 
 export const useCameraSessionStore = create<CameraSessionState>((set) => ({
@@ -26,4 +29,6 @@ export const useCameraSessionStore = create<CameraSessionState>((set) => ({
   setCapturedPhotoUris: (uris) => set({ capturedPhotoUris: [...uris] }),
   rentalEvidenceSession: null,
   setRentalEvidenceSession: (session) => set({ rentalEvidenceSession: session }),
+  makeOfferEvidenceCategory: null,
+  setMakeOfferEvidenceCategory: (category) => set({ makeOfferEvidenceCategory: category }),
 }));

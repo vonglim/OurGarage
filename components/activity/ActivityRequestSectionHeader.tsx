@@ -14,7 +14,7 @@ type Props = {
   description: string;
   expanded: boolean;
   onToggleExpand: () => void;
-  /** Count pill color — red (urgent), blue (searching), green (in progress), navy default. */
+  /** Tint for count pill — warm (urgent), cool (searching), green (in progress), neutral. */
   countTone?: 'navy' | 'danger' | 'sky' | 'success';
 };
 
@@ -39,9 +39,13 @@ export function ActivityRequestSectionHeader({
           ? styles.countBadgeSuccess
           : styles.countBadgeNavy;
   const countBadgeTextStyle =
-    countTone === 'danger' || countTone === 'sky' || countTone === 'success'
-      ? styles.countBadgeTextOnLight
-      : styles.countBadgeText;
+    countTone === 'danger'
+      ? styles.countBadgeTextDanger
+      : countTone === 'sky'
+        ? styles.countBadgeTextSky
+        : countTone === 'success'
+          ? styles.countBadgeTextSuccess
+          : styles.countBadgeTextNavy;
   return (
     <Pressable
       onPress={onToggleExpand}
@@ -52,7 +56,7 @@ export function ActivityRequestSectionHeader({
       accessibilityLabel={`${title}, ${count} items. ${expanded ? 'Collapse' : 'Expand'}`}
     >
       <View style={[styles.iconWrap, { backgroundColor: iconBg }]}>
-        <Ionicons name={iconName} size={18} color={iconColor} />
+        <Ionicons name={iconName} size={16} color={iconColor} />
       </View>
       <View style={styles.textCol}>
         <View style={styles.titleRow}>
@@ -65,7 +69,7 @@ export function ActivityRequestSectionHeader({
         </View>
         <Text style={styles.description}>{description}</Text>
       </View>
-      <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={22} color={ui.textSecondary} />
+      <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color={ui.textSecondary} />
     </Pressable>
   );
 }
@@ -75,13 +79,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 10,
-    marginBottom: 10,
-    marginTop: 4,
+    marginBottom: 8,
+    marginTop: 2,
   },
   iconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -96,17 +100,20 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   title: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '800',
-    color: ui.primary,
-    letterSpacing: 0.6,
+    color: ui.textSecondary,
+    letterSpacing: 0.55,
+    textTransform: 'uppercase',
   },
   countBadgeNavy: {
     minWidth: 22,
     height: 22,
     paddingHorizontal: 7,
     borderRadius: 11,
-    backgroundColor: ui.primary,
+    backgroundColor: ui.surfaceGrouped,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -115,7 +122,9 @@ const styles = StyleSheet.create({
     height: 22,
     paddingHorizontal: 7,
     borderRadius: 11,
-    backgroundColor: '#DC2626',
+    backgroundColor: 'rgba(254, 242, 242, 0.95)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(220, 38, 38, 0.14)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -124,7 +133,9 @@ const styles = StyleSheet.create({
     height: 22,
     paddingHorizontal: 7,
     borderRadius: 11,
-    backgroundColor: '#2563EB',
+    backgroundColor: 'rgba(239, 246, 255, 0.95)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(37, 99, 235, 0.12)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -133,25 +144,37 @@ const styles = StyleSheet.create({
     height: 22,
     paddingHorizontal: 7,
     borderRadius: 11,
-    backgroundColor: '#16A34A',
+    backgroundColor: 'rgba(236, 253, 245, 0.95)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(22, 163, 74, 0.14)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  countBadgeText: {
+  countBadgeTextNavy: {
     fontSize: 11,
     fontWeight: '800',
-    color: '#fff',
+    color: ui.textPrimary,
   },
-  countBadgeTextOnLight: {
+  countBadgeTextDanger: {
     fontSize: 11,
     fontWeight: '800',
-    color: '#fff',
+    color: '#9B1C1C',
+  },
+  countBadgeTextSky: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#1D4ED8',
+  },
+  countBadgeTextSuccess: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#166534',
   },
   description: {
-    marginTop: 4,
+    marginTop: 2,
     fontSize: 12,
-    lineHeight: 17,
-    color: ui.textSecondary,
+    lineHeight: 16,
+    color: 'rgba(71, 85, 105, 0.92)',
     fontWeight: '500',
   },
 });

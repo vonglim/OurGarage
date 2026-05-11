@@ -1,5 +1,6 @@
 import type { NegotiationDeliveryMethod } from '@/lib/negotiationDelivery';
 import { resolveNegotiationDeliveryForWrite } from '@/lib/negotiationDelivery';
+import type { StoredOfferEvidence } from '@/lib/offerEvidencePhotos';
 import { logOfferSync } from '@/lib/supabaseOfferSync';
 import { getSupabase } from '@/lib/supabase';
 
@@ -55,6 +56,8 @@ export async function upsertNegotiationOfferToSupabase(input: {
   messageKind: OfferMessageKind;
   /** When set (including empty array), persisted on `offers` and copied to this `offer_messages` row. Omit to leave DB unchanged on update. */
   offer_images?: string[];
+  /** When set, persisted on `offers.offer_evidence` (jsonb). Omit to leave unchanged. */
+  offer_evidence?: StoredOfferEvidence | null;
   /** Optional lifecycle counters (anti-spam); omitted fields are not written on update. */
   negotiationLifecycle?: NegotiationLifecycleDbWrite;
   /** When set, persisted on `offers` for the negotiated fulfillment terms. */
@@ -100,6 +103,9 @@ export async function upsertNegotiationOfferToSupabase(input: {
   if (input.offer_images !== undefined) {
     baseFields.offer_images =
       input.offer_images.length > 0 ? input.offer_images.map((u) => String(u).trim()).filter(Boolean) : null;
+  }
+  if (input.offer_evidence !== undefined) {
+    baseFields.offer_evidence = input.offer_evidence;
   }
   const lc = input.negotiationLifecycle;
   if (lc != null) {

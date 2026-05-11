@@ -1,4 +1,5 @@
 import type { NegotiationDeliveryMethod } from '@/lib/negotiationDelivery';
+import type { StoredOfferEvidence } from '@/lib/offerEvidencePhotos';
 
 export type NegotiationOfferStatus =
   | 'pending'
@@ -42,6 +43,8 @@ export type Offer = {
   toolDescription?: string;
   /** From Supabase `offers.offer_images` when present. */
   offer_images?: string[];
+  /** Structured offer-stage verification photos (`offers.offer_evidence` jsonb). */
+  offer_evidence?: StoredOfferEvidence | null;
   messageHistory: OfferMessageEntry[];
   /** Populated from Supabase `select (..., profiles (id, name))` when the embed succeeds. */
   profiles?: { id: string; name: string } | null;

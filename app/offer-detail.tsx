@@ -1,6 +1,6 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -551,23 +551,30 @@ export default function OfferDetailScreen() {
   const isOfferCompareMode = posterHasMultipleComparableOffers && compareParam;
 
   const viewParam = firstParam(params.view);
-  useLayoutEffect(() => {
+  /** Normalize URL to `view=full` + canonical `requestId` (UUID when available). Deferred so we never navigate before the root layout mounts (e.g. Activity → Offers → open thread). */
+  useEffect(() => {
     if (!request || !offer) return;
     if (isOfferCompareMode) return;
-    if (viewParam === 'full') return;
     const rowId = getRequestSupabaseRowId(request as Record<string, unknown>);
     const rid =
       typeof rowId === 'string' && rowId.trim().length > 0 ? rowId.trim() : requestIdStr.trim();
     const requestIdForRoute = (rid.length > 0 ? rid : requestIdStr).trim();
-    router.replace({
-      pathname: '/offer-detail',
-      params: {
-        requestId: requestIdForRoute,
-        offerId: String(offer.id),
-        view: 'full',
-      },
-    });
-  }, [request, offer, isOfferCompareMode, viewParam, requestIdStr, offer?.id]);
+    const offerIdStr = String(offer.id);
+    if (viewParam === 'full' && requestIdStr.trim() === requestIdForRoute && offerIdTrim === offerIdStr) {
+      return;
+    }
+    const handle = setTimeout(() => {
+      router.replace({
+        pathname: '/offer-detail',
+        params: {
+          requestId: requestIdForRoute,
+          offerId: offerIdStr,
+          view: 'full',
+        },
+      });
+    }, 0);
+    return () => clearTimeout(handle);
+  }, [request, offer, isOfferCompareMode, viewParam, requestIdStr, offerIdTrim, offer?.id]);
 
   const requestPricingForSort = useMemo((): RequestPricingContext | null => {
     if (!request) return null;

@@ -19,6 +19,7 @@ import {
 } from '@/lib/negotiationTermSnapshot';
 import { getRequestOwnerId, getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { logOfferSync, syncRequestAndOffersFromSupabase } from '@/lib/supabaseOfferSync';
+import type { StoredOfferEvidence } from '@/lib/offerEvidencePhotos';
 import {
   type NegotiationLifecycleDbWrite,
   upsertNegotiationOfferToSupabase,
@@ -167,6 +168,7 @@ export async function addOffer(
     price: number;
     toolDescription?: string;
     offer_images?: string[];
+    offer_evidence?: StoredOfferEvidence | null;
     negotiationDelivery?: { method: NegotiationDeliveryMethod; fee: number | null };
   }
 ): Promise<boolean> {
@@ -239,6 +241,7 @@ export async function addOffer(
     posterCounterCount: nextPosterCount,
     messageKind,
     ...(opts.offer_images !== undefined ? { offer_images: opts.offer_images } : {}),
+    ...(opts.offer_evidence !== undefined ? { offer_evidence: opts.offer_evidence } : {}),
     ...(opts.negotiationDelivery !== undefined
       ? { negotiationDelivery: opts.negotiationDelivery }
       : {}),
