@@ -21,7 +21,8 @@ const TILE_LABEL: Record<PickupPhotoCategory, string> = {
   additional: 'Additional Photos',
 };
 
-const TILE_ORDER: PickupPhotoCategory[] = ['item', 'serial', 'timestamp_proof', 'additional'];
+/** Make Offer: compact tiles only (no “Additional” bucket on this screen). Order: verification first. */
+const VISIBLE_TILE_ORDER: PickupPhotoCategory[] = ['timestamp_proof', 'item', 'serial'];
 
 const THUMB = 28;
 const THUMB_GAP = 4;
@@ -52,10 +53,9 @@ export function MakeOfferVerificationPhotosSection({
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.tileRow}
       >
-        {TILE_ORDER.map((category) => {
+        {VISIBLE_TILE_ORDER.map((category) => {
           const urls = evidenceBuckets[category] ?? [];
           const count = urls.length;
-          const isSingleSlot = category === 'serial' || category === 'timestamp_proof';
           return (
             <Pressable
               key={category}
@@ -78,9 +78,6 @@ export function MakeOfferVerificationPhotosSection({
               </View>
               <Text style={styles.tileLabel} numberOfLines={2}>
                 {TILE_LABEL[category]}
-              </Text>
-              <Text style={styles.tileHint}>
-                {isSingleSlot ? 'Optional · single' : category === 'item' ? 'Multiple' : 'Optional · multiple'}
               </Text>
               {urls.length > 0 ? (
                 <ScrollView
@@ -180,14 +177,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: ui.textPrimary,
     lineHeight: 14,
-    minHeight: 28,
-  },
-  tileHint: {
-    fontSize: 9,
-    fontWeight: '600',
-    color: ui.textMuted,
     marginBottom: 6,
-    letterSpacing: 0.1,
   },
   thumbScroll: {
     maxHeight: THUMB + 6,

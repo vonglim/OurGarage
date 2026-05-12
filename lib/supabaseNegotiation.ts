@@ -4,6 +4,22 @@ import type { StoredOfferEvidence } from '@/lib/offerEvidencePhotos';
 import { logOfferSync } from '@/lib/supabaseOfferSync';
 import { getSupabase } from '@/lib/supabase';
 
+function stripOfferEvidenceField(row: Record<string, unknown>): Record<string, unknown> {
+  const { offer_evidence: _removed, ...rest } = row;
+  return rest;
+}
+
+/** Remote DB without migration `053_offers_offer_evidence` — PostgREST rejects unknown columns. */
+function isMissingOfferEvidenceColumnError(err: unknown): boolean {
+  if (err == null || typeof err !== 'object') return false;
+  const e = err as { code?: string; message?: string };
+  if (typeof e.message !== 'string') return false;
+  if (!e.message.includes('offer_evidence')) return false;
+  if (e.code === 'PGRST204') return true;
+  const m = e.message.toLowerCase();
+  return m.includes('schema cache') || m.includes('column') || m.includes('could not find');
+}
+
 function receiverIdForOfferMessage(author: string, poster: string | null, renter: string): string | null {
   const a = author.trim();
   const r = renter.trim();
@@ -142,13 +158,21 @@ export async function upsertNegotiationOfferToSupabase(input: {
 
   if (existingId) {
     offerId = existingId;
-    const { error: upErr } = await supabase.from('offers').update(baseFields).eq('id', offerId);
+    let updatePayload: Record<string, unknown> = { ...baseFields };
+    let { error: upErr } = await supabase.from('offers').update(updatePayload).eq('id', offerId);
+    if (upErr && isMissingOfferEvidenceColumnError(upErr) && 'offer_evidence' in updatePayload) {
+      if (__DEV__) {
+        logOfferSync('supabase_response', 'offer update retry without offer_evidence', upErr.message);
+      }
+      updatePayload = stripOfferEvidenceField(updatePayload);
+      ({ error: upErr } = await supabase.from('offers').update(updatePayload).eq('id', offerId));
+    }
     if (upErr) {
       logOfferSync('supabase_response', 'offer update failed', upErr.message);
       return null;
     }
   } else {
-    const insertRow: Record<string, unknown> = {
+    let insertRow: Record<string, unknown> = {
       ...baseFields,
       request_id: input.requestRowId,
       user_id: input.renterId,
@@ -157,11 +181,22 @@ export async function upsertNegotiationOfferToSupabase(input: {
       last_withdrawal_at: lc?.lastWithdrawalAtIso ?? null,
       negotiation_locked: lc?.negotiationLocked ?? false,
     };
-    const { data: ins, error: inErr } = await supabase
+    let { data: ins, error: inErr } = await supabase
       .from('offers')
       .insert(insertRow)
       .select('id')
       .single();
+    if (inErr && isMissingOfferEvidenceColumnError(inErr) && 'offer_evidence' in insertRow) {
+      if (__DEV__) {
+        logOfferSync('supabase_response', 'offer insert retry without offer_evidence', inErr.message);
+      }
+      insertRow = stripOfferEvidenceField(insertRow);
+      ({ data: ins, error: inErr } = await supabase
+        .from('offers')
+        .insert(insertRow)
+        .select('id')
+        .single());
+    }
     if (inErr || !ins || typeof (ins as { id?: unknown }).id !== 'string') {
       if (inErr) logOfferSync('supabase_response', 'offer insert failed', inErr.message);
       return null;

@@ -5,8 +5,10 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import { Alert, Keyboard, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { BackHeader } from '@/components/AppHeaders';
 import { numberPadAccessoryProps } from '@/components/NumberPadKeyboardAccessory';
 import { MakeOfferVerificationPhotosSection } from '@/components/makeOffer/MakeOfferVerificationPhotosSection';
+import { MakeOfferVerificationRequiredAccordion } from '@/components/makeOffer/MakeOfferVerificationRequiredAccordion';
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
@@ -245,7 +247,7 @@ export default function MakeOfferScreen() {
       Alert.alert('Photos access', 'Allow photo library access in Settings to attach photos to your offer.');
       return;
     }
-    const multiple = category === 'item' || category === 'additional';
+    const multiple = category === 'item';
     setUploadingPhotos(true);
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -290,7 +292,7 @@ export default function MakeOfferScreen() {
         webEvidenceCategoryRef.current = category;
         const el = document.getElementById(MAKE_OFFER_WEB_FILE_INPUT_ID) as HTMLInputElement | null;
         if (el) {
-          el.multiple = category === 'item' || category === 'additional';
+          el.multiple = category === 'item';
         }
         el?.click();
         return;
@@ -309,6 +311,12 @@ export default function MakeOfferScreen() {
     const n = parseMoneyToNumber(priceDraft);
     if (!n || n <= 0) {
       showFeedbackToast('Enter a valid offer amount');
+      return;
+    }
+
+    const verificationUrls = evidenceBuckets.timestamp_proof ?? [];
+    if (verificationUrls.length === 0 || !verificationUrls.some((u) => String(u ?? '').trim() !== '')) {
+      showFeedbackToast('Add a verification photo (username and date visible) before sending your offer.');
       return;
     }
 
@@ -366,11 +374,20 @@ export default function MakeOfferScreen() {
   if (makeOfferLifecycleBlock?.kind === 'locked') {
     return (
       <ScreenWrapper style={styles.screenWrap}>
-        <View style={[styles.screen, styles.centered]}>
-          <Text style={styles.headerTitle}>Negotiation closed</Text>
-          <Text style={[styles.muted, { marginTop: 12, textAlign: 'center', paddingHorizontal: 24 }]}>
-            This request is no longer accepting offers from you.
-          </Text>
+        <View style={styles.screen}>
+          <View style={styles.pageHeader}>
+            <BackHeader
+              title="Make an Offer"
+              subtitle={String(request.toolName ?? 'Request')}
+              onBack={() => routerNav.back()}
+            />
+          </View>
+          <View style={styles.blockedMessageWrap}>
+            <Text style={styles.blockedTitle}>Negotiation closed</Text>
+            <Text style={[styles.muted, { marginTop: 12, textAlign: 'center', paddingHorizontal: 24 }]}>
+              This request is no longer accepting offers from you.
+            </Text>
+          </View>
         </View>
       </ScreenWrapper>
     );
@@ -378,12 +395,21 @@ export default function MakeOfferScreen() {
   if (makeOfferLifecycleBlock?.kind === 'cooldown') {
     return (
       <ScreenWrapper style={styles.screenWrap}>
-        <View style={[styles.screen, styles.centered]}>
-          <Text style={styles.headerTitle}>Offer withdrawn</Text>
-          <Text style={[styles.muted, { marginTop: 12, textAlign: 'center', paddingHorizontal: 24 }]}>
-            You can make a new offer in{' '}
-            {formatNegotiationCooldownRemaining(makeOfferLifecycleBlock.remainingMs)}.
-          </Text>
+        <View style={styles.screen}>
+          <View style={styles.pageHeader}>
+            <BackHeader
+              title="Make an Offer"
+              subtitle={String(request.toolName ?? 'Request')}
+              onBack={() => routerNav.back()}
+            />
+          </View>
+          <View style={styles.blockedMessageWrap}>
+            <Text style={styles.blockedTitle}>Offer withdrawn</Text>
+            <Text style={[styles.muted, { marginTop: 12, textAlign: 'center', paddingHorizontal: 24 }]}>
+              You can make a new offer in{' '}
+              {formatNegotiationCooldownRemaining(makeOfferLifecycleBlock.remainingMs)}.
+            </Text>
+          </View>
         </View>
       </ScreenWrapper>
     );
@@ -396,10 +422,18 @@ export default function MakeOfferScreen() {
     <ScreenWrapper style={styles.screenWrap}>
       <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScreenEntrance style={{ flex: 1 }}>
-          <ScrollView style={styles.scroll} contentContainerStyle={{ paddingVertical: 20, paddingHorizontal: 0 }} keyboardShouldPersistTaps="handled">
-            <Text style={styles.headerTitle}>Make an Offer</Text>
-            <Text style={styles.headerSub}>{String(request.toolName ?? 'Request')}</Text>
-
+          <View style={styles.pageHeader}>
+            <BackHeader
+              title="Make an Offer"
+              subtitle={String(request.toolName ?? 'Request')}
+              onBack={() => routerNav.back()}
+            />
+          </View>
+          <ScrollView
+            style={styles.scroll}
+            contentContainerStyle={{ paddingTop: 8, paddingBottom: 28, paddingHorizontal: 0 }}
+            keyboardShouldPersistTaps="handled"
+          >
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Request Summary</Text>
               <Text style={styles.summaryRow}>Requested budget: {listedTotal != null ? formatUsd(listedTotal) : '—'}</Text>
@@ -457,8 +491,8 @@ export default function MakeOfferScreen() {
             <View style={styles.sectionCard}>
               <Text style={styles.label}>Delivery method</Text>
               <Text style={styles.fieldHint}>
-                How you’ll hand off the item. If you offer delivery, you can add a one-time logistics fee below — it’s
-                optional compensation, not open-ended pricing.
+                How you’ll hand off the item. If you choose Owner delivery, add optional one-time logistics compensation
+                below — not open-ended pricing.
               </Text>
               <View style={styles.deliveryOptionsRow}>
                 <Pressable
@@ -498,6 +532,21 @@ export default function MakeOfferScreen() {
                   </Text>
                 </Pressable>
               </View>
+              {negotiationDeliveryMethod === 'owner_delivery' ? (
+                <>
+                  <Text style={[styles.fieldHint, styles.stackedFieldLabel]}>Delivery compensation (one-time)</Text>
+                  <Text style={styles.termsInfoText}>
+                    Optional amount for pickup and return logistics. Enter 0 if you include delivery at no charge.
+                  </Text>
+                  <TextInput
+                    value={deliveryFeeDraft}
+                    onChangeText={(t) => setDeliveryFeeDraft(sanitizeMoneyDigits(t))}
+                    keyboardType="decimal-pad"
+                    style={styles.input}
+                    {...numberPadAccessoryProps()}
+                  />
+                </>
+              ) : null}
             </View>
 
             <View style={styles.sectionCard}>
@@ -556,6 +605,7 @@ export default function MakeOfferScreen() {
               }
               onPreviewUrl={(uri) => setPreviewImage(uri)}
             />
+            <MakeOfferVerificationRequiredAccordion />
 
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>Protection & offer terms</Text>
@@ -572,15 +622,6 @@ export default function MakeOfferScreen() {
                 <Text style={[styles.fieldHint, styles.stackedFieldLabel]}>Late fees</Text>
                 <Text style={styles.termsInfoText}>Late fees are automatically calculated using platform policy.</Text>
                 <Text style={styles.termsInfoSub}>Late returns may incur additional charges.</Text>
-                {negotiationDeliveryMethod === 'owner_delivery' ? (
-                  <>
-                    <Text style={[styles.fieldHint, styles.stackedFieldLabel]}>Delivery compensation (one-time)</Text>
-                    <Text style={styles.termsInfoText}>
-                      Optional amount for pickup and return logistics. Enter 0 if you include delivery at no charge.
-                    </Text>
-                    <TextInput value={deliveryFeeDraft} onChangeText={(t) => setDeliveryFeeDraft(sanitizeMoneyDigits(t))} keyboardType="decimal-pad" style={styles.input} {...numberPadAccessoryProps()} />
-                  </>
-                ) : null}
               </View>
             </View>
 
@@ -611,8 +652,19 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   muted: { color: ui.textSecondary },
-  headerTitle: { fontSize: 22, fontWeight: '700', color: ui.textPrimary },
-  headerSub: { fontSize: 14, marginBottom: 12, color: ui.textSecondary },
+  pageHeader: {
+    paddingBottom: 10,
+    marginBottom: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: ui.border,
+  },
+  blockedTitle: { fontSize: 18, fontWeight: '700', color: ui.textPrimary, textAlign: 'center' },
+  blockedMessageWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
   sectionCard: { borderWidth: StyleSheet.hairlineWidth, borderColor: ui.border, borderRadius: 12, padding: 12, marginBottom: 12, backgroundColor: ui.background },
   sectionTitle: { fontSize: 15, fontWeight: '700', color: ui.textPrimary, marginBottom: 6 },
   summaryRow: { fontSize: 14, color: ui.textSecondary, marginBottom: 2 },
