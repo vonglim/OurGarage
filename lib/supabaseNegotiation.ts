@@ -252,3 +252,235 @@ export async function upsertNegotiationOfferToSupabase(input: {
   logOfferSync('supabase_response', 'upsertNegotiationOfferToSupabase ok', { id: offerId });
   return { id: offerId };
 }
+
+function isUndefinedColumnNegotiation(err: { code?: string; message?: string } | null): boolean {
+  if (!err) return false;
+  if (err.code === '42703') return true;
+  const m = String(err.message ?? '');
+  return /column .+ does not exist/i.test(m) || /Could not find the '.+' column/i.test(m);
+}
+
+function parseMissingColumnNegotiation(message: string): string | null {
+  const m1 = message.match(/column\s+"([^"]+)"\s+of\s+relation/i);
+  if (m1?.[1]) return m1[1];
+  const m2 = message.match(/Could not find the '([^']+)' column/i);
+  if (m2?.[1]) return m2[1];
+  return null;
+}
+
+/**
+ * Negotiation thread keyed by `offers.listing_id` (no `requests` row). Reuses `offer_messages` with `request_id` null.
+ */
+export async function upsertNegotiationListingOfferToSupabase(input: {
+  listingId: string;
+  listingSnapshot: Record<string, unknown>;
+  posterUserId: string | null;
+  renterId: string;
+  currentPrice: number;
+  lastUpdatedBy: string;
+  status?: NegotiationOfferStatus;
+  message?: string;
+  threadEventBody?: string;
+  posterCounterCount?: number;
+  messageKind: OfferMessageKind;
+  offer_images?: string[];
+  offer_evidence?: StoredOfferEvidence | null;
+  toolDescription?: string | null;
+  replacementValue?: number | null;
+  itemCondition?: 'excellent' | 'good' | 'fair' | null;
+  negotiationLifecycle?: NegotiationLifecycleDbWrite;
+  negotiationDelivery?: { method: NegotiationDeliveryMethod; fee: number | null } | null;
+}): Promise<{ id: string } | null> {
+  const supabase = getSupabase();
+  const listingId = input.listingId.trim();
+  const status = input.status ?? 'pending';
+  const msg = input.message?.trim();
+  const threadBody = input.threadEventBody?.trim();
+  const bodyForOfferMessage = threadBody && threadBody.length > 0 ? threadBody : msg;
+
+  logOfferSync('before_write', 'upsertNegotiationListingOfferToSupabase', {
+    listingId,
+    messageKind: input.messageKind,
+  });
+
+  const { data: found, error: selErr } = await supabase
+    .from('offers')
+    .select('id')
+    .eq('listing_id', listingId)
+    .eq('user_id', input.renterId)
+    .maybeSingle();
+
+  if (selErr && __DEV__) console.warn('[Negotiation] select listing offer:', selErr.message);
+
+  const existingId =
+    found && typeof (found as { id?: unknown }).id === 'string'
+      ? String((found as { id: string }).id).trim()
+      : '';
+
+  const baseFields: Record<string, unknown> = {
+    current_price: input.currentPrice,
+    price: input.currentPrice,
+    last_updated_by: input.lastUpdatedBy,
+    status,
+    poster_counter_count: input.posterCounterCount ?? 0,
+    updated_at: new Date().toISOString(),
+    last_negotiation_event_kind: input.messageKind,
+  };
+  if (msg) baseFields.message = msg;
+  if (input.offer_images !== undefined) {
+    baseFields.offer_images =
+      input.offer_images.length > 0 ? input.offer_images.map((u) => String(u).trim()).filter(Boolean) : null;
+  }
+  if (input.offer_evidence !== undefined) {
+    baseFields.offer_evidence = input.offer_evidence;
+  }
+  if (input.toolDescription !== undefined) {
+    const t = input.toolDescription?.trim() ?? '';
+    baseFields.tool_description = t.length > 0 ? t : null;
+  }
+  if (input.replacementValue !== undefined) {
+    const rv = input.replacementValue;
+    baseFields.replacement_value =
+      rv != null && Number.isFinite(rv) && rv > 0 ? rv : null;
+  }
+  if (input.itemCondition !== undefined) {
+    const c = input.itemCondition;
+    baseFields.item_condition =
+      c === 'excellent' || c === 'good' || c === 'fair' ? c : null;
+  }
+  const lc = input.negotiationLifecycle;
+  if (lc != null) {
+    if (lc.negotiationDeclineTotal !== undefined) {
+      baseFields.negotiation_decline_total = lc.negotiationDeclineTotal;
+    }
+    if (lc.withdrawCycleCount !== undefined) {
+      baseFields.withdraw_cycle_count = lc.withdrawCycleCount;
+    }
+    if (lc.lastWithdrawalAtIso !== undefined) {
+      baseFields.last_withdrawal_at = lc.lastWithdrawalAtIso;
+    }
+    if (lc.negotiationLocked !== undefined) {
+      baseFields.negotiation_locked = lc.negotiationLocked;
+    }
+  }
+
+  const writeNegotiationDelivery =
+    input.negotiationDelivery != null ||
+    input.messageKind === 'initial' ||
+    input.messageKind === 'renter_update' ||
+    input.messageKind === 'poster_counter';
+  if (writeNegotiationDelivery) {
+    const resolved = resolveNegotiationDeliveryForWrite({
+      message: msg ?? bodyForOfferMessage,
+      explicit: input.negotiationDelivery ?? undefined,
+      requestHowFallback: null,
+    });
+    baseFields.negotiation_delivery_method = resolved.method;
+    baseFields.negotiation_delivery_fee = resolved.method === 'pickup' ? null : resolved.fee;
+  }
+
+  let offerId: string;
+
+  if (existingId) {
+    offerId = existingId;
+    let updatePayload: Record<string, unknown> = { ...baseFields };
+    let { error: upErr } = await supabase.from('offers').update(updatePayload).eq('id', offerId);
+    if (upErr && isMissingOfferEvidenceColumnError(upErr) && 'offer_evidence' in updatePayload) {
+      updatePayload = stripOfferEvidenceField(updatePayload);
+      ({ error: upErr } = await supabase.from('offers').update(updatePayload).eq('id', offerId));
+    }
+    if (upErr) {
+      logOfferSync('supabase_response', 'listing offer update failed', upErr.message);
+      return null;
+    }
+  } else {
+    let insertRow: Record<string, unknown> = {
+      ...baseFields,
+      request_id: null,
+      listing_id: listingId,
+      listing_snapshot: input.listingSnapshot,
+      user_id: input.renterId,
+      negotiation_decline_total: lc?.negotiationDeclineTotal ?? 0,
+      withdraw_cycle_count: lc?.withdrawCycleCount ?? 0,
+      last_withdrawal_at: lc?.lastWithdrawalAtIso ?? null,
+      negotiation_locked: lc?.negotiationLocked ?? false,
+    };
+
+    let ins: { id?: unknown } | null = null;
+    let inErr: { message?: string; code?: string } | null = null;
+    const maxAttempts = 10;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const res = await supabase.from('offers').insert(insertRow).select('id').single();
+      ins = res.data as { id?: unknown } | null;
+      inErr = res.error as { message?: string; code?: string } | null;
+      if (!inErr) break;
+      if (isMissingOfferEvidenceColumnError(inErr) && 'offer_evidence' in insertRow) {
+        insertRow = stripOfferEvidenceField(insertRow);
+        continue;
+      }
+      if (isUndefinedColumnNegotiation(inErr)) {
+        const col = parseMissingColumnNegotiation(String(inErr.message ?? ''));
+        if (col && Object.prototype.hasOwnProperty.call(insertRow, col)) {
+          const next = { ...insertRow };
+          delete next[col];
+          insertRow = next;
+          if (__DEV__) {
+            logOfferSync('supabase_response', 'listing offer insert strip column', { col, attempt });
+          }
+          continue;
+        }
+        const fallback = ['listing_snapshot', 'listing_id'] as const;
+        let stripped = false;
+        for (const key of fallback) {
+          if (key in insertRow) {
+            const next = { ...insertRow };
+            delete next[key];
+            insertRow = next;
+            stripped = true;
+            break;
+          }
+        }
+        if (!stripped) break;
+        continue;
+      }
+      break;
+    }
+
+    if (inErr || !ins || typeof ins.id !== 'string') {
+      if (inErr) logOfferSync('supabase_response', 'listing offer insert failed', inErr.message);
+      return null;
+    }
+    offerId = String(ins.id);
+    if (__DEV__) {
+      console.log('[listing-offer] successful insert payload keys', Object.keys(insertRow).sort().join(','));
+    }
+  }
+
+  const receiverId = receiverIdForOfferMessage(
+    input.lastUpdatedBy,
+    input.posterUserId,
+    input.renterId
+  );
+
+  const offerMsgRow: Record<string, unknown> = {
+    request_id: null,
+    offer_id: offerId,
+    author_id: input.lastUpdatedBy,
+    receiver_id: receiverId,
+    body: bodyForOfferMessage ? bodyForOfferMessage : null,
+    price: input.currentPrice,
+    kind: input.messageKind,
+  };
+  if (input.offer_images !== undefined) {
+    offerMsgRow.offer_images =
+      input.offer_images.length > 0 ? input.offer_images.map((u) => String(u).trim()).filter(Boolean) : null;
+  }
+  const { error: msgErr } = await supabase.from('offer_messages').insert(offerMsgRow);
+  if (msgErr) {
+    logOfferSync('supabase_response', 'listing offer_messages insert failed', msgErr.message);
+    return null;
+  }
+
+  logOfferSync('supabase_response', 'upsertNegotiationListingOfferToSupabase ok', { id: offerId });
+  return { id: offerId };
+}

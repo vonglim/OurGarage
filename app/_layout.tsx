@@ -231,6 +231,7 @@ export default function RootLayout() {
                   gestureResponseDistance: { start: backSwipeStartDistance },
                 }}
               />
+              {/** LEGACY redirect routes — superseded by `listing` + ListingWizard; implementations in `components/legacy/`. */}
               <Stack.Screen
                 name="rent-out"
                 options={{
@@ -241,6 +242,21 @@ export default function RootLayout() {
               />
               <Stack.Screen name="list-my-tool" />
               <Stack.Screen name="create-listing" />
+              <Stack.Screen
+                name="listing"
+                options={{
+                  gestureEnabled: true,
+                  fullScreenGestureEnabled: false,
+                  gestureResponseDistance: { start: backSwipeStartDistance },
+                }}
+              />
+              <Stack.Screen
+                name="media-capture"
+                options={{
+                  gestureEnabled: false,
+                  animation: 'fade',
+                }}
+              />
               <Stack.Screen name="camera" />
               <Stack.Screen name="rental-agreement" />
               <Stack.Screen name="request-details" />

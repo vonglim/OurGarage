@@ -10,6 +10,7 @@ type MessageUnreadState = {
   hydrate: () => Promise<void>;
   refresh: () => Promise<void>;
   clear: () => void;
+  bumpUnreadForOfferId: (offerId: string) => void;
 };
 
 async function persistUnread(next: Record<string, number>): Promise<void> {
@@ -67,7 +68,21 @@ export const useMessageUnreadStore = create<MessageUnreadState>((set) => ({
     set({ unreadByOfferId: {} });
     void AsyncStorage.removeItem(STORAGE_KEY);
   },
+  bumpUnreadForOfferId: (offerId) => {
+    const id = offerId.trim();
+    if (!id) return;
+    set((s) => {
+      const prev = s.unreadByOfferId[id] ?? 0;
+      const next = { ...s.unreadByOfferId, [id]: prev + 1 };
+      void persistUnread(next);
+      return { unreadByOfferId: next };
+    });
+  },
 }));
+
+export function bumpUnreadForOfferId(offerId: string): void {
+  useMessageUnreadStore.getState().bumpUnreadForOfferId(offerId);
+}
 
 export function useUnreadMessagesTotal(): number {
   const byOffer = useMessageUnreadStore((s) => s.unreadByOfferId);

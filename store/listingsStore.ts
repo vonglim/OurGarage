@@ -23,6 +23,20 @@ export type ToolListing = {
   /** Miles (display). */
   distance: number;
   createdAt: number;
+  /** Supabase `listing_status`: active | paused | draft | archived */
+  listingStatus?: string;
+  /** Optional storefront fields from Listing Wizard (until dedicated API). */
+  meta?: ToolListingMeta;
+};
+
+export type ToolListingMeta = {
+  conditionLabel?: string;
+  includedItems?: string[];
+  handoffSummary?: string;
+  serviceArea?: string;
+  marketValue?: number;
+  verificationStatus?: string;
+  photoCount?: number;
 };
 
 type ListingsState = {

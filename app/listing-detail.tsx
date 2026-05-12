@@ -1,7 +1,7 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert,
   FlatList,
   Image,
   ScrollView,
@@ -19,7 +19,8 @@ import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { ui } from '@/constants/appUi';
 import { useAuthUserId } from '@/lib/authUser';
-import { insertRentalRequest } from '@/lib/insertRentalRequest';
+import { hydrateListingsFromSupabase } from '@/lib/hydrateListingsFromSupabase';
+import { isToolListingOwner } from '@/lib/listingOwnership';
 import { formatUsd } from '@/lib/money';
 import { normalizeListingImages } from '@/lib/normalizeListingImages';
 import { formatMilesShort } from '@/lib/requestDistance';
@@ -28,6 +29,7 @@ import {
   formatListingPriceWithUnit,
   useListingsStore,
 } from '@/store/listingsStore';
+import { showFeedbackToast } from '@/store/feedbackToastStore';
 
 declare const __DEV__: boolean;
 
@@ -76,6 +78,49 @@ export default function ListingDetailScreen() {
     [listings, listingId]
   );
 
+  const heroUrls = useMemo(() => {
+    if (!listing) return [];
+    const row = listing as ListingDetailRow;
+    return normalizeListingImages(row.images)
+      .map((u) => u.trim())
+      .filter(Boolean);
+  }, [listing]);
+
+  const isOwnListing = useMemo(
+    () => isToolListingOwner(listing, currentUserId),
+    [listing, currentUserId]
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      void hydrateListingsFromSupabase();
+    }, [])
+  );
+
+  useEffect(() => {
+    setGalleryIndex(0);
+  }, [listingId]);
+
+  const isOwnListingForPad = useMemo(
+    () => isToolListingOwner(listing, currentUserId),
+    [listing, currentUserId]
+  );
+
+  /** Sticky CTA: renter = 2 buttons + gap; owner = 3 stacked actions */
+  const stickyCtaScrollPaddingBottom =
+    ui.spaceMd +
+    (isOwnListingForPad ? 3 * (ui.padButtonV * 2 + 44) + 2 * 10 : 2 * (ui.padButtonV * 2 + 44) + 10) +
+    insets.bottom +
+    ui.spaceSm;
+
+  const pageWidth = heroWidth > 0 ? heroWidth : windowWidth;
+
+  if (__DEV__ && listing) {
+    const row = listing as ListingDetailRow;
+    console.log('RAW images:', row.images);
+    console.log('NORMALIZED images:', heroUrls);
+  }
+
   if (!listingId || !listing) {
     return (
       <ScreenWrapper style={styles.screenWrap}>
@@ -89,37 +134,8 @@ export default function ListingDetailScreen() {
   }
 
   const row = listing as ListingDetailRow;
+  const meta = row.meta;
   const description = listing.description?.trim() ?? '';
-  const isOwnListing =
-    Boolean(currentUserId) &&
-    Boolean(listing.ownerUserId) &&
-    listing.ownerUserId === currentUserId;
-
-  const heroUrls = useMemo(
-    () =>
-      normalizeListingImages(row.images)
-        .map((u) => u.trim())
-        .filter(Boolean),
-    [row.images]
-  );
-
-  if (__DEV__) {
-    console.log('RAW images:', row.images);
-    console.log('NORMALIZED images:', heroUrls);
-  }
-  const pageWidth = heroWidth > 0 ? heroWidth : windowWidth;
-
-  useEffect(() => {
-    setGalleryIndex(0);
-  }, [listingId]);
-
-  /** Space for sticky CTA: bar top pad + primary button (~line + vertical padding) + safe bottom + small gap */
-  const stickyCtaScrollPaddingBottom =
-    ui.spaceMd +
-    ui.padButtonV * 2 +
-    22 +
-    insets.bottom +
-    ui.spaceSm;
 
   return (
     <ScreenWrapper style={styles.screenWrap}>
@@ -193,6 +209,11 @@ export default function ListingDetailScreen() {
               >
                 <View style={styles.contentBlock}>
                   <Text style={styles.title}>{listing.name}</Text>
+                  {meta?.conditionLabel ? (
+                    <View style={styles.conditionPill}>
+                      <Text style={styles.conditionPillText}>{meta.conditionLabel}</Text>
+                    </View>
+                  ) : null}
                   <Text style={styles.price}>
                     {formatListingPriceWithUnit(
                       priceForDuration(
@@ -209,6 +230,11 @@ export default function ListingDetailScreen() {
                   {isOwnListing ? (
                     <Text style={styles.yourListing}>Your listing</Text>
                   ) : null}
+                  <View style={styles.hostCard}>
+                    <Text style={styles.sectionHeading}>Host</Text>
+                    <Text style={styles.hostName}>{listing.ownerName}</Text>
+                    <Text style={styles.hostMeta}>{listing.rating.toFixed(1)} rating</Text>
+                  </View>
                 </View>
                 <View style={styles.durationSection}>
                   <Text style={styles.durationHeading}>Select duration</Text>
@@ -279,6 +305,65 @@ export default function ListingDetailScreen() {
                     <Text style={styles.description}>{listing.description}</Text>
                   </View>
                 ) : null}
+
+                {meta?.includedItems?.length ? (
+                  <View style={styles.storeSection}>
+                    <Text style={styles.sectionHeading}>What&apos;s included</Text>
+                    <View style={styles.chipRow}>
+                      {meta.includedItems.map((item) => (
+                        <View key={item} style={styles.detailChip}>
+                          <Text style={styles.detailChipText}>{item}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
+
+                {meta?.handoffSummary || meta?.serviceArea ? (
+                  <View style={styles.storeSection}>
+                    <Text style={styles.sectionHeading}>Pickup / delivery</Text>
+                    <View style={styles.logisticsCard}>
+                      {meta.handoffSummary ? (
+                        <Text style={styles.logisticsPrimary}>{meta.handoffSummary}</Text>
+                      ) : null}
+                      {meta.serviceArea ? (
+                        <Text style={styles.logisticsSecondary}>Service area: {meta.serviceArea}</Text>
+                      ) : null}
+                    </View>
+                    <View style={styles.mapPlaceholder}>
+                      <Text style={styles.mapPlaceholderText}>Map preview</Text>
+                    </View>
+                  </View>
+                ) : null}
+
+                <View style={styles.storeSection}>
+                  <Text style={styles.sectionHeading}>Availability</Text>
+                  <Text style={styles.placeholderLine}>Calendar and instant-book will appear here.</Text>
+                </View>
+
+                {meta?.marketValue != null || meta?.verificationStatus || meta?.photoCount != null ? (
+                  <View style={styles.storeSection}>
+                    <Text style={styles.sectionHeading}>Trust & verification</Text>
+                    {meta.marketValue != null ? (
+                      <Text style={styles.trustLine}>Estimated value {formatUsd(meta.marketValue)}</Text>
+                    ) : null}
+                    {meta.photoCount != null ? (
+                      <Text style={styles.trustLine}>{meta.photoCount} photos on file</Text>
+                    ) : null}
+                    {meta.verificationStatus ? (
+                      <Text style={styles.trustLine}>{meta.verificationStatus}</Text>
+                    ) : null}
+                    <Text style={styles.placeholderLineMuted}>
+                      ID and rental history checks will surface here as your storefront grows.
+                    </Text>
+                  </View>
+                ) : null}
+
+                <View style={styles.storeSection}>
+                  <Text style={styles.sectionHeading}>More from this host</Text>
+                  <Text style={styles.placeholderLine}>Related listings will appear here.</Text>
+                </View>
+
                 <View style={styles.protectionBlock}>
                   <ProtectionSummaryCard
                     replacementValue={Number(listing.replacementValue ?? 0)}
@@ -298,47 +383,98 @@ export default function ListingDetailScreen() {
                 },
               ]}
             >
-              <Pressable
-                pressOpacityFeedback={false}
-                haptic
-                onPress={async () => {
-                  const renterId = currentUserId.trim();
-                  if (!renterId) {
-                    console.error('[rental_requests] missing renter_user_id');
-                    return;
-                  }
-
-                  const dayCount = Math.max(2, parseInt(multiDayCountInput || '0', 10) || 2);
-                  const price = priceForDuration(listing.price, selectedDuration, dayCount);
-
-                  try {
-                    await insertRentalRequest({
-                      listingId: listing.id,
-                      renterUserId: renterId,
-                      durationType: selectedDuration === 'multi' ? 'multiDay' : 'full',
-                      price,
-                    });
-                  } catch (err: unknown) {
-                    const msg =
-                      err instanceof Error
-                        ? err.message
-                        : typeof err === 'object' &&
-                            err !== null &&
-                            'message' in err &&
-                            typeof (err as { message: unknown }).message === 'string'
-                          ? (err as { message: string }).message
-                          : String(err ?? 'Unknown error');
-                    console.error('[rental_requests] Request Rental failed', err);
-                    Alert.alert('Could not send rental request', msg);
-                  }
-                }}
-                style={({ pressed }) => [
-                  styles.primaryBtn,
-                  pressed && styles.primaryBtnPressed,
-                ]}
-              >
-                <Text style={styles.primaryBtnText}>Request Rental</Text>
-              </Pressable>
+              {isOwnListing ? (
+                <View style={styles.ctaStack}>
+                  <Pressable
+                    pressOpacityFeedback={false}
+                    haptic
+                    onPress={() => showFeedbackToast('Full listing edit is coming soon.')}
+                    style={({ pressed }) => [styles.ownerCtaPrimary, pressed && styles.ownerCtaPrimaryPressed]}
+                  >
+                    <Text style={styles.ownerCtaPrimaryText}>Edit listing</Text>
+                  </Pressable>
+                  <Pressable
+                    pressOpacityFeedback={false}
+                    haptic
+                    onPress={() => showFeedbackToast('Pause listing will be available soon.')}
+                    style={({ pressed }) => [styles.ownerCtaSecondary, pressed && { opacity: 0.9 }]}
+                  >
+                    <Text style={styles.ownerCtaSecondaryText}>Pause listing</Text>
+                  </Pressable>
+                  <Pressable
+                    pressOpacityFeedback={false}
+                    haptic
+                    onPress={() => showFeedbackToast('Delete listing will be available soon.')}
+                    style={({ pressed }) => [styles.ownerCtaDanger, pressed && { opacity: 0.9 }]}
+                  >
+                    <Text style={styles.ownerCtaDangerText}>Delete listing</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <View style={styles.ctaStack}>
+                  <Pressable
+                    pressOpacityFeedback={false}
+                    haptic
+                    onPress={() => {
+                      const renterId = currentUserId.trim();
+                      if (!renterId) {
+                        showFeedbackToast('Sign in to make an offer.');
+                        return;
+                      }
+                      const dayCount =
+                        selectedDuration === 'multi'
+                          ? Math.max(2, parseInt(multiDayCountInput || '0', 10) || 2)
+                          : 1;
+                      router.push({
+                        pathname: '/make-offer-listing',
+                        params: {
+                          listingId: listing.id,
+                          durationKey: selectedDuration === 'multi' ? 'multi' : 'full',
+                          dayCount: String(dayCount),
+                        },
+                      });
+                    }}
+                    style={({ pressed }) => [styles.secondaryOfferBtn, pressed && { opacity: 0.92 }]}
+                  >
+                    <Text style={styles.secondaryOfferBtnText}>Make an Offer</Text>
+                  </Pressable>
+                  <Pressable
+                    pressOpacityFeedback={false}
+                    haptic
+                    onPress={() => {
+                      const renterId = currentUserId.trim();
+                      if (!renterId) {
+                        showFeedbackToast('Sign in to request this rental.');
+                        return;
+                      }
+                      const dayCount =
+                        selectedDuration === 'multi'
+                          ? Math.max(2, parseInt(multiDayCountInput || '0', 10) || 2)
+                          : 1;
+                      const price = priceForDuration(
+                        listing.price,
+                        selectedDuration,
+                        Math.max(2, parseInt(multiDayCountInput || '0', 10) || 2)
+                      );
+                      router.push({
+                        pathname: '/listing-rental-intent',
+                        params: {
+                          listingId: listing.id,
+                          durationKey: selectedDuration === 'multi' ? 'multi' : 'full',
+                          dayCount: String(dayCount),
+                          price: String(price),
+                        },
+                      });
+                    }}
+                    style={({ pressed }) => [
+                      styles.primaryBtn,
+                      pressed && styles.primaryBtnPressed,
+                    ]}
+                  >
+                    <Text style={styles.primaryBtnText}>Request Rental</Text>
+                  </Pressable>
+                </View>
+              )}
             </View>
           </View>
         </ScreenEntrance>
@@ -367,11 +503,64 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     paddingTop: ui.spaceMd,
-    /** Horizontal inset comes from ScreenWrapper; keeps CTA aligned with scroll body */
     paddingHorizontal: 0,
     backgroundColor: ui.surfaceGrouped,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: ui.border,
+  },
+  ctaStack: {
+    gap: 10,
+  },
+  secondaryOfferBtn: {
+    paddingVertical: ui.padButtonV,
+    borderRadius: ui.radiusButton,
+    borderWidth: 2,
+    borderColor: ui.primary,
+    backgroundColor: ui.background,
+    alignItems: 'center',
+  },
+  secondaryOfferBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: ui.primary,
+  },
+  ownerCtaPrimary: {
+    paddingVertical: ui.padButtonV,
+    borderRadius: ui.radiusButton,
+    backgroundColor: ui.primary,
+    alignItems: 'center',
+  },
+  ownerCtaPrimaryPressed: {
+    backgroundColor: ui.primaryPressed,
+  },
+  ownerCtaPrimaryText: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: ui.primaryOn,
+  },
+  ownerCtaSecondary: {
+    paddingVertical: ui.padButtonV,
+    borderRadius: ui.radiusButton,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+    backgroundColor: ui.background,
+    alignItems: 'center',
+  },
+  ownerCtaSecondaryText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: ui.primary,
+  },
+  ownerCtaDanger: {
+    paddingVertical: ui.padButtonV,
+    borderRadius: ui.radiusButton,
+    alignItems: 'center',
+    backgroundColor: 'rgba(220, 38, 38, 0.08)',
+  },
+  ownerCtaDangerText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: ui.danger,
   },
   entranceFillCentered: {
     flex: 1,
@@ -459,6 +648,109 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: ui.primary,
+  },
+  conditionPill: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(22, 163, 74, 0.12)',
+    marginBottom: ui.spaceSm,
+  },
+  conditionPillText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#16A34A',
+  },
+  hostCard: {
+    marginTop: ui.spaceMd,
+    padding: ui.spaceMd,
+    borderRadius: ui.radiusInput,
+    backgroundColor: ui.background,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+  },
+  sectionHeading: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: ui.textPrimary,
+    marginBottom: ui.spaceSm,
+  },
+  hostName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: ui.textPrimary,
+  },
+  hostMeta: {
+    marginTop: 4,
+    fontSize: 14,
+    color: ui.textSecondary,
+  },
+  storeSection: {
+    marginBottom: ui.spaceLg,
+    paddingHorizontal: 0,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  detailChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: ui.surfaceNeutral,
+  },
+  detailChipText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: ui.textPrimary,
+  },
+  logisticsCard: {
+    padding: ui.spaceMd,
+    borderRadius: ui.radiusInput,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+    backgroundColor: ui.background,
+    marginBottom: ui.spaceSm,
+  },
+  logisticsPrimary: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: ui.textPrimary,
+  },
+  logisticsSecondary: {
+    marginTop: 6,
+    fontSize: 14,
+    color: ui.textSecondary,
+  },
+  mapPlaceholder: {
+    height: 140,
+    borderRadius: ui.radiusInput,
+    backgroundColor: ui.surfaceNeutral,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapPlaceholderText: {
+    fontSize: 14,
+    color: ui.textSecondary,
+    fontWeight: '600',
+  },
+  placeholderLine: {
+    fontSize: 15,
+    color: ui.textSecondary,
+    lineHeight: 22,
+  },
+  placeholderLineMuted: {
+    fontSize: 14,
+    color: ui.textSecondary,
+    lineHeight: 20,
+    marginTop: ui.spaceSm,
+  },
+  trustLine: {
+    fontSize: 15,
+    color: ui.textPrimary,
+    marginBottom: 6,
   },
   descSection: {
     paddingHorizontal: 0,

@@ -1,16 +1,20 @@
-import { Alert } from 'react-native';
-
 import { getSupabase } from '@/lib/supabase';
+import type { ListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
+import { insertRentalRequestWithSchemaCompat } from '@/lib/rentalRequestInsertSchemaCompat';
 
-declare const __DEV__: boolean;
-
-/** MVP supports full-day only; keep week mapping compatibility. */
 export type RentalRequestDurationInput = 'full' | 'multiDay' | 'weekly';
 
-function durationTypeForDb(d: RentalRequestDurationInput): 'full' | 'week' {
+export type HandoffPreference = 'pickup' | 'owner_delivery' | 'either';
+
+export type InsertRentalRequestResult =
+  | { ok: true; id: string }
+  | { ok: false; message: string };
+
+/** Maps wizard / UI duration to `rental_requests.duration_type` (includes `multi_day` after migration 056). */
+function durationTypeForDb(d: RentalRequestDurationInput): 'full' | 'week' | 'multi_day' {
   if (d === 'weekly') return 'week';
-  if (d === 'multiDay') return 'full';
-  return d;
+  if (d === 'multiDay') return 'multi_day';
+  return 'full';
 }
 
 export async function insertRentalRequest(row: {
@@ -18,11 +22,17 @@ export async function insertRentalRequest(row: {
   renterUserId: string;
   durationType: RentalRequestDurationInput;
   price: number;
-}): Promise<void> {
-  const listingId = row.listingId;
-  const renterUserId = row.renterUserId;
-  const durationType = row.durationType;
-  const price = row.price;
+  listingSnapshot: ListingIntentSnapshot;
+  requestedStartDate: string;
+  requestedEndDate: string;
+  handoffPreference: HandoffPreference;
+  renterMessage?: string | null;
+}): Promise<InsertRentalRequestResult> {
+  const listingId = row.listingId.trim();
+  const renterUserId = row.renterUserId.trim();
+  if (!listingId || !renterUserId) {
+    return { ok: false, message: 'Missing listing or renter.' };
+  }
 
   const supabase = getSupabase();
 
@@ -38,43 +48,36 @@ export async function insertRentalRequest(row: {
   }
 
   if (!ownerUserId) {
-    console.error('❌ owner_user_id missing');
-    throw new Error('owner_user_id missing');
+    return { ok: false, message: 'Could not resolve listing owner.' };
   }
 
-  if (__DEV__) {
-    console.log('[INSERT INPUT]', {
-      listingId,
-      renterUserId,
-      ownerUserId,
-      durationType,
-      price,
-    });
-  }
+  const duration_type = durationTypeForDb(row.durationType);
+  const msg = row.renterMessage?.trim() ?? '';
 
-  /** DB constraint uses half | full | week (not weekly). */
-  const duration_type = durationTypeForDb(durationType);
+  const initialPayload: Record<string, unknown> = {
+    listing_id: listingId,
+    renter_user_id: renterUserId,
+    owner_user_id: ownerUserId,
+    duration_type,
+    price: row.price,
+    status: 'pending',
+    listing_snapshot: row.listingSnapshot,
+    requested_start_date: row.requestedStartDate,
+    requested_end_date: row.requestedEndDate,
+    handoff_preference: row.handoffPreference,
+    renter_message: msg.length > 0 ? msg : null,
+  };
 
-  const { data, error } = await supabase
-    .from('rental_requests')
-    .insert({
-      listing_id: listingId,
-      renter_user_id: renterUserId,
-      owner_user_id: ownerUserId,
-      duration_type,
-      price,
-      status: 'pending',
-    })
-    .select();
-
-  if (__DEV__) {
-    console.log('[INSERT RESULT]', { data, error });
-  }
+  const { data, error } = await insertRentalRequestWithSchemaCompat(supabase, initialPayload);
 
   if (error) {
-    console.error('❌ INSERT FAILED', error);
-    throw error;
+    return { ok: false, message: error.message || 'Could not save rental request.' };
   }
 
-  Alert.alert('Inserted successfully');
+  const rid = (data as { id?: string } | null)?.id?.trim();
+  if (!rid) {
+    return { ok: false, message: 'Rental request may have saved but no id was returned.' };
+  }
+
+  return { ok: true, id: rid };
 }

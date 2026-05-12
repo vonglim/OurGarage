@@ -18,12 +18,12 @@ import {
 } from '@/lib/homeActiveRentalCardModel';
 import { formatUsd, getNumericTotalPrice } from '@/lib/money';
 import { listOpenRequestsSortedByDistance } from '@/lib/openRequestsForBrowse';
-import { normalizeListingImages } from '@/lib/normalizeListingImages';
+import { hydrateListingsFromSupabase } from '@/lib/hydrateListingsFromSupabase';
 import { formatMilesShort, milesFromViewerToRequest } from '@/lib/requestDistance';
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { getOnboardingTermsAccepted } from '@/store/agreementsStore';
 import type { ToolListing } from '@/store/listingsStore';
-import { formatListingPriceWithUnit } from '@/store/listingsStore';
+import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
 import { touchLastActive } from '@/store/profileStore';
 import { refreshRequestsFromSupabase, useRequestsStore } from '@/store/requestsStore';
 
@@ -172,7 +172,7 @@ export default function Home() {
   }, [router]);
 
   const goRentOut = useCallback(() => {
-    router.push('/rent-out');
+    router.push('/listing');
   }, [router]);
 
   const goToRequestDetails = useCallback(
@@ -186,45 +186,9 @@ export default function Home() {
   );
 
   const fetchListings = async () => {
-    try {
-      const { supabase } = await import('@/lib/supabase');
-  
-      const { data, error } = await supabase
-        .from('listings')
-        .select(
-          'id, title, description, daily_price, weekly_price, images, created_at'
-        )
-        .order('created_at', { ascending: false });
-  
-      if (error) {
-        console.error('Fetch error:', error);
-        return;
-      }
-
-      const mapped = (data || []).map((item) => {
-        const createdRaw = item.created_at;
-        const createdMs =
-          createdRaw != null ? Date.parse(String(createdRaw)) : NaN;
-        const daily = Number(item.daily_price);
-        const week = Number(item.weekly_price);
-        return {
-          id: item.id,
-          name: item.title,
-          price: Number.isFinite(daily) ? daily : 0,
-          priceUnit: 'day',
-          distance: 0,
-          description: item.description,
-          ownerName: '',
-          rating: 0,
-          createdAt: Number.isFinite(createdMs) ? createdMs : 0,
-          ...(Number.isFinite(week) ? { weeklyPrice: week } : {}),
-          images: normalizeListingImages(item.images),
-        };
-      });
-      
-      setListings(mapped);
-    } catch (err) {
-      console.error('Unexpected fetch error:', err);
+    const r = await hydrateListingsFromSupabase();
+    if (r.ok) {
+      setListings([...useListingsStore.getState().listings]);
     }
   };
   const goToListingDetails = useCallback(

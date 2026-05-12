@@ -1,5 +1,6 @@
 import { RootScreenHeader } from '@/components/AppHeaders';
 import { ActivityOwnerRequestCard } from '@/components/activity/ActivityOwnerRequestCard';
+import { ActivityListingOfferCard } from '@/components/activity/ActivityListingOfferCard';
 import { ActivityRequestSectionHeader } from '@/components/activity/ActivityRequestSectionHeader';
 import { ActivitySegmentedTabs } from '@/components/activity/ActivitySegmentedTabs';
 import { CardPressable } from '@/components/CardPressable';
@@ -45,9 +46,13 @@ import {
   activityRentalsIntentPendingSyncRef,
   readAndClearActivityPendingIntent,
 } from '@/lib/activityPendingIntent';
+import { hydrateListingsFromSupabase } from '@/lib/hydrateListingsFromSupabase';
+import { hydrateListingOffersFromSupabase } from '@/lib/hydrateListingOffersFromSupabase';
 import { refreshActivityScreenFromSupabase } from '@/lib/supabaseActivityRefresh';
 import { updateRentalRequestStatus } from '@/lib/updateRentalRequestStatus';
+import { ownerSetListingOfferStatus } from '@/lib/listingOfferLifecycleActions';
 import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
+import { useListingOffersActivityStore } from '@/store/listingOffersActivityStore';
 import { useMessageUnreadStore, useUnreadMessagesTotal } from '@/store/messageUnreadStore';
 import type { AppNotification } from '@/store/notificationsStore';
 import { useNotificationsStore } from '@/store/notificationsStore';
@@ -362,6 +367,7 @@ export default function ActivityScreen() {
   const listings = useListingsStore((s) => s.listings);
   const offers = useOffersStore((state) => state.offers);
   const notifications = useNotificationsStore((s) => s.notifications);
+  const listingOfferRows = useListingOffersActivityStore((s) => s.rows);
   const unreadCount = useUnreadMessagesTotal();
   const unreadByOfferId = useMessageUnreadStore((s) => s.unreadByOfferId);
   if (__DEV__) {
@@ -377,6 +383,7 @@ export default function ActivityScreen() {
   );
   const [requestDeleteConfirmTs, setRequestDeleteConfirmTs] = useState<number | null>(null);
   const [requestDeleteBusy, setRequestDeleteBusy] = useState(false);
+  const [busyListingOfferId, setBusyListingOfferId] = useState<string | null>(null);
 
   const refreshListingRentalRequests = useCallback(async () => {
     const uid = me.trim();
@@ -434,6 +441,9 @@ export default function ActivityScreen() {
   const refreshUnifiedRentalsRef = useRef(refreshUnifiedRentals);
   refreshUnifiedRentalsRef.current = refreshUnifiedRentals;
 
+  const hydrateListingOffersRef = useRef(hydrateListingOffersFromSupabase);
+  hydrateListingOffersRef.current = hydrateListingOffersFromSupabase;
+
   useEffect(() => {
     const uid = me.trim();
     if (!uid) return;
@@ -467,6 +477,26 @@ export default function ActivityScreen() {
       'postgres_changes',
       { event: '*', schema: 'public', table: 'rentals' },
       () => void refreshUnifiedRentalsRef.current()
+    );
+    channel.subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [me]);
+
+  useEffect(() => {
+    const uid = me.trim();
+    if (!uid) return;
+    const supabase = getSupabase();
+    const channelId =
+      typeof globalThis.crypto?.randomUUID === 'function'
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+    const channel = supabase.channel(`activity_listing_offers:${uid}:${channelId}`);
+    channel.on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'offers' },
+      () => void hydrateListingOffersRef.current()
     );
     channel.subscribe();
     return () => {
@@ -607,6 +637,7 @@ export default function ActivityScreen() {
       markAllNonMessageNotificationsAsRead();
       void refreshListingRentalRequests();
       void refreshUnifiedRentals();
+      void hydrateListingsFromSupabase();
       return () => {
         cancelled = true;
         activityRentalsIntentAppliedRef.current = false;
@@ -793,8 +824,57 @@ export default function ActivityScreen() {
       const st = getOutgoingOfferStatus(o, req);
       if (st === 'pending' || st === 'countered') n += 1;
     }
+    for (const o of listingOfferRows) {
+      if (o.renterUserId !== me) continue;
+      if (o.status === 'declined' || o.status === 'closed' || o.status === 'accepted') continue;
+      n += 1;
+    }
     return n;
-  }, [myLenderOffers, requests, offers]);
+  }, [myLenderOffers, requests, offers, listingOfferRows, me]);
+
+  const listingOffersAsOwner = useMemo(
+    () =>
+      listingOfferRows
+        .filter((o) => o.listingOwnerUserId === me)
+        .sort((a, b) => b.updatedAtMs - a.updatedAtMs),
+    [listingOfferRows, me]
+  );
+  const listingOffersAsRenter = useMemo(
+    () =>
+      listingOfferRows
+        .filter((o) => o.renterUserId === me)
+        .sort((a, b) => b.updatedAtMs - a.updatedAtMs),
+    [listingOfferRows, me]
+  );
+
+  const openListingOfferDetail = useCallback(
+    (offerId: string) => {
+      router.push({ pathname: '/listing-offer-detail', params: { offerId } });
+    },
+    [router]
+  );
+
+  const onAcceptListingOfferOnActivity = useCallback(async (offerId: string) => {
+    setBusyListingOfferId(offerId);
+    const r = await ownerSetListingOfferStatus(offerId, 'accepted');
+    if (!r.ok) showFeedbackToast(r.message ?? 'Could not accept.');
+    else showFeedbackToast('Accepted');
+    void hydrateListingOffersFromSupabase();
+    setBusyListingOfferId(null);
+  }, []);
+
+  const onDeclineListingOfferOnActivity = useCallback(async (offerId: string) => {
+    setBusyListingOfferId(offerId);
+    const r = await ownerSetListingOfferStatus(offerId, 'declined');
+    if (!r.ok) showFeedbackToast(r.message ?? 'Could not decline.');
+    else showFeedbackToast('Declined');
+    void hydrateListingOffersFromSupabase();
+    setBusyListingOfferId(null);
+  }, []);
+
+  const onCounterListingOfferStub = useCallback(() => {
+    showFeedbackToast('Counter offers will be available soon.');
+  }, []);
 
   const rentalsTotalCount = unifiedRentals.length;
 
@@ -1491,7 +1571,7 @@ export default function ActivityScreen() {
               <Text style={styles.activePastHeading}>YOUR EQUIPMENT</Text>
               {myEquipment.length === 0 ? (
                 <Text style={styles.emptyText}>
-                  No equipment listed yet. Tap + and choose List equipment.
+                  No equipment listed yet. Tap + and choose List equipment to create a listing.
                 </Text>
               ) : (
                 myEquipment.map((item) => (
@@ -1551,6 +1631,42 @@ export default function ActivityScreen() {
                 <Text style={styles.emptyText}>No offers yet. Browse requests and tap Make offer.</Text>
               ) : (
                 myLenderOffers.map((o) => renderMyOfferRow(o))
+              )}
+              <View style={[styles.sectionRule, styles.sectionRuleTight]} />
+              <Text style={styles.activePastHeading}>YOUR LISTING OFFERS</Text>
+              <Text style={styles.tabPanelSubline}>Offers renters sent on your listings.</Text>
+              {listingOffersAsOwner.length === 0 ? (
+                <Text style={styles.emptyText}>No listing offers yet.</Text>
+              ) : (
+                listingOffersAsOwner.map((row) => (
+                  <ActivityListingOfferCard
+                    key={row.id}
+                    row={row}
+                    role="owner"
+                    timeAgo={getTimeAgo(row.updatedAtMs)}
+                    onPress={() => openListingOfferDetail(row.id)}
+                    onAccept={() => void onAcceptListingOfferOnActivity(row.id)}
+                    onDecline={() => void onDeclineListingOfferOnActivity(row.id)}
+                    onCounter={onCounterListingOfferStub}
+                    busy={busyListingOfferId === row.id}
+                  />
+                ))
+              )}
+              <View style={[styles.sectionRule, styles.sectionRuleTight]} />
+              <Text style={styles.activePastHeading}>LISTINGS YOU BID ON</Text>
+              <Text style={styles.tabPanelSubline}>Your offers on browse listings.</Text>
+              {listingOffersAsRenter.length === 0 ? (
+                <Text style={styles.emptyText}>No listing offers yet.</Text>
+              ) : (
+                listingOffersAsRenter.map((row) => (
+                  <ActivityListingOfferCard
+                    key={row.id}
+                    row={row}
+                    role="renter"
+                    timeAgo={getTimeAgo(row.updatedAtMs)}
+                    onPress={() => openListingOfferDetail(row.id)}
+                  />
+                ))
               )}
                     </View>
                   </GHScrollView>

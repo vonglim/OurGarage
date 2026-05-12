@@ -15,7 +15,9 @@ import {
 
 import { numberPadAccessoryProps } from '@/components/NumberPadKeyboardAccessory';
 import { Pressable } from '@/components/Pressable';
+import { WizardSubtitle } from '@/components/WizardSubtitle';
 import { ui } from '@/constants/appUi';
+import { wizardStepTitleStyle } from '@/constants/wizardCopy';
 import { formatUsd, parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
 import { getApproximateLocationZipForRequest } from '@/lib/userLocation';
 
@@ -86,9 +88,9 @@ export function RequestItemSearchStepContent({ draft, updateDraft, searchRef }: 
   return (
     <View style={styles.stepPad}>
       <Text style={styles.centerHeading}>What are you looking to rent?</Text>
-      <Text style={styles.centerSub}>
-        Search for a brand, model, or type of item and we&apos;ll help you find the best match.
-      </Text>
+      <WizardSubtitle>
+        Search for a brand, model, or type of item{'\n'}and we&apos;ll help you find the best match.
+      </WizardSubtitle>
 
       <View style={styles.searchShell}>
         <Ionicons name="search" size={20} color={ui.textSecondary} style={styles.searchIcon} />
@@ -157,7 +159,9 @@ export function RequestScheduleStepContent({ draft, updateDraft }: RequestStepsC
   return (
     <View style={styles.stepPad}>
       <Text style={styles.centerHeading}>When do you need it?</Text>
-      <Text style={styles.centerSub}>Add your start date and how long you&apos;ll need the item.</Text>
+      <WizardSubtitle>
+        Add your start date and how long you&apos;ll need{'\n'}the item.
+      </WizardSubtitle>
 
       <Text style={styles.fieldLabel}>Start date</Text>
       <Pressable
@@ -289,7 +293,9 @@ export function RequestDeliveryStepContent({ draft, updateDraft, parentScrollRef
   return (
     <View style={styles.stepPad}>
       <Text style={styles.centerHeading}>How would you like to get it?</Text>
-      <Text style={styles.centerSub}>Choose pickup or delivery and your delivery preferences.</Text>
+      <WizardSubtitle>
+        Choose pickup or delivery and{'\n'}your delivery preferences.
+      </WizardSubtitle>
 
       <Pressable
         pressOpacityFeedback={false}
@@ -503,11 +509,9 @@ export function RequestBudgetStepContent({ draft, updateDraft, parentScrollRef }
   return (
     <View style={styles.stepPad}>
       <Text style={styles.centerHeading}>What&apos;s your estimated budget?</Text>
-      <Text style={styles.centerSubTight}>
-        <Text style={styles.centerSubLine}>This helps owners see if their item</Text>
-        {'\n'}
-        <Text style={styles.centerSubLine}>fits your project budget.</Text>
-      </Text>
+      <WizardSubtitle bottomLoose>
+        This helps owners see if their item fits{'\n'}your project budget.
+      </WizardSubtitle>
 
       <View style={[styles.bigMoneyCard, styles.bigMoneyCardNavy]}>
         <Text style={[styles.bigMoneyGlyph, styles.bigMoneyGlyphNavy]}>$</Text>
@@ -574,10 +578,12 @@ export function RequestDetailsStepContent({ draft, updateDraft, parentScrollRef 
   return (
     <View style={styles.stepPad}>
       <Text style={styles.centerHeading}>Anything else owners should know?</Text>
-      <Text style={styles.centerSub}>
-        Add any details about your project, required accessories, or preferences.{' '}
-        <Text style={styles.optionalParen}>(Optional)</Text>
-      </Text>
+      <WizardSubtitle>
+        <Text style={styles.optionalWizardSub}>
+          Add any details about your project, required accessories, or preferences.{' '}
+          <Text style={styles.optionalParen}>(Optional)</Text>
+        </Text>
+      </WizardSubtitle>
 
       <View style={styles.textAreaShell}>
         <TextInput
@@ -646,6 +652,12 @@ export function RequestReviewStepContent({ draft, onEditStep }: RequestStepsCont
 
   return (
     <View style={styles.stepPad}>
+      <WizardSubtitle
+        textStyle={{ fontSize: 13, lineHeight: 18 }}
+        outerStyle={{ marginBottom: 14 }}
+      >
+        Tap Edit to jump back to any step.{'\n'}Post when everything looks right.
+      </WizardSubtitle>
       <View style={styles.reviewCard}>
         {rows.map((r) => (
           <View key={r.key} style={styles.reviewRow}>
@@ -687,30 +699,14 @@ export function RequestReviewStepContent({ draft, onEditStep }: RequestStepsCont
 const styles = StyleSheet.create({
   stepPad: { paddingHorizontal: 4 },
   centerHeading: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: ui.textPrimary,
-    textAlign: 'center',
-    marginBottom: 10,
+    ...wizardStepTitleStyle,
   },
-  centerSub: {
+  optionalWizardSub: {
     fontSize: 14,
+    fontWeight: '400',
     color: ui.textSecondary,
     textAlign: 'center',
-    lineHeight: 20,
-    marginBottom: 22,
-    paddingHorizontal: 8,
-  },
-  centerSubTight: {
-    fontSize: 14,
-    color: ui.textSecondary,
-    textAlign: 'center',
-    lineHeight: 22,
-    marginBottom: 20,
-    paddingHorizontal: 12,
-  },
-  centerSubLine: {
-    color: ui.textSecondary,
+    lineHeight: 19,
   },
   step1BelowSearchSpacer: {
     minHeight: 32,

@@ -9,6 +9,7 @@ import { useNotificationsStore } from '@/store/notificationsStore';
 import { useOffersStore } from '@/store/offersStore';
 import { getAuthUserIdSync } from '@/lib/authUser';
 import { getEffectiveRentalStatus, useRequestsStore } from '@/store/requestsStore';
+import { useListingOffersActivityStore } from '@/store/listingOffersActivityStore';
 
 /**
  * Attention count for the Activity tab: unread request/rental notifications (not chat),
@@ -18,6 +19,7 @@ export function useActivityTabBadgeCount(): number {
   const notifications = useNotificationsStore((s) => s.notifications);
   const requests = useRequestsStore((s) => s.requests);
   const offers = useOffersStore((s) => s.offers);
+  const listingOfferRows = useListingOffersActivityStore((s) => s.rows);
 
   return useMemo(() => {
     const me = getAuthUserIdSync();
@@ -51,6 +53,25 @@ export function useActivityTabBadgeCount(): number {
       if (!hasUnreadOfferNotif) total += 1;
     }
 
+    const hasUnreadNonMessageNotifForOfferId = new Set(
+      notifications
+        .filter(
+          (x) =>
+            visibleUnread(x) &&
+            x.type !== 'message' &&
+            typeof x.offerId === 'string' &&
+            x.offerId.trim() !== ''
+        )
+        .map((x) => String(x.offerId).trim())
+    );
+
+    for (const o of listingOfferRows) {
+      if (o.listingOwnerUserId !== me) continue;
+      if (o.status !== 'pending' && o.status !== 'pending_confirmation') continue;
+      if (hasUnreadNonMessageNotifForOfferId.has(o.id)) continue;
+      total += 1;
+    }
+
     return total;
-  }, [notifications, requests, offers]);
+  }, [notifications, requests, offers, listingOfferRows]);
 }

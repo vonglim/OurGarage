@@ -20,7 +20,8 @@ import {
   getRenterBrowseNegotiationCardState,
 } from '@/lib/negotiationLifecycle';
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
-import { normalizeListingImages } from '@/lib/normalizeListingImages';
+import { hydrateListingsFromSupabase } from '@/lib/hydrateListingsFromSupabase';
+import { isToolListingVisibleOnBrowseFeed } from '@/lib/listingOwnership';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import type { ToolListing } from '@/store/listingsStore';
 import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
@@ -35,7 +36,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { Router } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Image, PanResponder, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { AppState, Image, PanResponder, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 /** Dev-only: where Browse reads requests (for provenance logging). */
 const REQUESTS_STORE_MODULE = 'store/requestsStore.ts';
@@ -143,6 +144,7 @@ export default function Browse() {
   );
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [listingsRefreshing, setListingsRefreshing] = useState(false);
 
   const listings = useListingsStore((s) => s.listings);
   const requests = useRequestsStore((state) => state.requests);
@@ -175,78 +177,27 @@ export default function Browse() {
   useFocusEffect(
     useCallback(() => {
       void refreshRequestsFromSupabase();
-  
-      // 👇 ADD THIS
-      const fetchListings = async () => {
-        const { supabase } = await import('@/lib/supabase');
-
-        const selectVariants: string[] = [
-          // Newest schema
-          'id, title, description, daily_price, weekly_price, images, replacement_value, daily_late_fee, max_late_fee_cap, created_at',
-          // Missing max_late_fee_cap
-          'id, title, description, daily_price, weekly_price, images, replacement_value, daily_late_fee, created_at',
-          // Missing daily_late_fee
-          'id, title, description, daily_price, weekly_price, images, replacement_value, max_late_fee_cap, created_at',
-          // Older schema, no financial-protection columns
-          'id, title, description, daily_price, weekly_price, images, created_at',
-        ];
-
-        let data: Array<Record<string, unknown>> | null = null;
-        let error: { code?: string | null } | null = null;
-
-        for (const selectClause of selectVariants) {
-          const res = await supabase
-            .from('listings')
-            .select(selectClause)
-            .order('created_at', { ascending: false });
-          if (!res.error) {
-            data = (res.data as unknown as Array<Record<string, unknown>> | null) ?? null;
-            error = null;
-            break;
-          }
-          error = res.error;
-          if (res.error.code !== '42703') break;
-        }
-
-        if (error) {
-          console.error('Fetch listings error:', error);
-          return;
-        }
-
-        const mapped = (data || []).map((item) => {
-          const createdRaw = item.created_at;
-          const createdMs =
-            createdRaw != null ? Date.parse(String(createdRaw)) : NaN;
-          const daily = Number(item.daily_price);
-          const week = Number(item.weekly_price);
-          const replacementValue = Number(item.replacement_value);
-          const dailyLateFee = Number((item as { daily_late_fee?: unknown }).daily_late_fee);
-          const maxLateFeeCap = Number(item.max_late_fee_cap);
-          return {
-            id: String(item.id ?? ''),
-            name: String(item.title ?? ''),
-            price: Number.isFinite(daily) ? daily : 0,
-            priceUnit: 'day',
-            distance: 0,
-            description: String(item.description ?? ''),
-            ownerName: '',
-            rating: 0,
-            createdAt: Number.isFinite(createdMs) ? createdMs : 0,
-            ...(Number.isFinite(week) ? { weeklyPrice: week } : {}),
-            ...(Number.isFinite(replacementValue) ? { replacementValue } : {}),
-            ...(Number.isFinite(dailyLateFee) ? { dailyLateFee } : {}),
-            ...(Number.isFinite(maxLateFeeCap) ? { maxLateFeeCap } : {}),
-            images: normalizeListingImages(item.images),
-          };
-        });
-  
-        // 👇 THIS is the key part
-        useListingsStore.getState().setListings(mapped);
-      };
-  
-      fetchListings();
+      void hydrateListingsFromSupabase();
     }, [])
   );
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') {
+        void hydrateListingsFromSupabase();
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
+  const onRefreshListings = useCallback(async () => {
+    setListingsRefreshing(true);
+    try {
+      await hydrateListingsFromSupabase();
+    } finally {
+      setListingsRefreshing(false);
+    }
+  }, []);
 
   const q = searchQuery.trim().toLowerCase();
 
@@ -347,7 +298,9 @@ export default function Browse() {
   ]);
 
   const { toolRows, toolEmpty } = useMemo(() => {
-    const filtered = q ? listings.filter((l) => matchesSearchListings(l, q)) : [...listings];
+    const uid = getAuthUserIdSync();
+    const visible = listings.filter((l) => isToolListingVisibleOnBrowseFeed(l, uid));
+    const filtered = q ? visible.filter((l) => matchesSearchListings(l, q)) : [...visible];
     filtered.sort((a, b) => a.distance - b.distance);
     const empty =
       filtered.length === 0
@@ -370,6 +323,9 @@ export default function Browse() {
             ]}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
+            refreshControl={
+              <RefreshControl refreshing={listingsRefreshing} onRefresh={() => void onRefreshListings()} />
+            }
           >
           <RootScreenHeader title="Browse" />
 
@@ -669,12 +625,6 @@ export default function Browse() {
   </View>
 
 </View>
-
-                  {isOwnListing ? (
-                    <Text style={styles.cardOwnLabel} accessibilityRole="text">
-                      Your listing
-                    </Text>
-                  ) : null}
                 </CardPressable>
               );
             })

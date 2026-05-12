@@ -90,7 +90,7 @@ export function MainTabFab() {
               style={({ pressed }) => [styles.modalRow, pressed && styles.modalRowPressed]}
               onPress={() => {
                 setOpen(false);
-                router.push('/rent-out');
+                router.push('/listing');
               }}
             >
               <Ionicons name="cube-outline" size={22} color={ui.primary} />

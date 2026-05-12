@@ -16,12 +16,14 @@ export type ServerNotificationType =
 function dataPayload(
   requestId: string | null,
   offerId: string | null,
-  rentalId: string | null
+  rentalId: string | null,
+  listingId: string | null
 ): Record<string, string> {
   const o: Record<string, string> = {};
   if (requestId) o.requestId = requestId;
   if (offerId) o.offerId = offerId;
   if (rentalId) o.rentalId = rentalId;
+  if (listingId) o.listingId = listingId;
   return o;
 }
 
@@ -39,6 +41,8 @@ export function insertServerNotificationToRecipient(input: {
   offerId: string | null;
   /** When set, clients route opens into the rental workspace (meetup / active rental). */
   rentalId?: string | null;
+  /** When set, stored in `data` for listing-offer deep links. */
+  listingId?: string | null;
 }): void {
   if (!isSupabaseConfigured()) return;
 
@@ -68,7 +72,11 @@ export function insertServerNotificationToRecipient(input: {
     input.rentalId != null && isUuidString(String(input.rentalId).trim())
       ? String(input.rentalId).trim()
       : null;
-  const data = dataPayload(requestId, offerId, rentalId);
+  const listingIdClean =
+    input.listingId != null && isUuidString(String(input.listingId).trim())
+      ? String(input.listingId).trim()
+      : null;
+  const data = dataPayload(requestId, offerId, rentalId, listingIdClean);
   const supabase = getSupabase();
   void (async () => {
     const { error } = await supabase.from('notifications').insert({

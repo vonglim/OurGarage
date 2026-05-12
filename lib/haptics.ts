@@ -15,3 +15,12 @@ export function lightImpact(): void {
   lastAt = now;
   void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
 }
+
+/** Slightly stronger tap — e.g. camera shutter confirmation. */
+export function mediumImpact(): void {
+  if (Platform.OS === 'web') return;
+  const now = Date.now();
+  if (now - lastAt < COALESCE_MS) return;
+  lastAt = now;
+  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+}

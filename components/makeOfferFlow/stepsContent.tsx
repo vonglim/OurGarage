@@ -13,7 +13,9 @@ import {
 } from 'react-native';
 
 import { Pressable } from '@/components/Pressable';
+import { WizardSubtitle } from '@/components/WizardSubtitle';
 import { ui } from '@/constants/appUi';
+import { wizardStepTitleStyle } from '@/constants/wizardCopy';
 import {
   offerWizardPickPhotoSource,
   pickMultipleOfferPhotos,
@@ -147,9 +149,9 @@ export function ConditionStepContent({ draft, updateDraft }: StepsContentProps) 
   return (
     <View style={styles.stepPad}>
       <Text style={styles.centerHeading}>What condition is it in?</Text>
-      <Text style={styles.centerSub}>
-        Normal wear is expected — choose the option that best matches the item today.
-      </Text>
+      <WizardSubtitle>
+        Normal wear is expected — choose the option{'\n'}that best matches the item today.
+      </WizardSubtitle>
       <View style={styles.conditionList}>
         {CONDITIONS.map((c) => {
           const on = draft.condition === c.key;
@@ -204,10 +206,12 @@ export function AccessoriesStepContent({ draft, updateDraft, parentScrollRef }: 
   return (
     <View style={styles.stepPad}>
       <Text style={styles.centerHeading}>What&apos;s included?</Text>
-      <Text style={styles.centerSub}>
-        Add accessories, attachments, batteries, chargers, cases, or anything else included with the rental.{' '}
-        <Text style={styles.optionalParen}>(Optional)</Text>
-      </Text>
+      <WizardSubtitle>
+        <Text style={styles.optionalWizardSub}>
+          Add accessories, attachments, batteries, chargers, cases, or anything else included with the rental.{' '}
+          <Text style={styles.optionalParen}>(Optional)</Text>
+        </Text>
+      </WizardSubtitle>
 
       <Text style={styles.sectionLabel}>Included items</Text>
       {draft.accessories.length > 0 ? (
@@ -275,7 +279,9 @@ export function DeliveryStepContent({ draft, updateDraft }: StepsContentProps) {
   return (
     <View style={styles.stepPad}>
       <Text style={styles.centerHeading}>How will you handoff the item?</Text>
-      <Text style={styles.centerSub}>Choose how you&apos;ll meet or deliver the item to the renter.</Text>
+      <WizardSubtitle>
+        Choose how you&apos;ll meet or deliver the item{'\n'}to the renter.
+      </WizardSubtitle>
 
       <Pressable
         pressOpacityFeedback={false}
@@ -446,9 +452,9 @@ export function DailyRateStepContent(props: StepsContentProps) {
   return (
     <View style={styles.stepPad}>
       <Text style={styles.centerHeading}>Daily rate</Text>
-      <Text style={[styles.centerSub, { color: ui.primary }]}>
-        Collecting dust or making money, your choice.
-      </Text>
+      <WizardSubtitle textStyle={{ color: ui.primary }}>
+        Collecting dust or making money,{'\n'}your choice.
+      </WizardSubtitle>
 
       <View style={styles.bigMoneyCard}>
         <Text style={styles.bigMoneyGlyph}>$</Text>
@@ -542,9 +548,9 @@ export function MarketValueStepContent({ draft, updateDraft }: StepsContentProps
       <Text style={[styles.centerHeading, styles.marketTitleLines]}>
         What&apos;s the estimated{'\n'}market value?
       </Text>
-      <Text style={styles.centerSub}>
-        Used to estimate protection coverage if the item is lost or seriously damaged.
-      </Text>
+      <WizardSubtitle>
+        Used to estimate protection coverage if{'\n'}the item is lost or seriously damaged.
+      </WizardSubtitle>
 
       <View style={[styles.bigMoneyCard, styles.bigMoneyCardNavy]}>
         <Text style={[styles.bigMoneyGlyph, styles.bigMoneyGlyphNavy]}>$</Text>
@@ -817,7 +823,7 @@ export function VerificationStepContent({ draft, updateDraft }: StepsContentProp
   return (
     <View style={styles.stepPad}>
       <Text style={styles.centerHeading}>Let&apos;s verify the item</Text>
-      <Text style={styles.centerSub}>Photos help protect both sides during rentals.</Text>
+      <WizardSubtitle>Photos help protect both sides{'\n'}during rentals.</WizardSubtitle>
 
       <Text style={styles.tierLabel}>Required</Text>
       <View style={[styles.verifyCard, styles.verifyCardPurple]}>
@@ -1048,7 +1054,9 @@ export function ReviewStepContent({
   return (
     <View style={styles.stepPad}>
       <Text style={styles.centerHeading}>Review your offer</Text>
-      <Text style={styles.centerSub}>Confirm details before sending. Tap Edit to jump back.</Text>
+      <WizardSubtitle>
+        Confirm details before sending.{'\n'}Tap Edit to jump back.
+      </WizardSubtitle>
 
       <View style={styles.reviewCard}>
         {rows.map((row, i) => (
@@ -1180,23 +1188,18 @@ const styles = StyleSheet.create({
   suggestTitle: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
   suggestSub: { fontSize: 13, color: 'rgba(255,255,255,0.55)', marginTop: 2 },
   centerHeading: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: ui.textPrimary,
-    textAlign: 'center',
-    marginBottom: 10,
+    ...wizardStepTitleStyle,
   },
-  /** Step 6 — intentional break after “estimated” without shrinking headline size */
-  marketTitleLines: {
-    lineHeight: 28,
-  },
-  centerSub: {
+  optionalWizardSub: {
     fontSize: 14,
+    fontWeight: '400',
     color: ui.textSecondary,
     textAlign: 'center',
-    lineHeight: 20,
-    marginBottom: 22,
-    paddingHorizontal: 8,
+    lineHeight: 19,
+  },
+  /** Step 6 — taller line rhythm for two-line headline */
+  marketTitleLines: {
+    lineHeight: 28,
   },
   optionalParen: { fontStyle: 'italic' },
   /** Subtle scale on press — pair with `pressOpacityFeedback={false}` on `Pressable`. */

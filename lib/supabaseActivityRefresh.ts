@@ -1,3 +1,4 @@
+import { hydrateListingOffersFromSupabase } from '@/lib/hydrateListingOffersFromSupabase';
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { getSupabase } from '@/lib/supabase';
 import { fetchAllOffersWithProfiles, mapSupabaseOfferRowToOffer } from '@/lib/supabaseOffers';
@@ -47,4 +48,5 @@ async function mergeRemoteOffersIntoOffersStore(): Promise<void> {
 export async function refreshActivityScreenFromSupabase(): Promise<void> {
   await refreshRequestsFromSupabase();
   await mergeRemoteOffersIntoOffersStore();
+  await hydrateListingOffersFromSupabase();
 }
