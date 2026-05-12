@@ -74,6 +74,12 @@ export async function upsertNegotiationOfferToSupabase(input: {
   offer_images?: string[];
   /** When set, persisted on `offers.offer_evidence` (jsonb). Omit to leave unchanged. */
   offer_evidence?: StoredOfferEvidence | null;
+  /** When set, persisted on `offers.tool_description`. Omit to leave unchanged. */
+  toolDescription?: string | null;
+  /** When set, persisted on `offers.replacement_value`. Omit to leave unchanged. */
+  replacementValue?: number | null;
+  /** When set, persisted on `offers.item_condition`. Omit to leave unchanged. */
+  itemCondition?: 'excellent' | 'good' | 'fair' | null;
   /** Optional lifecycle counters (anti-spam); omitted fields are not written on update. */
   negotiationLifecycle?: NegotiationLifecycleDbWrite;
   /** When set, persisted on `offers` for the negotiated fulfillment terms. */
@@ -122,6 +128,20 @@ export async function upsertNegotiationOfferToSupabase(input: {
   }
   if (input.offer_evidence !== undefined) {
     baseFields.offer_evidence = input.offer_evidence;
+  }
+  if (input.toolDescription !== undefined) {
+    const t = input.toolDescription?.trim() ?? '';
+    baseFields.tool_description = t.length > 0 ? t : null;
+  }
+  if (input.replacementValue !== undefined) {
+    const rv = input.replacementValue;
+    baseFields.replacement_value =
+      rv != null && Number.isFinite(rv) && rv > 0 ? rv : null;
+  }
+  if (input.itemCondition !== undefined) {
+    const c = input.itemCondition;
+    baseFields.item_condition =
+      c === 'excellent' || c === 'good' || c === 'fair' ? c : null;
   }
   const lc = input.negotiationLifecycle;
   if (lc != null) {

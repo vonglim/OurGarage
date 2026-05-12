@@ -224,6 +224,15 @@ export function mapSupabaseOfferRowToOffer(
   if (message) out.message = message;
   if (toolDescription) out.toolDescription = toolDescription;
 
+  const repl = row.replacement_value ?? row.replacementValue;
+  if (typeof repl === 'number' && Number.isFinite(repl) && repl > 0) {
+    out.replacementValue = repl;
+  }
+  const icRaw = row.item_condition ?? row.itemCondition;
+  if (icRaw === 'excellent' || icRaw === 'good' || icRaw === 'fair') {
+    out.itemCondition = icRaw;
+  }
+
   const oi = row.offer_images;
   if (Array.isArray(oi)) {
     const urls = oi

@@ -32,6 +32,8 @@ export type OfferDeepDetailBodyProps = {
   requestLocationDisplay: string;
   brandModelText: string | null;
   descriptionText: string | null;
+  /** From message line or `offers.item_condition` when present. */
+  itemConditionText?: string | null;
   replacementValueText: string | null;
   estimatedPreauth: number | null;
   lateFeePerDay: number;
@@ -56,6 +58,7 @@ export function OfferDeepDetailBody({
   requestLocationDisplay,
   brandModelText,
   descriptionText,
+  itemConditionText,
   replacementValueText,
   estimatedPreauth,
   lateFeePerDay,
@@ -307,6 +310,9 @@ export function OfferDeepDetailBody({
             <View style={styles.moreRows}>
               <View style={styles.infoGroup}>
                 <InfoRow label="Brand & model" value={brandModelText ?? '—'} />
+                {itemConditionText?.trim() ? (
+                  <InfoRow label="Item condition" value={itemConditionText.trim()} />
+                ) : null}
                 <InfoRow label="Delivery" value={negotiatedDeliverySummary || '—'} />
                 <InfoRow label="Replacement value" value={replacementValueText ?? '—'} />
               </View>

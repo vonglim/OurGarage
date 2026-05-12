@@ -39,6 +39,8 @@ export type RequestPayload = {
   returnDate?: string | null;
   beginAtIso?: string | null;
   returnAtIso?: string | null;
+  /** Optional renter notes (stored in description JSON). */
+  requestNotes?: string | null;
 };
 
 /** Extra fields not in dedicated DB columns (single-table MVP). */
@@ -56,6 +58,7 @@ function encodeDescriptionExtras(payload: RequestPayload): string {
     location: payload.location,
     requestLat: payload.requestLat,
     requestLng: payload.requestLng,
+    requestNotes: payload.requestNotes?.trim() ? payload.requestNotes.trim() : null,
   };
   return JSON.stringify(meta);
 }
@@ -109,6 +112,8 @@ export function decodeDescriptionExtras(description: string | null): Partial<Req
             : null,
       beginAtIso: typeof o.beginAtIso === 'string' ? o.beginAtIso : null,
       returnAtIso: typeof o.returnAtIso === 'string' ? o.returnAtIso : null,
+      requestNotes:
+        typeof o.requestNotes === 'string' && o.requestNotes.trim() !== '' ? o.requestNotes.trim() : null,
     };
     const normalized = normalizeDecodedRequestScheduleFields(base) as Record<string, unknown>;
     const pickup =
@@ -334,6 +339,10 @@ export function appRequestRowToPayload(row: Record<string, unknown>): RequestPay
     returnDate: sched.returnDate,
     beginAtIso: sched.beginAtIso,
     returnAtIso: sched.returnAtIso,
+    requestNotes:
+      typeof row.requestNotes === 'string' && row.requestNotes.trim() !== ''
+        ? row.requestNotes.trim()
+        : null,
   };
 }
 

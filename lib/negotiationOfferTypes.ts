@@ -45,6 +45,10 @@ export type Offer = {
   offer_images?: string[];
   /** Structured offer-stage verification photos (`offers.offer_evidence` jsonb). */
   offer_evidence?: StoredOfferEvidence | null;
+  /** Declared replacement / market value when persisted on the offer row. */
+  replacementValue?: number;
+  /** Item condition at offer time (`offers.item_condition`). */
+  itemCondition?: 'excellent' | 'good' | 'fair';
   messageHistory: OfferMessageEntry[];
   /** Populated from Supabase `select (..., profiles (id, name))` when the embed succeeds. */
   profiles?: { id: string; name: string } | null;

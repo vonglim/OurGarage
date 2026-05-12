@@ -26,6 +26,7 @@ import {
   type RequestPricingContext,
 } from '@/lib/negotiationTermSnapshot';
 import { formatDurationDisplay } from '@/lib/durationFormat';
+import { formatItemConditionLabel } from '@/lib/makeOfferWizardSubmit';
 import { formatUsd, getNumericTotalPrice } from '@/lib/money';
 import { openChatForRequest } from '@/lib/openRequestChat';
 import { getRequestOwnerId, isUuidString } from '@/lib/requestOwnership';
@@ -104,11 +105,17 @@ function extractTermLine(message: string | null | undefined, label: string): str
 }
 
 function offerItemPreviewLines(offer: Offer): { line1: string | null; line2: string | null } {
-  const brand = extractTermLine(offer.message, 'Brand and model');
+  const brand =
+    extractTermLine(offer.message, 'Brand and model') ??
+    (offer.toolDescription?.trim().length ? offer.toolDescription.trim() : null);
   const desc =
     extractTermLine(offer.message, 'Description') ??
     (offer.toolDescription?.trim().length ? offer.toolDescription.trim() : null);
-  return { line1: brand, line2: desc };
+  const cond =
+    extractTermLine(offer.message, 'Item condition') ??
+    (offer.itemCondition ? formatItemConditionLabel(offer.itemCondition) : null);
+  const parts = [desc, cond].filter((s): s is string => typeof s === 'string' && s.trim().length > 0);
+  return { line1: brand, line2: parts.length > 0 ? parts.join(' · ') : null };
 }
 
 function offerConditionSnippet(message: string | null | undefined): string | null {
@@ -119,7 +126,7 @@ function offerConditionSnippet(message: string | null | undefined): string | nul
       .map((l) => l.trim())
       .find(
         (l) =>
-          !/^(terms \(optional\)|brand and model:|description:|replacement value:|delivery method:|delivery fee:|daily late fee|late fees:)/i.test(
+          !/^(terms \(optional\)|brand and model:|description:|item condition:|replacement value:|delivery method:|delivery fee:|daily late fee|late fees:)/i.test(
             l
           )
       ) ?? null;

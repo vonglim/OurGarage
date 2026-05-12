@@ -170,6 +170,8 @@ export async function addOffer(
     offer_images?: string[];
     offer_evidence?: StoredOfferEvidence | null;
     negotiationDelivery?: { method: NegotiationDeliveryMethod; fee: number | null };
+    replacementValue?: number | null;
+    itemCondition?: 'excellent' | 'good' | 'fair' | null;
   }
 ): Promise<boolean> {
   if (!isSupabaseConfigured() || !requestRowId) return false;
@@ -245,6 +247,9 @@ export async function addOffer(
     ...(opts.negotiationDelivery !== undefined
       ? { negotiationDelivery: opts.negotiationDelivery }
       : {}),
+    ...(opts.toolDescription !== undefined ? { toolDescription: opts.toolDescription } : {}),
+    ...(opts.replacementValue !== undefined ? { replacementValue: opts.replacementValue } : {}),
+    ...(opts.itemCondition !== undefined ? { itemCondition: opts.itemCondition } : {}),
     requestHowHint: typeof howRaw === 'string' ? howRaw : null,
   });
   if (res == null) {

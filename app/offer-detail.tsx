@@ -38,6 +38,8 @@ import { formatHowDisplay } from '@/lib/deliveryFormat';
 import { formatNegotiatedDeliverySummary } from '@/lib/negotiationDelivery';
 import { formatDurationDisplay } from '@/lib/durationFormat';
 import type { Offer } from '@/lib/negotiationOfferTypes';
+import { formatItemConditionLabel } from '@/lib/makeOfferWizardSubmit';
+import { getOfferEvidenceEntriesForOffer } from '@/lib/offerEvidencePhotos';
 import { formatUsd, getNumericOfferPrice } from '@/lib/money';
 import type { FinalizeOfferAcceptanceResult } from '@/lib/finalizeOfferAcceptance';
 import { finalizeOfferAcceptance } from '@/lib/finalizeOfferAcceptance';
@@ -147,6 +149,8 @@ function parseMoneyFromTextLine(value: string | null): number | null {
 
 /** Reads optional verification photo URL from synced offer row fields (UI-only). */
 function readOfferVerificationPhotoUri(o: Offer): string | null {
+  const fromEvidence = getOfferEvidenceEntriesForOffer(o).find((e) => e.category === 'timestamp_proof');
+  if (fromEvidence?.url?.trim()) return fromEvidence.url.trim();
   const r = o as unknown as Record<string, unknown>;
   const keys = [
     'verification_photo_url',
@@ -1029,11 +1033,22 @@ export default function OfferDetailScreen() {
   });
   const pickupDateLabel = String((request as { pickupDate?: unknown }).pickupDate ?? '').trim();
   const returnDateLabel = String((request as { returnDate?: unknown }).returnDate ?? '').trim();
-  const brandModelText = extractTermLine(offer.message, 'Brand and model');
+  const brandModelText =
+    extractTermLine(offer.message, 'Brand and model') ??
+    (offer.toolDescription?.trim().length ? offer.toolDescription.trim() : null);
   const descriptionText =
     extractTermLine(offer.message, 'Description') ??
     (offer.toolDescription?.trim().length ? offer.toolDescription.trim() : null);
-  const replacementValueText = extractTermLine(offer.message, 'Replacement value');
+  const replacementValueText =
+    extractTermLine(offer.message, 'Replacement value') ??
+    (typeof offer.replacementValue === 'number' &&
+    Number.isFinite(offer.replacementValue) &&
+    offer.replacementValue > 0
+      ? formatUsd(offer.replacementValue)
+      : null);
+  const itemConditionText =
+    extractTermLine(offer.message, 'Item condition') ??
+    (offer.itemCondition ? formatItemConditionLabel(offer.itemCondition) : null);
   const verificationPhotoUri = readOfferVerificationPhotoUri(offer);
   const currentOfferStatusNote =
     offer.negotiationLocked
@@ -1132,6 +1147,7 @@ export default function OfferDetailScreen() {
         requestLocationDisplay={request.location?.trim() ? request.location.trim() : '—'}
         brandModelText={brandModelText}
         descriptionText={descriptionText}
+        itemConditionText={itemConditionText}
         replacementValueText={replacementValueText}
         estimatedPreauth={estimatedPreauth}
         lateFeePerDay={lateFeePerDay}

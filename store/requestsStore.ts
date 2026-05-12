@@ -285,6 +285,7 @@ export async function updateRequest(
     returnDate?: string | null;
     beginAtIso?: string | null;
     returnAtIso?: string | null;
+    requestNotes?: string | null;
   }
 ): Promise<void> {
   const prev = getRequestByTimestamp(timestamp);
