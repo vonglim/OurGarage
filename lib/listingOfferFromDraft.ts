@@ -6,11 +6,14 @@ import {
   OFFER_EVIDENCE_SCHEMA_VERSION,
   flattenOfferImageUrlsFromEvidence,
 } from '@/lib/offerEvidencePhotos';
+import { formatIsoDateMedium } from '@/lib/listingAvailabilityDates';
 import { formatUsd, parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
 
 export type ReceivePreference = 'pickup' | 'delivery' | 'either';
 
 export type ListingRenterOfferDraft = {
+  rentalStartIso: string | null;
+  rentalEndIso: string | null;
   receivePreference: ReceivePreference;
   /** Max renter will pay for delivery (optional). */
   deliveryBudgetMax: string;
@@ -21,6 +24,8 @@ export type ListingRenterOfferDraft = {
 export type ListingOfferSubmitPayload = {
   message: string;
   price: number;
+  rentalStartDate: string;
+  rentalEndDate: string;
   toolDescription: string;
   offer_images: string[];
   offer_evidence: StoredOfferEvidence | null;
@@ -44,6 +49,10 @@ export function mapListingRenterOfferDraftToPayload(
   snapshot: ListingIntentSnapshot,
   billingDays: number
 ): ListingOfferSubmitPayload | null {
+  const start = draft.rentalStartIso?.trim() ?? '';
+  const end = draft.rentalEndIso?.trim() ?? '';
+  if (!start || !end) return null;
+
   const daily = parseMoneyToNumber(sanitizeMoneyDigits(draft.dailyOfferRate));
   const rvDraft = parseMoneyToNumber(sanitizeMoneyDigits(draft.replacementValue));
   const rvSnap =
@@ -74,6 +83,9 @@ export function mapListingRenterOfferDraftToPayload(
 
   const lines: string[] = [];
   lines.push(`Listing: ${snapshot.title}`);
+  lines.push(
+    `Dates: ${formatIsoDateMedium(start)} → ${formatIsoDateMedium(end)} (${days} day(s))`
+  );
   lines.push(`Your offer: ${formatUsd(daily)}/day × ${days} day(s) → ${formatUsd(price)} estimated total`);
   lines.push('');
   lines.push('How you want to receive this rental:');
@@ -110,6 +122,8 @@ export function mapListingRenterOfferDraftToPayload(
   return {
     message,
     price,
+    rentalStartDate: start,
+    rentalEndDate: end,
     toolDescription: snapshot.title,
     offer_images,
     offer_evidence,

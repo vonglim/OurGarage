@@ -3,9 +3,15 @@ import { hydrateListingOffersFromSupabase } from '@/lib/hydrateListingOffersFrom
 import { insertServerNotificationToRecipient } from '@/lib/insertServerNotification';
 import type { ListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
 import type { ListingOfferSubmitPayload } from '@/lib/listingOfferFromDraft';
+import {
+  fetchListingAvailability,
+  isDateRangeAvailable,
+  replacePendingHoldForOffer,
+} from '@/lib/listingAvailability';
 import { formatUsd } from '@/lib/money';
-import { isSupabaseConfigured } from '@/lib/supabase';
+import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { upsertNegotiationListingOfferToSupabase } from '@/lib/supabaseNegotiation';
+import { hydrateListingAvailability } from '@/store/listingAvailabilityStore';
 
 export type SubmitListingOfferResult =
   | { ok: true; offerId: string }
@@ -16,6 +22,8 @@ export async function submitInitialListingOffer(args: {
   ownerUserId: string;
   snapshot: ListingIntentSnapshot;
   payload: ListingOfferSubmitPayload;
+  /** When re-submitting on an existing thread, ignore that offer's pending hold during conflict checks. */
+  existingOfferId?: string | null;
 }): Promise<SubmitListingOfferResult> {
   if (!isSupabaseConfigured()) {
     return { ok: false, message: 'Server is not configured.' };
@@ -29,8 +37,22 @@ export async function submitInitialListingOffer(args: {
     return { ok: false, message: 'You cannot offer on your own listing.' };
   }
 
+  const listingId = args.listingId.trim();
+  const avail = await fetchListingAvailability(listingId);
+  if (!avail.ok) {
+    return { ok: false, message: avail.message ?? 'Could not verify availability.' };
+  }
+  const ignore = args.existingOfferId?.trim() ?? '';
+  if (
+    !isDateRangeAvailable(args.payload.rentalStartDate, args.payload.rentalEndDate, avail.rows, {
+      ignoreOfferId: ignore || undefined,
+    })
+  ) {
+    return { ok: false, message: 'Those dates are no longer available.' };
+  }
+
   const row = await upsertNegotiationListingOfferToSupabase({
-    listingId: args.listingId.trim(),
+    listingId,
     listingSnapshot: args.snapshot as unknown as Record<string, unknown>,
     posterUserId: owner,
     renterId,
@@ -45,10 +67,26 @@ export async function submitInitialListingOffer(args: {
     replacementValue: args.payload.replacementValue,
     itemCondition: args.payload.itemCondition,
     negotiationDelivery: args.payload.negotiationDelivery,
+    rentalStartDate: args.payload.rentalStartDate,
+    rentalEndDate: args.payload.rentalEndDate,
   });
 
   if (!row?.id) {
     return { ok: false, message: 'Could not send offer. Try again after a moment.' };
+  }
+
+  const hold = await replacePendingHoldForOffer({
+    listingId,
+    startIso: args.payload.rentalStartDate,
+    endIso: args.payload.rentalEndDate,
+    sourceOfferId: row.id,
+  });
+  if (!hold.ok) {
+    if (row.wasInsert) {
+      const sb = getSupabase();
+      await sb.from('offers').delete().eq('id', row.id);
+    }
+    return { ok: false, message: hold.message ?? 'Could not reserve those dates.' };
   }
 
   insertServerNotificationToRecipient({
@@ -59,9 +97,10 @@ export async function submitInitialListingOffer(args: {
     body: `${args.snapshot.title} · ${formatUsd(args.payload.price)} estimated total.`,
     requestId: null,
     offerId: row.id,
-    listingId: args.listingId.trim(),
+    listingId,
   });
   void hydrateListingOffersFromSupabase();
+  void hydrateListingAvailability(listingId);
 
   return { ok: true, offerId: row.id };
 }

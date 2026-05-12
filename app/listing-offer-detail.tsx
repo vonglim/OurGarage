@@ -13,6 +13,7 @@ import { useAuthUserId } from '@/lib/authUser';
 import { hydrateListingOffersFromSupabase } from '@/lib/hydrateListingOffersFromSupabase';
 import { fetchListingOfferDetail, ownerSetListingOfferStatus } from '@/lib/listingOfferLifecycleActions';
 import { formatUsd } from '@/lib/money';
+import { formatIsoDateMedium } from '@/lib/listingAvailabilityDates';
 import { getSupabase } from '@/lib/supabase';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 
@@ -87,6 +88,11 @@ export default function ListingOfferDetailScreen() {
     return 0;
   }, [row]);
 
+  const rentalStart =
+    row && typeof row.rental_start_date === 'string' ? row.rental_start_date.slice(0, 10) : '';
+  const rentalEnd =
+    row && typeof row.rental_end_date === 'string' ? row.rental_end_date.slice(0, 10) : '';
+
   const onAccept = useCallback(async () => {
     setBusy(true);
     const r = await ownerSetListingOfferStatus(offerId, 'accepted');
@@ -140,6 +146,11 @@ export default function ListingOfferDetailScreen() {
           >
             <Text style={styles.statusPill}>{status || 'pending'}</Text>
             <Text style={styles.price}>{formatUsd(price)}</Text>
+            {rentalStart && rentalEnd ? (
+              <Text style={styles.datesLine}>
+                {formatIsoDateMedium(rentalStart)} → {formatIsoDateMedium(rentalEnd)}
+              </Text>
+            ) : null}
             <Text style={styles.hint}>Negotiation thread</Text>
             {messages.length === 0 ? (
               <Text style={styles.muted}>No messages yet.</Text>
@@ -222,6 +233,12 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 28,
     fontWeight: '800',
+    color: ui.textPrimary,
+  },
+  datesLine: {
+    marginTop: 8,
+    fontSize: 16,
+    fontWeight: '600',
     color: ui.textPrimary,
   },
   hint: {

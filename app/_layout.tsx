@@ -263,6 +263,7 @@ export default function RootLayout() {
               <Stack.Screen name="make-offer" />
               <Stack.Screen name="counter-offer" />
               <Stack.Screen name="listing-detail" />
+              <Stack.Screen name="listing-availability" />
               <Stack.Screen name="renby/index" />
               <Stack.Screen name="renby/[id]" />
               <Stack.Screen name="offer-detail" />

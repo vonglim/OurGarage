@@ -30,6 +30,11 @@ import {
   useListingsStore,
 } from '@/store/listingsStore';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
+import { getListingAvailabilityRanges } from '@/lib/listingAvailability';
+import {
+  hydrateListingAvailability,
+  useListingAvailabilityStore,
+} from '@/store/listingAvailabilityStore';
 
 declare const __DEV__: boolean;
 
@@ -94,7 +99,8 @@ export default function ListingDetailScreen() {
   useFocusEffect(
     useCallback(() => {
       void hydrateListingsFromSupabase();
-    }, [])
+      if (listingId) void hydrateListingAvailability(listingId);
+    }, [listingId])
   );
 
   useEffect(() => {
@@ -106,10 +112,18 @@ export default function ListingDetailScreen() {
     [listing, currentUserId]
   );
 
-  /** Sticky CTA: renter = 2 buttons + gap; owner = 3 stacked actions */
+  const availabilityRows = useListingAvailabilityStore((s) =>
+    listingId ? s.byListingId[listingId] ?? [] : []
+  );
+  const availabilityBuckets = useMemo(
+    () => getListingAvailabilityRanges(availabilityRows),
+    [availabilityRows]
+  );
+
+  /** Sticky CTA: renter = 2 buttons + gap; owner = 4 stacked actions */
   const stickyCtaScrollPaddingBottom =
     ui.spaceMd +
-    (isOwnListingForPad ? 3 * (ui.padButtonV * 2 + 44) + 2 * 10 : 2 * (ui.padButtonV * 2 + 44) + 10) +
+    (isOwnListingForPad ? 4 * (ui.padButtonV * 2 + 44) + 3 * 10 : 2 * (ui.padButtonV * 2 + 44) + 10) +
     insets.bottom +
     ui.spaceSm;
 
@@ -338,7 +352,24 @@ export default function ListingDetailScreen() {
 
                 <View style={styles.storeSection}>
                   <Text style={styles.sectionHeading}>Availability</Text>
-                  <Text style={styles.placeholderLine}>Calendar and instant-book will appear here.</Text>
+                  <Text style={styles.availSummary}>
+                    {availabilityBuckets.booked.length > 0
+                      ? `${availabilityBuckets.booked.length} booked segment(s). `
+                      : ''}
+                    {availabilityBuckets.pending.length > 0
+                      ? `${availabilityBuckets.pending.length} pending hold(s). `
+                      : ''}
+                    {availabilityBuckets.blocked.length > 0
+                      ? `${availabilityBuckets.blocked.length} blackout segment(s).`
+                      : availabilityBuckets.all.length === 0
+                        ? 'All dates are available unless you add blackouts.'
+                        : ''}
+                  </Text>
+                  {isOwnListing ? (
+                    <Text style={styles.placeholderLineMuted}>
+                      Use Manage availability in the toolbar below to block dates and review holds.
+                    </Text>
+                  ) : null}
                 </View>
 
                 {meta?.marketValue != null || meta?.verificationStatus || meta?.photoCount != null ? (
@@ -396,6 +427,16 @@ export default function ListingDetailScreen() {
                   <Pressable
                     pressOpacityFeedback={false}
                     haptic
+                    onPress={() =>
+                      router.push({ pathname: '/listing-availability', params: { listingId: listing.id } })
+                    }
+                    style={({ pressed }) => [styles.ownerCtaSecondary, pressed && { opacity: 0.9 }]}
+                  >
+                    <Text style={styles.ownerCtaSecondaryText}>Manage availability</Text>
+                  </Pressable>
+                  <Pressable
+                    pressOpacityFeedback={false}
+                    haptic
                     onPress={() => showFeedbackToast('Pause listing will be available soon.')}
                     style={({ pressed }) => [styles.ownerCtaSecondary, pressed && { opacity: 0.9 }]}
                   >
@@ -427,11 +468,7 @@ export default function ListingDetailScreen() {
                           : 1;
                       router.push({
                         pathname: '/make-offer-listing',
-                        params: {
-                          listingId: listing.id,
-                          durationKey: selectedDuration === 'multi' ? 'multi' : 'full',
-                          dayCount: String(dayCount),
-                        },
+                        params: { listingId: listing.id },
                       });
                     }}
                     style={({ pressed }) => [styles.secondaryOfferBtn, pressed && { opacity: 0.92 }]}
@@ -740,6 +777,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: ui.textSecondary,
     lineHeight: 22,
+  },
+  availSummary: {
+    fontSize: 15,
+    color: ui.textPrimary,
+    lineHeight: 22,
+    marginBottom: ui.spaceSm,
   },
   placeholderLineMuted: {
     fontSize: 14,

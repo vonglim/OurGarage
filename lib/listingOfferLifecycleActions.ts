@@ -1,5 +1,10 @@
 import { getAuthUserIdSync } from '@/lib/authUser';
+import {
+  convertPendingToBooked,
+  removePendingAvailabilityHold,
+} from '@/lib/listingAvailability';
 import { getSupabase } from '@/lib/supabase';
+import { hydrateListingAvailability } from '@/store/listingAvailabilityStore';
 
 export async function fetchListingOfferDetail(offerId: string): Promise<{
   row: Record<string, unknown> | null;
@@ -69,6 +74,13 @@ export async function ownerSetListingOfferStatus(
   if (error) {
     return { ok: false, message: error.message || 'Could not update offer.' };
   }
+
+  if (nextStatus === 'accepted') {
+    void convertPendingToBooked(id);
+  } else if (nextStatus === 'declined') {
+    void removePendingAvailabilityHold(id);
+  }
+  void hydrateListingAvailability(listingId);
 
   const renter = typeof row.user_id === 'string' ? row.user_id.trim() : '';
   const priceRaw = row.current_price ?? row.price;

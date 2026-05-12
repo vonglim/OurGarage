@@ -12,6 +12,7 @@ import { hydrateListingsFromSupabase } from '@/lib/hydrateListingsFromSupabase';
 import { buildListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
 import { fetchListingOwnerUserId, isToolListingOwner } from '@/lib/listingOwnership';
 import { normalizeListingImages } from '@/lib/normalizeListingImages';
+import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { getListingById } from '@/store/listingsStore';
 import type { ToolListing } from '@/store/listingsStore';
 
@@ -23,16 +24,12 @@ function firstParam(v: string | string[] | undefined): string | undefined {
 export default function MakeOfferListingScreen() {
   const params = useLocalSearchParams<{
     listingId?: string | string[];
-    durationKey?: string | string[];
-    dayCount?: string | string[];
   }>();
   const listingId = firstParam(params.listingId)?.trim();
-  const durationKey = firstParam(params.durationKey) === 'multi' ? 'multi' : 'full';
-  const dayCount = Math.max(1, parseInt(firstParam(params.dayCount) ?? '1', 10) || 1);
-  const billingDayCount = durationKey === 'multi' ? dayCount : 1;
 
   const currentUserId = useAuthUserId();
   const [ownerUserId, setOwnerUserId] = useState('');
+  const [existingListingOfferId, setExistingListingOfferId] = useState<string | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -65,6 +62,30 @@ export default function MakeOfferListingScreen() {
       cancelled = true;
     };
   }, [listingId, listing?.ownerUserId]);
+
+  useEffect(() => {
+    if (!listingId || !currentUserId.trim() || !isSupabaseConfigured()) {
+      setExistingListingOfferId(null);
+      return;
+    }
+    let cancelled = false;
+    const sb = getSupabase();
+    void sb
+      .from('offers')
+      .select('id')
+      .eq('listing_id', listingId)
+      .eq('user_id', currentUserId.trim())
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return;
+        const raw = data as { id?: unknown } | null;
+        const id = raw && typeof raw.id === 'string' ? raw.id.trim() : '';
+        setExistingListingOfferId(id !== '' ? id : null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [listingId, currentUserId]);
 
   const isOwn = useMemo(
     () => isToolListingOwner(listing, currentUserId),
@@ -122,8 +143,8 @@ export default function MakeOfferListingScreen() {
       listing={listing}
       snapshot={snapshot}
       ownerUserId={ownerUserId.trim()}
-      billingDayCount={billingDayCount}
       heroUrl={heroUrl}
+      existingListingOfferId={existingListingOfferId}
     />
   );
 }

@@ -175,6 +175,7 @@ export async function upsertNegotiationOfferToSupabase(input: {
   }
 
   let offerId: string;
+  let wasInsert = false;
 
   if (existingId) {
     offerId = existingId;
@@ -192,6 +193,7 @@ export async function upsertNegotiationOfferToSupabase(input: {
       return null;
     }
   } else {
+    wasInsert = true;
     let insertRow: Record<string, unknown> = {
       ...baseFields,
       request_id: input.requestRowId,
@@ -290,7 +292,9 @@ export async function upsertNegotiationListingOfferToSupabase(input: {
   itemCondition?: 'excellent' | 'good' | 'fair' | null;
   negotiationLifecycle?: NegotiationLifecycleDbWrite;
   negotiationDelivery?: { method: NegotiationDeliveryMethod; fee: number | null } | null;
-}): Promise<{ id: string } | null> {
+  rentalStartDate?: string | null;
+  rentalEndDate?: string | null;
+}): Promise<{ id: string; wasInsert: boolean } | null> {
   const supabase = getSupabase();
   const listingId = input.listingId.trim();
   const status = input.status ?? 'pending';
@@ -348,6 +352,14 @@ export async function upsertNegotiationListingOfferToSupabase(input: {
     baseFields.item_condition =
       c === 'excellent' || c === 'good' || c === 'fair' ? c : null;
   }
+  if (input.rentalStartDate !== undefined) {
+    const s = input.rentalStartDate?.trim() ?? '';
+    baseFields.rental_start_date = s.length > 0 ? s : null;
+  }
+  if (input.rentalEndDate !== undefined) {
+    const s = input.rentalEndDate?.trim() ?? '';
+    baseFields.rental_end_date = s.length > 0 ? s : null;
+  }
   const lc = input.negotiationLifecycle;
   if (lc != null) {
     if (lc.negotiationDeclineTotal !== undefined) {
@@ -380,6 +392,7 @@ export async function upsertNegotiationListingOfferToSupabase(input: {
   }
 
   let offerId: string;
+  let wasInsert = false;
 
   if (existingId) {
     offerId = existingId;
@@ -394,6 +407,7 @@ export async function upsertNegotiationListingOfferToSupabase(input: {
       return null;
     }
   } else {
+    wasInsert = true;
     let insertRow: Record<string, unknown> = {
       ...baseFields,
       request_id: null,
@@ -429,7 +443,7 @@ export async function upsertNegotiationListingOfferToSupabase(input: {
           }
           continue;
         }
-        const fallback = ['listing_snapshot', 'listing_id'] as const;
+        const fallback = ['listing_snapshot', 'listing_id', 'rental_start_date', 'rental_end_date'] as const;
         let stripped = false;
         for (const key of fallback) {
           if (key in insertRow) {
@@ -482,5 +496,5 @@ export async function upsertNegotiationListingOfferToSupabase(input: {
   }
 
   logOfferSync('supabase_response', 'upsertNegotiationListingOfferToSupabase ok', { id: offerId });
-  return { id: offerId };
+  return { id: offerId, wasInsert };
 }

@@ -1,4 +1,4 @@
-import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ScrollView } from 'react-native';
 import { Image, StyleSheet, Text, TextInput, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
@@ -11,19 +11,29 @@ import { WizardSubtitle } from '@/components/WizardSubtitle';
 import { ui } from '@/constants/appUi';
 import { wizardStepTitleStyle } from '@/constants/wizardCopy';
 import {
+  billingDaysInclusive,
+  isDateRangeAvailable,
+} from '@/lib/listingAvailability';
+import {
   mapListingRenterOfferDraftToPayload,
   type ListingRenterOfferDraft,
   type ReceivePreference,
 } from '@/lib/listingOfferFromDraft';
 import type { ListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
+import { formatIsoDateMedium } from '@/lib/listingAvailabilityDates';
 import { formatUsd, parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
 import { submitInitialListingOffer } from '@/lib/submitListingOffer';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import type { ToolListing } from '@/store/listingsStore';
+import {
+  hydrateListingAvailability,
+  useListingAvailabilityStore,
+} from '@/store/listingAvailabilityStore';
 
+import { ListingOfferDatesStep } from './ListingOfferDatesStep';
 import { WizardChrome } from './WizardChrome';
 
-type LStep = 1 | 2 | 3;
+type LStep = 1 | 2 | 3 | 4;
 
 const RECEIVE_OPTIONS: {
   key: ReceivePreference;
@@ -43,6 +53,8 @@ function seedDraft(listing: ToolListing): ListingRenterOfferDraft {
         ? listing.replacementValue
         : 0;
   return {
+    rentalStartIso: null,
+    rentalEndIso: null,
     receivePreference: 'either',
     deliveryBudgetMax: '',
     dailyOfferRate: String(listing.price > 0 ? listing.price : ''),
@@ -59,11 +71,18 @@ type Props = {
   listing: ToolListing;
   snapshot: ListingIntentSnapshot;
   ownerUserId: string;
-  billingDayCount: number;
   heroUrl: string | null;
+  /** Existing listing-offer thread for this renter, if any (ignored for date conflict checks). */
+  existingListingOfferId?: string | null;
 };
 
-export function ListingOfferWizard({ listing, snapshot, ownerUserId, billingDayCount, heroUrl }: Props) {
+export function ListingOfferWizard({
+  listing,
+  snapshot,
+  ownerUserId,
+  heroUrl,
+  existingListingOfferId,
+}: Props) {
   const router = useRouter();
   const mainScrollRef = useRef<ScrollView>(null);
   const submitInFlight = useRef(false);
@@ -71,7 +90,16 @@ export function ListingOfferWizard({ listing, snapshot, ownerUserId, billingDayC
   const [draft, setDraft] = useState<ListingRenterOfferDraft>(() => seedDraft(listing));
   const [submitting, setSubmitting] = useState(false);
 
-  const days = Math.max(1, Math.round(billingDayCount));
+  const rows = useListingAvailabilityStore((s) => s.byListingId[listing.id] ?? []);
+
+  useEffect(() => {
+    void hydrateListingAvailability(listing.id);
+  }, [listing.id]);
+
+  const billingDays = useMemo(() => {
+    if (!draft.rentalStartIso || !draft.rentalEndIso) return 1;
+    return Math.max(1, billingDaysInclusive(draft.rentalStartIso, draft.rentalEndIso));
+  }, [draft.rentalStartIso, draft.rentalEndIso]);
 
   useLayoutEffect(() => {
     mainScrollRef.current?.scrollTo({ y: 0, animated: false });
@@ -85,9 +113,21 @@ export function ListingOfferWizard({ listing, snapshot, ownerUserId, billingDayC
     setDraft((prev) => ({ ...prev, ...patch }));
   }, []);
 
+  const onChangeDates = useCallback((start: string | null, end: string | null) => {
+    setDraft((prev) => ({ ...prev, rentalStartIso: start, rentalEndIso: end }));
+  }, []);
+
   const canContinue = useMemo(() => {
-    if (step === 1) return true;
-    if (step === 2) {
+    if (step === 1) {
+      const s = draft.rentalStartIso?.trim() ?? '';
+      const e = draft.rentalEndIso?.trim() ?? '';
+      if (!s || !e) return false;
+      return isDateRangeAvailable(s, e, rows, {
+        ignoreOfferId: existingListingOfferId?.trim() || undefined,
+      });
+    }
+    if (step === 2) return true;
+    if (step === 3) {
       const daily = parseMoneyToNumber(sanitizeMoneyDigits(draft.dailyOfferRate));
       const rv = parseMoneyToNumber(sanitizeMoneyDigits(draft.replacementValue));
       const snapRv =
@@ -98,10 +138,10 @@ export function ListingOfferWizard({ listing, snapshot, ownerUserId, billingDayC
       return daily != null && daily > 0 && okRv;
     }
     return true;
-  }, [step, draft, snapshot.replacement_value]);
+  }, [step, draft, snapshot.replacement_value, rows, existingListingOfferId]);
 
   const goNext = useCallback(() => {
-    if (step < 3) setStep((s) => (s + 1) as LStep);
+    if (step < 4) setStep((s) => (s + 1) as LStep);
   }, [step]);
 
   const goBack = useCallback(() => {
@@ -115,9 +155,9 @@ export function ListingOfferWizard({ listing, snapshot, ownerUserId, billingDayC
 
   const submitOffer = useCallback(async () => {
     if (submitInFlight.current) return;
-    const payload = mapListingRenterOfferDraftToPayload(draft, snapshot, days);
+    const payload = mapListingRenterOfferDraftToPayload(draft, snapshot, billingDays);
     if (!payload) {
-      showFeedbackToast('Check your daily offer and protection value.');
+      showFeedbackToast('Check your dates, daily offer, and protection value.');
       return;
     }
     submitInFlight.current = true;
@@ -128,6 +168,7 @@ export function ListingOfferWizard({ listing, snapshot, ownerUserId, billingDayC
         ownerUserId,
         snapshot,
         payload,
+        existingOfferId: existingListingOfferId ?? null,
       });
       if (r.ok) {
         router.replace({
@@ -136,16 +177,17 @@ export function ListingOfferWizard({ listing, snapshot, ownerUserId, billingDayC
         });
       } else {
         showFeedbackToast(r.message);
+        void hydrateListingAvailability(listing.id);
       }
     } finally {
       setSubmitting(false);
       submitInFlight.current = false;
     }
-  }, [draft, snapshot, days, listing.id, ownerUserId, router]);
+  }, [draft, snapshot, billingDays, listing.id, ownerUserId, router, existingListingOfferId]);
 
   const onFooterPress = useCallback(() => {
     if (!canContinue || submitting) return;
-    if (step < 3) {
+    if (step < 4) {
       goNext();
       return;
     }
@@ -154,26 +196,41 @@ export function ListingOfferWizard({ listing, snapshot, ownerUserId, billingDayC
 
   const dailyNum = parseMoneyToNumber(sanitizeMoneyDigits(draft.dailyOfferRate));
   const totalPreview =
-    dailyNum != null && dailyNum > 0 ? Math.round(dailyNum * days * 100) / 100 : null;
+    dailyNum != null && dailyNum > 0 ? Math.round(dailyNum * billingDays * 100) / 100 : null;
   const budgetNum = parseMoneyToNumber(sanitizeMoneyDigits(draft.deliveryBudgetMax));
 
-  const footerLabel = step === 3 ? (submitting ? 'Sending…' : 'Send offer') : 'Continue';
+  const footerLabel = step === 4 ? (submitting ? 'Sending…' : 'Send offer') : 'Continue';
 
   const chromeTitle =
     step === 1
-      ? 'Receive item'
+      ? 'Select dates'
       : step === 2
-        ? 'Your offer'
-        : 'Review';
+        ? 'Receive item'
+        : step === 3
+          ? 'Your offer'
+          : 'Review';
   const chromeSubtitle =
     step === 1
-      ? 'How would you like to receive the item?'
+      ? 'Choose your rental window'
       : step === 2
-        ? 'What would you like to offer?'
-        : listing.name;
+        ? 'How would you like to receive the item?'
+        : step === 3
+          ? 'What would you like to offer?'
+          : listing.name;
 
   const body = useMemo(() => {
     if (step === 1) {
+      return (
+        <ListingOfferDatesStep
+          listingId={listing.id}
+          rows={rows}
+          draft={draft}
+          onChangeDates={onChangeDates}
+          ignoreOfferId={existingListingOfferId ?? null}
+        />
+      );
+    }
+    if (step === 2) {
       return (
         <View style={styles.pad}>
           <Text style={wizardStepTitleStyle}>How would you like to receive the item?</Text>
@@ -212,7 +269,7 @@ export function ListingOfferWizard({ listing, snapshot, ownerUserId, billingDayC
         </View>
       );
     }
-    if (step === 2) {
+    if (step === 3) {
       return (
         <View style={styles.pad}>
           <Text style={wizardStepTitleStyle}>What would you like to offer?</Text>
@@ -237,7 +294,7 @@ export function ListingOfferWizard({ listing, snapshot, ownerUserId, billingDayC
           />
           <Text style={styles.previewLabel}>Estimated total</Text>
           <Text style={styles.previewValue}>
-            {totalPreview != null ? formatUsd(totalPreview) : '—'} for {days} day(s)
+            {totalPreview != null ? formatUsd(totalPreview) : '—'} for {billingDays} day(s)
           </Text>
         </View>
       );
@@ -260,6 +317,22 @@ export function ListingOfferWizard({ listing, snapshot, ownerUserId, billingDayC
         )}
         <Text style={styles.listTitle}>{listing.name}</Text>
         <View style={styles.kv}>
+          <Text style={styles.kvK}>Start date</Text>
+          <Text style={styles.kvV}>
+            {draft.rentalStartIso ? formatIsoDateMedium(draft.rentalStartIso) : '—'}
+          </Text>
+        </View>
+        <View style={styles.kv}>
+          <Text style={styles.kvK}>End date</Text>
+          <Text style={styles.kvV}>
+            {draft.rentalEndIso ? formatIsoDateMedium(draft.rentalEndIso) : '—'}
+          </Text>
+        </View>
+        <View style={styles.kv}>
+          <Text style={styles.kvK}>Rental duration</Text>
+          <Text style={styles.kvV}>{billingDays} day(s)</Text>
+        </View>
+        <View style={styles.kv}>
           <Text style={styles.kvK}>Your offer</Text>
           <Text style={styles.kvV}>
             {dailyNum != null && dailyNum > 0 ? `${formatUsd(dailyNum)} / day` : '—'}
@@ -279,10 +352,14 @@ export function ListingOfferWizard({ listing, snapshot, ownerUserId, billingDayC
         </View>
         <View style={styles.editRow}>
           <Pressable onPress={() => setStep(1)} style={({ pressed }) => [styles.linkWrap, pressed && { opacity: 0.85 }]}>
-            <Text style={styles.link}>Edit receive</Text>
+            <Text style={styles.link}>Edit dates</Text>
           </Pressable>
           <Text style={styles.dot}> · </Text>
           <Pressable onPress={() => setStep(2)} style={({ pressed }) => [styles.linkWrap, pressed && { opacity: 0.85 }]}>
+            <Text style={styles.link}>Edit receive</Text>
+          </Pressable>
+          <Text style={styles.dot}> · </Text>
+          <Pressable onPress={() => setStep(3)} style={({ pressed }) => [styles.linkWrap, pressed && { opacity: 0.85 }]}>
             <Text style={styles.link}>Edit offer</Text>
           </Pressable>
         </View>
@@ -292,12 +369,16 @@ export function ListingOfferWizard({ listing, snapshot, ownerUserId, billingDayC
     step,
     draft,
     updateDraft,
+    onChangeDates,
+    listing.id,
     listing.name,
+    rows,
     heroUrl,
-    days,
+    billingDays,
     totalPreview,
     dailyNum,
     budgetNum,
+    existingListingOfferId,
   ]);
 
   return (
@@ -306,9 +387,9 @@ export function ListingOfferWizard({ listing, snapshot, ownerUserId, billingDayC
         <WizardChrome
           title={chromeTitle}
           subtitle={chromeSubtitle}
-          stepIndex={step <= 2 ? step : 3}
-          totalSteps={3}
-          reviewMode={step === 3}
+          stepIndex={step <= 3 ? step : 4}
+          totalSteps={4}
+          reviewMode={step === 4}
           scrollViewRef={mainScrollRef}
           onBack={goBack}
           footerLabel={footerLabel}
