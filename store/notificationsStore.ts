@@ -19,7 +19,11 @@ export type AppNotificationType =
   | 'started'
   | 'completed'
   | 'review'
-  | 'message';
+  | 'message'
+  /** Listing `rental_requests` — owner inbox / Activity badge. */
+  | 'rental_request'
+  /** Renter notified when a listing rental request is declined. */
+  | 'rental_declined';
 
 export type AppNotification = {
   id: string;
@@ -35,6 +39,10 @@ export type AppNotification = {
   chatId: string | null;
   /** `rentals.id` when the workflow lives in the rental workspace (post-accept / meetup / lifecycle). */
   rentalId: string | null;
+  /** `listings.id` from server `notifications.data` (listing rental flow). */
+  listingId?: string | null;
+  /** `rental_requests.id` from server `notifications.data`. */
+  rentalRequestId?: string | null;
   /**
    * If set, this notification is only shown to this user (e.g. incoming chat for recipient).
    * Omit for broadcast/system rows (offers, etc.).
@@ -58,10 +66,14 @@ function normalizeLoaded(raw: unknown): AppNotification[] {
     'agreement_pending',
     'offer_accepted',
     'declined',
+    'rental_request',
+    'rental_declined',
+    'rental_confirmed',
   ]);
   const toAppType = (t: string): string => {
     if (t === 'offer_created' || t === 'offer_updated') return 'new_offer';
     if (t === 'offer' || t === 'new_offer') return 'new_offer';
+    if (t === 'rental_confirmed') return 'accepted';
     return t;
   };
   const out: AppNotification[] = [];
@@ -89,8 +101,27 @@ function normalizeLoaded(raw: unknown): AppNotification[] {
       typeof rawRent === 'string' && isUuidString(rawRent.trim()) ? rawRent.trim() : null;
     const forUserId =
       typeof r.forUserId === 'string' && r.forUserId.length > 0 ? r.forUserId : null;
+    const lid = r.listingId;
+    const listingId =
+      typeof lid === 'string' && isUuidString(lid.trim()) ? lid.trim() : null;
+    const rq = r.rentalRequestId;
+    const rentalRequestId =
+      typeof rq === 'string' && isUuidString(rq.trim()) ? rq.trim() : null;
     if (!id || !timestamp) continue;
-    out.push({ id, type, message, timestamp, read, requestId, offerId, chatId, rentalId, forUserId });
+    out.push({
+      id,
+      type,
+      message,
+      timestamp,
+      read,
+      requestId,
+      offerId,
+      chatId,
+      rentalId,
+      listingId,
+      rentalRequestId,
+      forUserId,
+    });
   }
   return out;
 }
@@ -151,6 +182,7 @@ function filterStaleNotifications(list: AppNotification[]): AppNotification[] {
       }
       return false;
     }
+    if (n.type === 'rental_request' || n.type === 'rental_declined') return true;
     return true;
   });
 }
@@ -238,6 +270,8 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
         entry.rentalId != null && isUuidString(String(entry.rentalId).trim())
           ? String(entry.rentalId).trim()
           : null,
+      listingId: null,
+      rentalRequestId: null,
       forUserId: target ?? null,
     };
     set((state) => ({

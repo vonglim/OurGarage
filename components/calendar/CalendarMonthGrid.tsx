@@ -22,6 +22,10 @@ export type CalendarMonthGridProps = {
   onPressDay?: (iso: string) => void;
   /** `ownerDay`: host can tap blocked days to edit; booked/pending stay locked. */
   selectionMode?: 'renterRange' | 'ownerDay';
+  /** Display-only: show availability colors without disabling blocked/booked styling. */
+  readOnly?: boolean;
+  /** Tighter month chrome for embedded previews. */
+  dense?: boolean;
 };
 
 function daysInMonth(year: number, monthIndex0: number): number {
@@ -38,6 +42,8 @@ export function CalendarMonthGrid({
   disablePast,
   onPressDay,
   selectionMode = 'renterRange',
+  readOnly = false,
+  dense = false,
 }: CalendarMonthGridProps) {
   const todayIso = isoDateFromLocalDate(new Date());
   const { dayCells } = useMemo(() => {
@@ -70,29 +76,43 @@ export function CalendarMonthGrid({
   }, [dayCells]);
 
   return (
-    <View style={styles.wrap}>
-      <Text style={styles.monthTitle}>{monthLabel(year, monthIndex0)}</Text>
-      <View style={styles.weekHeader}>
+    <View style={[styles.wrap, dense && styles.wrapDense]}>
+      <Text style={[styles.monthTitle, dense && styles.monthTitleDense]}>{monthLabel(year, monthIndex0)}</Text>
+      <View style={[styles.weekHeader, dense && styles.weekHeaderDense]}>
         {WEEKDAYS.map((w, i) => (
-          <Text key={`${w}-${i}`} style={styles.weekHeaderCell}>
+          <Text key={`${w}-${i}`} style={[styles.weekHeaderCell, dense && styles.weekHeaderCellDense]}>
             {w}
           </Text>
         ))}
       </View>
       {rows.map((week, wi) => (
-        <View key={`w-${wi}`} style={styles.weekRow}>
+        <View key={`w-${wi}`} style={[styles.weekRow, dense && styles.weekRowDense]}>
           {week.map((iso, di) => {
             if (iso == null) {
-              return <CalendarDayCell key={`e-${wi}-${di}`} dayIso={null} visual="outside" rangeRole="none" isToday={false} disabled />;
+              return (
+                <CalendarDayCell
+                  key={`e-${wi}-${di}`}
+                  dayIso={null}
+                  visual="outside"
+                  rangeRole="none"
+                  isToday={false}
+                  disabled={true}
+                  compact={dense}
+                />
+              );
             }
             const visual = getDayVisual(iso);
             const rangeRole = getRangeRole(iso);
             let disabled = false;
-            if (disablePast && compareIsoDate(iso, todayIso) < 0) disabled = true;
-            if (minSelectableIso && compareIsoDate(iso, minSelectableIso) < 0) disabled = true;
-            if (maxSelectableIso && compareIsoDate(iso, maxSelectableIso) > 0) disabled = true;
-            if (visual === 'booked' || visual === 'pending') disabled = true;
-            else if (selectionMode === 'renterRange' && visual === 'blocked') disabled = true;
+            if (readOnly) {
+              disabled = false;
+            } else {
+              if (disablePast && compareIsoDate(iso, todayIso) < 0) disabled = true;
+              if (minSelectableIso && compareIsoDate(iso, minSelectableIso) < 0) disabled = true;
+              if (maxSelectableIso && compareIsoDate(iso, maxSelectableIso) > 0) disabled = true;
+              if (visual === 'booked' || visual === 'pending') disabled = true;
+              else if (selectionMode === 'renterRange' && visual === 'blocked') disabled = true;
+            }
             return (
               <CalendarDayCell
                 key={iso}
@@ -102,6 +122,7 @@ export function CalendarMonthGrid({
                 isToday={iso === todayIso}
                 disabled={disabled}
                 onPress={onPressDay}
+                compact={dense}
               />
             );
           })}
@@ -117,6 +138,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: ui.spaceSm,
     backgroundColor: '#FFFFFF',
   },
+  wrapDense: {
+    paddingTop: 2,
+    paddingBottom: 0,
+    paddingHorizontal: 1,
+  },
   monthTitle: {
     fontSize: 20,
     fontWeight: '700',
@@ -124,9 +150,18 @@ const styles = StyleSheet.create({
     marginBottom: ui.spaceSm,
     paddingHorizontal: 4,
   },
+  monthTitleDense: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 8,
+    paddingHorizontal: 2,
+  },
   weekHeader: {
     flexDirection: 'row',
     marginBottom: 6,
+  },
+  weekHeaderDense: {
+    marginBottom: 2,
   },
   weekHeaderCell: {
     flex: 1,
@@ -135,8 +170,15 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: ui.textSecondary,
   },
+  weekHeaderCellDense: {
+    fontSize: 9,
+    fontWeight: '700',
+  },
   weekRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
+  },
+  weekRowDense: {
+    marginBottom: 0,
   },
 });

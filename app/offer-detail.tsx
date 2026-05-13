@@ -978,6 +978,25 @@ export default function OfferDetailScreen() {
     tick,
   ]);
 
+  /** Canonical offer thread: deep detail + negotiation controls (same route as `view=full`). */
+  const navigateToThreadDecision = useCallback(
+    (nextOfferId: string) => {
+      if (!request) return;
+      const rowId = getRequestSupabaseRowId(request as Record<string, unknown>);
+      const rid =
+        typeof rowId === 'string' && rowId.trim().length > 0 ? rowId.trim() : requestIdStr.trim();
+      router.push({
+        pathname: '/offer-detail',
+        params: {
+          requestId: (rid.length > 0 ? rid : requestIdStr).trim(),
+          offerId: nextOfferId,
+          view: 'full',
+        },
+      });
+    },
+    [request, requestIdStr]
+  );
+
   if (offerIdTrim.length === 0) {
     return null;
   }
@@ -1109,13 +1128,15 @@ export default function OfferDetailScreen() {
         go(id);
         return;
       }
-      showFeedbackToast('Open your rental from Activity › Rentals.');
+      showFeedbackToast('Open your rental from Activity.');
       try {
         await scheduleActivityRentalsIntent(isViewerPoster ? 'renting' : isRenterOnThread ? 'listing' : 'renting');
       } catch {
-        // still open Activity
+        // still open workspace
       }
-      router.push('/(tabs)/activity');
+      const workspace =
+        isViewerPoster || (!isRenterOnThread) ? '/activity-renting' : '/activity-my-shop';
+      router.push(workspace);
     })();
   }
 
@@ -1172,24 +1193,6 @@ export default function OfferDetailScreen() {
   decisionRequestSummarySegments.push(formatDurationDisplay(request));
   decisionRequestSummarySegments.push(formatHowDisplay(request));
   const decisionRequestSummaryLine = `${isViewerPoster ? 'Your request: ' : 'This request: '}${decisionRequestSummarySegments.join(' • ')}`;
-
-  /** Canonical offer thread: deep detail + negotiation controls (same route as `view=full`). */
-  const navigateToThreadDecision = useCallback(
-    (offerId: string) => {
-      const rowId = getRequestSupabaseRowId(request as Record<string, unknown>);
-      const rid =
-        typeof rowId === 'string' && rowId.trim().length > 0 ? rowId.trim() : requestIdStr.trim();
-      router.push({
-        pathname: '/offer-detail',
-        params: {
-          requestId: (rid.length > 0 ? rid : requestIdStr).trim(),
-          offerId,
-          view: 'full',
-        },
-      });
-    },
-    [request, requestIdStr]
-  );
 
   const scrollBottomPad = showAcceptTransitionBar
     ? 64 + insets.bottom

@@ -6,7 +6,9 @@ import type {
 import { REALTIME_SUBSCRIBE_STATES } from '@supabase/realtime-js';
 import { Platform } from 'react-native';
 
+import { getAuthUserIdSync } from '@/lib/authUser';
 import { getActiveChatOfferThreadId } from '@/lib/activeChatOfferThread';
+import { isUuidString } from '@/lib/requestOwnership';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { presentLocalChatBanner } from '@/lib/notifications';
 import {
@@ -16,6 +18,7 @@ import {
   type AppNotification,
   type AppNotificationType,
 } from '@/store/notificationsStore';
+import { useUnifiedRentalsActivityStore } from '@/store/unifiedRentalsActivityStore';
 
 const SERVER_TYPE_TO_APP: Record<string, AppNotificationType> = {
   new_message: 'message',
@@ -26,6 +29,8 @@ const SERVER_TYPE_TO_APP: Record<string, AppNotificationType> = {
   counter_offer: 'counter_offer',
   agreement_pending: 'agreement_pending',
   rental_confirmed: 'accepted',
+  rental_request: 'rental_request',
+  rental_declined: 'rental_declined',
 };
 
 function mapServerType(raw: string): AppNotificationType {
@@ -94,6 +99,19 @@ export function mapSupabaseNotificationToApp(
     if (typeof rId === 'string' && rId.trim() !== '') rentalId = rId.trim();
   }
 
+  const listingIdRaw = data && typeof data === 'object' && !Array.isArray(data)
+    ? (data as Record<string, unknown>).listingId ?? (data as Record<string, unknown>).listing_id
+    : null;
+  const listingId =
+    typeof listingIdRaw === 'string' && isUuidString(listingIdRaw.trim()) ? listingIdRaw.trim() : null;
+
+  const rrRaw =
+    data && typeof data === 'object' && !Array.isArray(data)
+      ? (data as Record<string, unknown>).rentalRequestId ?? (data as Record<string, unknown>).rental_request_id
+      : null;
+  const rentalRequestId =
+    typeof rrRaw === 'string' && isUuidString(rrRaw.trim()) ? rrRaw.trim() : null;
+
   return {
     id,
     type: mapServerType(st),
@@ -103,7 +121,9 @@ export function mapSupabaseNotificationToApp(
     requestId: requestId as string | number | null,
     offerId,
     chatId,
-    rentalId,
+    rentalId: rentalId && isUuidString(rentalId) ? rentalId : null,
+    listingId,
+    rentalRequestId,
     forUserId: (forUserId || '').trim() || null,
   };
 }
@@ -143,6 +163,18 @@ function runInitialServerFetch(
       }
     }
   })();
+}
+
+/** Pull recent `public.notifications` rows for the signed-in user (e.g. after rental lifecycle mutations). */
+export function mergeRecentNotificationsFromServer(): void {
+  if (!isSupabaseConfigured()) return;
+  const uid = getAuthUserIdSync()?.trim();
+  if (!uid) return;
+  if (__DEV__) {
+    console.log('[notifications] mergeRecentNotificationsFromServer', { userId: uid });
+  }
+  runInitialServerFetch(getSupabase(), uid, () => false);
+  void useUnifiedRentalsActivityStore.getState().refreshFromServer();
 }
 
 function removeChannel(
@@ -223,10 +255,13 @@ export function startNotificationsServerSync(userId: string): () => void {
           const r = row as Record<string, unknown>;
           if (r.user_id == null) return;
           if (String(r.user_id) !== currentUserId) return;
+          const rawType = typeof r.type === 'string' ? r.type : '';
           const n = mapSupabaseNotificationToApp(r, currentUserId);
           if (n) {
             addNotificationToStore(n);
-            const rawType = typeof r.type === 'string' ? r.type : '';
+            if (rawType === 'rental_confirmed') {
+              void useUnifiedRentalsActivityStore.getState().refreshFromServer();
+            }
             const offerIdRaw = r.offer_id;
             const offerId =
               typeof offerIdRaw === 'string' && offerIdRaw.trim() !== '' ? offerIdRaw.trim() : '';

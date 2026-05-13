@@ -1,5 +1,5 @@
 import { isPersistedRemoteImageUrl, sanitizeListingImagesForPersistence } from '@/lib/listingImageUrls';
-import { parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
+import { formatUsd, parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
 import { coordinatesFromLocationField } from '@/lib/zipCoordinates';
 
 import type { ListingWizardDraft } from './listingTypes';
@@ -150,6 +150,12 @@ export function buildListingPublishPayload(
   const images = sanitizeListingImagesForPersistence(rawImages);
   if (images.length === 0) return null;
 
+  let deliveryFeePreference: string | undefined;
+  if (draft.handoff !== 'pickup_only') {
+    const fee = resolveListingDeliveryFee(draft);
+    deliveryFeePreference = fee <= 0 ? 'Free' : formatUsd(fee);
+  }
+
   return {
     name: title,
     price,
@@ -161,6 +167,7 @@ export function buildListingPublishPayload(
       conditionLabel: draft.condition ? CONDITION_LABELS[draft.condition] : undefined,
       includedItems: draft.included.length ? [...draft.included] : undefined,
       handoffSummary: handoffSummaryLine(draft),
+      deliveryFeePreference,
       serviceArea: draft.serviceArea.trim() || undefined,
       marketValue: mv != null && mv >= 0 ? mv : undefined,
       verificationStatus: verificationStatusLine(draft),

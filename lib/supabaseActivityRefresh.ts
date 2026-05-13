@@ -2,6 +2,7 @@ import { hydrateListingOffersFromSupabase } from '@/lib/hydrateListingOffersFrom
 import { getRequestSupabaseRowId } from '@/lib/requestOwnership';
 import { getSupabase } from '@/lib/supabase';
 import { fetchAllOffersWithProfiles, mapSupabaseOfferRowToOffer } from '@/lib/supabaseOffers';
+import { logRentalLifecycle } from '@/lib/rentalLifecycleDebug';
 import { useOffersStore } from '@/store/offersStore';
 import { refreshRequestsFromSupabase, useRequestsStore } from '@/store/requestsStore';
 
@@ -46,7 +47,9 @@ async function mergeRemoteOffersIntoOffersStore(): Promise<void> {
  * Activity tab refresh: merged requests from Supabase, then upsert offers (one thread per renter).
  */
 export async function refreshActivityScreenFromSupabase(): Promise<void> {
+  if (__DEV__) logRentalLifecycle('activity_store_refresh_start');
   await refreshRequestsFromSupabase();
   await mergeRemoteOffersIntoOffersStore();
   await hydrateListingOffersFromSupabase();
+  if (__DEV__) logRentalLifecycle('activity_store_refresh_done');
 }

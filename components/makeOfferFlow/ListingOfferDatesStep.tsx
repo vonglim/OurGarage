@@ -5,14 +5,17 @@ import { ListingDateRangePicker } from '@/components/calendar/ListingDateRangePi
 import { WizardSubtitle } from '@/components/WizardSubtitle';
 import { ui } from '@/constants/appUi';
 import { wizardStepTitleStyle } from '@/constants/wizardCopy';
-import type { ListingRenterOfferDraft } from '@/lib/listingOfferFromDraft';
 import { billingDaysInclusive, type ListingAvailabilityRow } from '@/lib/listingAvailability';
 import { formatIsoDateMedium } from '@/lib/listingAvailabilityDates';
+import type { ListingRenterOfferDraft } from '@/lib/listingOfferFromDraft';
+
+/** Minimal draft slice for date range UI (full offer draft is a superset). */
+export type ListingOfferDatesDraftSlice = Pick<ListingRenterOfferDraft, 'rentalStartIso' | 'rentalEndIso'>;
 
 type Props = {
   listingId: string;
   rows: ListingAvailabilityRow[];
-  draft: ListingRenterOfferDraft;
+  draft: ListingOfferDatesDraftSlice;
   onChangeDates: (start: string | null, end: string | null) => void;
   ignoreOfferId?: string | null;
 };

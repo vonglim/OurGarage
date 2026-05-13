@@ -1,32 +1,34 @@
-import DateTimePicker from '@react-native-community/datetimepicker';
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
-import {
-  Image,
-  Modal,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Image, StyleSheet, Text, TextInput, View, type ScrollView } from 'react-native';
+import Animated, { FadeIn } from 'react-native-reanimated';
 
 import { BackHeader } from '@/components/AppHeaders';
+import { ListingOfferDatesStep } from '@/components/makeOfferFlow/ListingOfferDatesStep';
+import { ThreeLinePreferenceCards, type ThreeLineOption } from '@/components/makeOfferFlow/ThreeLinePreferenceCards';
+import { WizardChrome } from '@/components/makeOfferFlow/WizardChrome';
 import { Pressable } from '@/components/Pressable';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
+import { WizardSubtitle } from '@/components/WizardSubtitle';
 import { ui } from '@/constants/appUi';
+import { wizardStepTitleStyle } from '@/constants/wizardCopy';
 import { useAuthUserId } from '@/lib/authUser';
 import { hydrateListingsFromSupabase } from '@/lib/hydrateListingsFromSupabase';
 import { insertRentalRequest, type HandoffPreference } from '@/lib/insertRentalRequest';
 import { buildListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
+import { billingDaysInclusive, isDateRangeAvailable } from '@/lib/listingAvailability';
+import { compareIsoDate, formatIsoDateMedium } from '@/lib/listingAvailabilityDates';
+import { estimateListingRentalTotalFromCalendar } from '@/lib/listingRentalEstimate';
 import { isToolListingOwner } from '@/lib/listingOwnership';
 import { formatUsd } from '@/lib/money';
 import { normalizeListingImages } from '@/lib/normalizeListingImages';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
+import {
+  hydrateListingAvailability,
+  useListingAvailabilityStore,
+} from '@/store/listingAvailabilityStore';
 import { getListingById } from '@/store/listingsStore';
 import type { ToolListing } from '@/store/listingsStore';
 
@@ -35,59 +37,50 @@ function firstParam(v: string | string[] | undefined): string | undefined {
   return Array.isArray(v) ? v[0] : v;
 }
 
-function startOfLocalDay(d: Date): Date {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
-}
-
-function addLocalDays(d: Date, n: number): Date {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return startOfLocalDay(x);
-}
-
-function formatLocalIsoDate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function tomorrowBase(): Date {
-  return addLocalDays(startOfLocalDay(new Date()), 1);
-}
-
-const HANDOFF_OPTIONS: { key: HandoffPreference; label: string }[] = [
-  { key: 'pickup', label: 'Pickup' },
-  { key: 'owner_delivery', label: 'Delivery' },
-  { key: 'either', label: 'Either' },
+const HANDOFF_OPTIONS: readonly ThreeLineOption<HandoffPreference>[] = [
+  { key: 'pickup', title: 'Pickup', line: 'I’ll meet the owner to pick up the item.' },
+  { key: 'owner_delivery', title: 'Delivery', line: 'The owner delivers the item to me.' },
+  { key: 'either', title: 'Either', line: 'I’m flexible on pickup or delivery.' },
 ];
+
+type WizardStep = 1 | 2 | 3;
+
+function handoffSummaryLabel(key: HandoffPreference): string {
+  switch (key) {
+    case 'pickup':
+      return 'Pickup';
+    case 'owner_delivery':
+      return 'Delivery';
+    case 'either':
+      return 'Either';
+    default:
+      return key;
+  }
+}
 
 export default function ListingRentalIntentScreen() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const currentUserId = useAuthUserId();
   const params = useLocalSearchParams<{
     listingId?: string | string[];
     durationKey?: string | string[];
-    dayCount?: string | string[];
-    price?: string | string[];
   }>();
   const listingId = firstParam(params.listingId)?.trim();
-  const durationKey = firstParam(params.durationKey) === 'multi' ? 'multi' : 'full';
-  const dayCount = Math.max(1, parseInt(firstParam(params.dayCount) ?? '1', 10) || 1);
-  const priceFromListing = parseFloat(firstParam(params.price) ?? '0') || 0;
+  const durationKey = (firstParam(params.durationKey) === 'multi' ? 'multi' : 'full') as 'full' | 'multi';
 
-  const [picker, setPicker] = useState<'start' | 'end' | null>(null);
-  const [startDate, setStartDate] = useState(() => tomorrowBase());
-  const [endDate, setEndDate] = useState(() => {
-    const span = durationKey === 'multi' ? Math.max(1, dayCount - 1) : 0;
-    return addLocalDays(tomorrowBase(), span);
-  });
+  const mainScrollRef = useRef<ScrollView>(null);
+  const submitInFlight = useRef(false);
+  const [step, setStep] = useState<WizardStep>(1);
+  const [rentalStartIso, setRentalStartIso] = useState<string | null>(null);
+  const [rentalEndIso, setRentalEndIso] = useState<string | null>(null);
   const [handoff, setHandoff] = useState<HandoffPreference>('either');
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const dateDraft = useMemo(
+    () => ({ rentalStartIso, rentalEndIso }),
+    [rentalStartIso, rentalEndIso]
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -96,6 +89,12 @@ export default function ListingRentalIntentScreen() {
   );
 
   const listing = useMemo(() => (listingId ? getListingById(listingId) : undefined), [listingId]);
+
+  const rows = useListingAvailabilityStore((s) => (listingId ? s.byListingId[listingId] ?? [] : []));
+
+  useEffect(() => {
+    if (listingId) void hydrateListingAvailability(listingId);
+  }, [listingId]);
 
   const heroUrl = useMemo(() => {
     if (!listing) return null;
@@ -110,7 +109,49 @@ export default function ListingRentalIntentScreen() {
     [listing, currentUserId]
   );
 
+  useLayoutEffect(() => {
+    mainScrollRef.current?.scrollTo({ y: 0, animated: false });
+    const id = requestAnimationFrame(() => {
+      mainScrollRef.current?.scrollTo({ y: 0, animated: false });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [step]);
+
   const durationType = durationKey === 'multi' ? ('multiDay' as const) : ('full' as const);
+
+  const billingDays = useMemo(() => {
+    if (!rentalStartIso || !rentalEndIso) return 1;
+    return Math.max(1, billingDaysInclusive(rentalStartIso, rentalEndIso));
+  }, [rentalStartIso, rentalEndIso]);
+
+  const canContinue = useMemo(() => {
+    if (step === 1) {
+      const s = rentalStartIso?.trim() ?? '';
+      const e = rentalEndIso?.trim() ?? '';
+      if (!s || !e) return false;
+      return isDateRangeAvailable(s, e, rows);
+    }
+    if (step === 2) return true;
+    return Boolean(rentalStartIso?.trim() && rentalEndIso?.trim());
+  }, [step, rentalStartIso, rentalEndIso, rows]);
+
+  const onChangeDates = useCallback((start: string | null, end: string | null) => {
+    setRentalStartIso(start);
+    setRentalEndIso(end);
+  }, []);
+
+  const goBack = useCallback(() => {
+    if (submitting) return;
+    if (step <= 1) {
+      router.back();
+      return;
+    }
+    setStep((s) => (s - 1) as WizardStep);
+  }, [step, router, submitting]);
+
+  const goNext = useCallback(() => {
+    if (step < 3) setStep((s) => (s + 1) as WizardStep);
+  }, [step]);
 
   const onSubmit = useCallback(async () => {
     if (!listingId || !listing) return;
@@ -123,10 +164,18 @@ export default function ListingRentalIntentScreen() {
       showFeedbackToast('You can’t request your own listing.');
       return;
     }
-    if (endDate.getTime() < startDate.getTime()) {
+    const start = rentalStartIso?.trim() ?? '';
+    const end = rentalEndIso?.trim() ?? '';
+    if (!start || !end) {
+      showFeedbackToast('Choose rental dates to continue.');
+      return;
+    }
+    if (compareIsoDate(end, start) < 0) {
       showFeedbackToast('Return date must be on or after pickup date.');
       return;
     }
+    if (submitInFlight.current) return;
+    submitInFlight.current = true;
     setSubmitting(true);
     try {
       const images = normalizeListingImages((listing as ToolListing & { images?: string[] }).images).filter(Boolean);
@@ -135,10 +184,15 @@ export default function ListingRentalIntentScreen() {
         listingId,
         renterUserId: renterId,
         durationType,
-        price: priceFromListing > 0 ? priceFromListing : listing.price,
+        price: estimateListingRentalTotalFromCalendar({
+          listing,
+          rentalStartIso: start,
+          rentalEndIso: end,
+          durationKey,
+        }),
         listingSnapshot: snapshot,
-        requestedStartDate: formatLocalIsoDate(startDate),
-        requestedEndDate: formatLocalIsoDate(endDate),
+        requestedStartDate: start,
+        requestedEndDate: end,
         handoffPreference: handoff,
         renterMessage: message.trim() || null,
       });
@@ -150,19 +204,151 @@ export default function ListingRentalIntentScreen() {
       }
     } finally {
       setSubmitting(false);
+      submitInFlight.current = false;
     }
   }, [
     listingId,
     listing,
     currentUserId,
     isOwn,
-    endDate,
-    startDate,
+    rentalStartIso,
+    rentalEndIso,
     durationType,
-    priceFromListing,
+    durationKey,
     handoff,
     message,
     router,
+  ]);
+
+  const displayPrice = useMemo(() => {
+    if (!listing) return 0;
+    return estimateListingRentalTotalFromCalendar({
+      listing,
+      rentalStartIso,
+      rentalEndIso,
+      durationKey,
+    });
+  }, [listing, rentalStartIso, rentalEndIso, durationKey]);
+
+  const onFooterPress = useCallback(() => {
+    if (!canContinue || submitting) return;
+    if (step < 3) {
+      goNext();
+      return;
+    }
+    void onSubmit();
+  }, [canContinue, step, goNext, submitting, onSubmit]);
+
+  const footerLabel =
+    step === 3 ? (submitting ? 'Sending…' : 'Send rental request') : 'Continue';
+
+  const chromeSubtitle =
+    step === 1 ? 'Choose your rental window' : step === 2 ? undefined : listing?.name;
+
+  const reviewBody = useMemo(() => {
+    if (!listing) return null;
+    const pref = handoffSummaryLabel(handoff);
+    const msgTrim = message.trim();
+    return (
+      <View style={styles.pad}>
+        <Text style={wizardStepTitleStyle}>Review & send</Text>
+        <WizardSubtitle>Confirm your rental request before sending it to the host.</WizardSubtitle>
+        {heroUrl ? (
+          <Image source={{ uri: heroUrl }} style={styles.hero} resizeMode="cover" accessibilityLabel="Listing" />
+        ) : (
+          <View style={[styles.hero, styles.heroPh]} />
+        )}
+        <Text style={styles.listTitle}>{listing.name}</Text>
+        <View style={styles.kv}>
+          <Text style={styles.kvK}>Dates</Text>
+          <Text style={styles.kvV}>
+            {rentalStartIso && rentalEndIso
+              ? `${formatIsoDateMedium(rentalStartIso)} → ${formatIsoDateMedium(rentalEndIso)}`
+              : '—'}
+          </Text>
+        </View>
+        <View style={styles.kv}>
+          <Text style={styles.kvK}>Duration</Text>
+          <Text style={styles.kvV}>{billingDays} day(s)</Text>
+        </View>
+        <View style={styles.kv}>
+          <Text style={styles.kvK}>Pickup / delivery</Text>
+          <Text style={styles.kvV}>{pref}</Text>
+        </View>
+        <View style={styles.kv}>
+          <Text style={styles.kvK}>Estimated total</Text>
+          <Text style={styles.kvV}>{displayPrice > 0 ? formatUsd(displayPrice) : '—'}</Text>
+        </View>
+        {msgTrim ? (
+          <View style={styles.messagePreview}>
+            <Text style={styles.kvK}>Message to host</Text>
+            <Text style={styles.messagePreviewText}>{msgTrim}</Text>
+          </View>
+        ) : null}
+        <View style={styles.editRow}>
+          <Pressable onPress={() => setStep(1)} style={({ pressed }) => [styles.linkWrap, pressed && { opacity: 0.85 }]}>
+            <Text style={styles.link}>Edit dates</Text>
+          </Pressable>
+          <Text style={styles.dot}> · </Text>
+          <Pressable onPress={() => setStep(2)} style={({ pressed }) => [styles.linkWrap, pressed && { opacity: 0.85 }]}>
+            <Text style={styles.link}>Edit preference</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }, [
+    listing,
+    heroUrl,
+    rentalStartIso,
+    rentalEndIso,
+    billingDays,
+    handoff,
+    displayPrice,
+    message,
+  ]);
+
+  const body = useMemo(() => {
+    if (!listingId) return null;
+    if (step === 1) {
+      return (
+        <ListingOfferDatesStep
+          listingId={listingId}
+          rows={rows}
+          draft={dateDraft}
+          onChangeDates={onChangeDates}
+        />
+      );
+    }
+    if (step === 2) {
+      return (
+        <View style={styles.pad}>
+          <Text style={wizardStepTitleStyle}>How would you like to get it?</Text>
+          <ThreeLinePreferenceCards options={HANDOFF_OPTIONS} value={handoff} onChange={setHandoff} />
+          <WizardSubtitle outerStyle={styles.helperAfterCards}>
+            Delivery availability depends on the owner&apos;s settings.
+          </WizardSubtitle>
+          <Text style={styles.fieldLabel}>Message to host (optional)</Text>
+          <TextInput
+            value={message}
+            onChangeText={setMessage}
+            placeholder="Timing, access, or questions…"
+            placeholderTextColor={ui.textSecondary}
+            multiline
+            style={styles.messageInput}
+          />
+        </View>
+      );
+    }
+    return reviewBody;
+  }, [
+    listingId,
+    step,
+    rows,
+    dateDraft,
+    onChangeDates,
+    handoff,
+    message,
+    reviewBody,
   ]);
 
   if (!listingId) {
@@ -193,116 +379,25 @@ export default function ListingRentalIntentScreen() {
   }
 
   return (
-    <ScreenWrapper style={styles.wrap} innerStyle={{ flex: 1 }}>
+    <ScreenWrapper style={{ backgroundColor: ui.background }} innerStyle={{ flex: 1 }}>
       <ScreenEntrance style={{ flex: 1 }}>
-        <BackHeader title="Request rental" subtitle={listing.name} onBack={() => router.back()} />
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ paddingBottom: 120 + insets.bottom }}
-          keyboardShouldPersistTaps="handled"
+        <WizardChrome
+          title="Request rental"
+          subtitle={chromeSubtitle}
+          stepIndex={step}
+          totalSteps={3}
+          scrollViewRef={mainScrollRef}
+          onBack={goBack}
+          footerLabel={footerLabel}
+          footerDisabled={!canContinue || submitting}
+          onFooterPress={onFooterPress}
+          secondaryFooterLabel={step === 3 ? 'Back' : undefined}
+          onSecondaryFooterPress={step === 3 ? () => setStep(2) : undefined}
         >
-          <View style={styles.heroRow}>
-            {heroUrl ? (
-              <Image source={{ uri: heroUrl }} style={styles.hero} resizeMode="cover" accessibilityLabel="" />
-            ) : (
-              <View style={[styles.hero, styles.heroPh]} />
-            )}
-            <View style={{ flex: 1 }}>
-              <Text style={styles.title}>{listing.name}</Text>
-              <Text style={styles.priceHint}>
-                Indicative total from listing:{' '}
-                {priceFromListing > 0 ? formatUsd(priceFromListing) : formatUsd(listing.price)}
-              </Text>
-            </View>
-          </View>
-
-          <Text style={styles.section}>Dates</Text>
-          <Pressable
-            onPress={() => setPicker('start')}
-            style={({ pressed }) => [styles.dateCell, pressed && { opacity: 0.9 }]}
-          >
-            <Text style={styles.dateLabel}>Pickup</Text>
-            <Text style={styles.dateValue}>{formatLocalIsoDate(startDate)}</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => setPicker('end')}
-            style={({ pressed }) => [styles.dateCell, pressed && { opacity: 0.9 }]}
-          >
-            <Text style={styles.dateLabel}>Return</Text>
-            <Text style={styles.dateValue}>{formatLocalIsoDate(endDate)}</Text>
-          </Pressable>
-
-          <Text style={styles.section}>Pickup / delivery preference</Text>
-          <View style={styles.chipRow}>
-            {HANDOFF_OPTIONS.map(({ key, label }) => {
-              const on = handoff === key;
-              return (
-                <Pressable
-                  key={key}
-                  onPress={() => setHandoff(key)}
-                  style={({ pressed }) => [styles.chip, on && styles.chipOn, pressed && { opacity: 0.9 }]}
-                >
-                  <Text style={[styles.chipText, on && styles.chipTextOn]}>{label}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          <Text style={styles.section}>Message to host (optional)</Text>
-          <TextInput
-            value={message}
-            onChangeText={setMessage}
-            placeholder="Timing, access, or questions…"
-            placeholderTextColor={ui.textSecondary}
-            multiline
-            style={styles.messageInput}
-          />
-        </ScrollView>
-
-        <View style={[styles.footer, { paddingBottom: insets.bottom }]}>
-          <Pressable
-            pressOpacityFeedback={false}
-            haptic
-            disabled={submitting}
-            onPress={() => void onSubmit()}
-            style={({ pressed }) => [
-              styles.primaryBtn,
-              pressed && styles.primaryBtnPressed,
-              submitting && { opacity: 0.7 },
-            ]}
-          >
-            <Text style={styles.primaryBtnText}>{submitting ? 'Sending…' : 'Send rental request'}</Text>
-          </Pressable>
-        </View>
-
-        <Modal visible={picker != null} transparent animationType="fade">
-          <Pressable style={styles.modalBackdrop} onPress={() => setPicker(null)}>
-            <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-              <Text style={styles.modalTitle}>{picker === 'start' ? 'Pickup date' : 'Return date'}</Text>
-              {picker ? (
-                <DateTimePicker
-                  value={picker === 'start' ? startDate : endDate}
-                  mode="date"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  themeVariant="light"
-                  onChange={(_, d) => {
-                    if (!d) return;
-                    const next = startOfLocalDay(d);
-                    if (picker === 'start') {
-                      setStartDate(next);
-                      setEndDate((prev) => (prev.getTime() < next.getTime() ? next : prev));
-                    } else {
-                      setEndDate(next);
-                    }
-                  }}
-                />
-              ) : null}
-              <Pressable onPress={() => setPicker(null)} style={styles.modalDone}>
-                <Text style={styles.modalDoneText}>Done</Text>
-              </Pressable>
-            </Pressable>
-          </Pressable>
-        </Modal>
+          <Animated.View key={step} entering={FadeIn.duration(200)}>
+            {body}
+          </Animated.View>
+        </WizardChrome>
       </ScreenEntrance>
     </ScreenWrapper>
   );
@@ -325,84 +420,22 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     padding: 24,
   },
-  heroRow: {
-    flexDirection: 'row',
-    gap: 12,
+  pad: {
+    paddingHorizontal: 4,
+    paddingTop: 8,
+  },
+  helperAfterCards: {
+    marginTop: ui.spaceSm,
     marginBottom: ui.spaceMd,
   },
-  hero: {
-    width: 88,
-    height: 88,
-    borderRadius: ui.radiusInput,
-    backgroundColor: ui.surfaceNeutral,
-  },
-  heroPh: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  title: {
-    fontSize: 18,
+  fieldLabel: {
+    fontSize: 14,
     fontWeight: '700',
     color: ui.textPrimary,
-    marginBottom: 4,
-  },
-  priceHint: {
-    fontSize: 14,
-    color: ui.textSecondary,
-  },
-  section: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: ui.textPrimary,
-    marginTop: ui.spaceMd,
-    marginBottom: ui.spaceSm,
-  },
-  dateCell: {
-    paddingVertical: 14,
-    paddingHorizontal: ui.spaceMd,
-    borderRadius: ui.radiusInput,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: ui.border,
-    backgroundColor: ui.background,
-    marginBottom: ui.spaceSm,
-  },
-  dateLabel: {
-    fontSize: 13,
-    color: ui.textSecondary,
-    marginBottom: 4,
-  },
-  dateValue: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: ui.textPrimary,
-  },
-  chipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  chip: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: ui.border,
-    backgroundColor: ui.background,
-  },
-  chipOn: {
-    borderColor: ui.primary,
-    backgroundColor: ui.surfaceTintPrimary,
-  },
-  chipText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: ui.textPrimary,
-  },
-  chipTextOn: {
-    color: ui.primary,
+    marginBottom: 6,
   },
   messageInput: {
-    minHeight: 100,
+    minHeight: 88,
     borderRadius: ui.radiusInput,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: ui.border,
@@ -412,58 +445,59 @@ const styles = StyleSheet.create({
     backgroundColor: ui.background,
     textAlignVertical: 'top',
   },
-  footer: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    paddingTop: ui.spaceMd,
-    backgroundColor: ui.surfaceGrouped,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: ui.border,
+  hero: {
+    width: '100%',
+    height: 140,
+    borderRadius: ui.radiusInput,
+    marginBottom: ui.spaceMd,
+    backgroundColor: ui.surfaceNeutral,
   },
-  primaryBtn: {
-    marginHorizontal: 0,
-    paddingVertical: ui.padButtonV,
-    borderRadius: ui.radiusButton,
-    backgroundColor: ui.primary,
-    alignItems: 'center',
-  },
-  primaryBtnPressed: {
-    backgroundColor: ui.primaryPressed,
-  },
-  primaryBtnText: {
-    fontSize: 17,
+  heroPh: {},
+  listTitle: {
+    fontSize: 18,
     fontWeight: '700',
-    color: ui.primaryOn,
+    color: ui.textPrimary,
+    marginBottom: ui.spaceMd,
   },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'flex-end',
+  kv: {
+    marginBottom: 10,
   },
-  modalCard: {
-    backgroundColor: ui.background,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    padding: ui.spaceMd,
-    paddingBottom: 24,
+  kvK: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: ui.textSecondary,
+    marginBottom: 2,
   },
-  modalTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    marginBottom: 8,
+  kvV: {
+    fontSize: 16,
+    fontWeight: '600',
     color: ui.textPrimary,
   },
-  modalDone: {
-    marginTop: 12,
-    alignSelf: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 24,
+  messagePreview: {
+    marginTop: ui.spaceSm,
+    marginBottom: ui.spaceSm,
   },
-  modalDoneText: {
-    fontSize: 16,
+  messagePreviewText: {
+    fontSize: 15,
+    color: ui.textPrimary,
+    lineHeight: 22,
+  },
+  editRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: ui.spaceMd,
+    flexWrap: 'wrap',
+  },
+  linkWrap: {
+    paddingVertical: 4,
+  },
+  link: {
+    fontSize: 15,
     fontWeight: '700',
     color: ui.primary,
+  },
+  dot: {
+    fontSize: 15,
+    color: ui.textSecondary,
   },
 });

@@ -33,6 +33,7 @@ export type ToolListingMeta = {
   conditionLabel?: string;
   includedItems?: string[];
   handoffSummary?: string;
+  deliveryFeePreference?: string;
   serviceArea?: string;
   marketValue?: number;
   verificationStatus?: string;

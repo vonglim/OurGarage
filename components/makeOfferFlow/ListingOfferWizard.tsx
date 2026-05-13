@@ -31,15 +31,12 @@ import {
 } from '@/store/listingAvailabilityStore';
 
 import { ListingOfferDatesStep } from './ListingOfferDatesStep';
+import { ThreeLinePreferenceCards, type ThreeLineOption } from './ThreeLinePreferenceCards';
 import { WizardChrome } from './WizardChrome';
 
 type LStep = 1 | 2 | 3 | 4;
 
-const RECEIVE_OPTIONS: {
-  key: ReceivePreference;
-  title: string;
-  line: string;
-}[] = [
+const RECEIVE_OPTIONS: readonly ThreeLineOption<ReceivePreference>[] = [
   { key: 'pickup', title: 'I can pick it up', line: 'I’ll meet the owner for pickup.' },
   { key: 'delivery', title: 'I’d like delivery', line: 'The owner delivers the item to me.' },
   { key: 'either', title: 'Either works', line: 'I’m flexible on pickup or delivery.' },
@@ -235,23 +232,11 @@ export function ListingOfferWizard({
         <View style={styles.pad}>
           <Text style={wizardStepTitleStyle}>How would you like to receive the item?</Text>
           <WizardSubtitle>Choose whether you&apos;d prefer pickup or delivery.</WizardSubtitle>
-          {RECEIVE_OPTIONS.map(({ key, title, line }) => {
-            const on = draft.receivePreference === key;
-            return (
-              <Pressable
-                key={key}
-                onPress={() => updateDraft({ receivePreference: key })}
-                style={({ pressed }) => [
-                  styles.optCard,
-                  on && styles.optCardOn,
-                  pressed && { opacity: 0.92 },
-                ]}
-              >
-                <Text style={[styles.optTitle, on && styles.optTitleOn]}>{title}</Text>
-                <Text style={styles.optLine}>{line}</Text>
-              </Pressable>
-            );
-          })}
+          <ThreeLinePreferenceCards
+            options={RECEIVE_OPTIONS}
+            value={draft.receivePreference}
+            onChange={(key) => updateDraft({ receivePreference: key })}
+          />
           {draft.receivePreference === 'delivery' ? (
             <View style={styles.budgetBlock}>
               <Text style={styles.budgetLabel}>Delivery budget (optional)</Text>
@@ -409,33 +394,6 @@ const styles = StyleSheet.create({
   pad: {
     paddingHorizontal: 4,
     paddingTop: 8,
-  },
-  optCard: {
-    padding: ui.spaceMd,
-    borderRadius: ui.radiusInput,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: ui.border,
-    backgroundColor: ui.background,
-    marginBottom: ui.spaceSm,
-  },
-  optCardOn: {
-    borderWidth: 2,
-    borderColor: ui.primary,
-    backgroundColor: ui.surfaceTintPrimary,
-  },
-  optTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: ui.textPrimary,
-    marginBottom: 4,
-  },
-  optTitleOn: {
-    color: ui.primary,
-  },
-  optLine: {
-    fontSize: 15,
-    color: ui.textSecondary,
-    lineHeight: 22,
   },
   budgetBlock: {
     marginTop: ui.spaceMd,

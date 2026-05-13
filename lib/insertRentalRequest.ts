@@ -1,6 +1,8 @@
 import { getSupabase } from '@/lib/supabase';
 import type { ListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
 import { insertRentalRequestWithSchemaCompat } from '@/lib/rentalRequestInsertSchemaCompat';
+import { logRentalLifecycle } from '@/lib/rentalLifecycleDebug';
+import { mergeRecentNotificationsFromServer } from '@/lib/notificationsServerSync';
 
 export type RentalRequestDurationInput = 'full' | 'multiDay' | 'weekly';
 
@@ -71,13 +73,25 @@ export async function insertRentalRequest(row: {
   const { data, error } = await insertRentalRequestWithSchemaCompat(supabase, initialPayload);
 
   if (error) {
+    logRentalLifecycle('rental_request_insert_failed', {
+      listingId,
+      message: error.message,
+    });
     return { ok: false, message: error.message || 'Could not save rental request.' };
   }
 
   const rid = (data as { id?: string } | null)?.id?.trim();
   if (!rid) {
+    logRentalLifecycle('rental_request_insert_missing_id', { listingId });
     return { ok: false, message: 'Rental request may have saved but no id was returned.' };
   }
 
+  logRentalLifecycle('rental_request_insert_ok', {
+    rentalRequestId: rid,
+    listingId,
+    renterUserId,
+    ownerUserId,
+  });
+  mergeRecentNotificationsFromServer();
   return { ok: true, id: rid };
 }

@@ -22,6 +22,7 @@ import { lightImpact } from '@/lib/haptics';
 import { ensureProfile } from '@/lib/ensureProfile';
 import { startMessageUnreadSync } from '@/lib/messageUnreadSync';
 import { startNotificationsServerSync } from '@/lib/notificationsServerSync';
+import { startUnifiedRentalsServerSync } from '@/lib/startUnifiedRentalsServerSync';
 import { registerAndStorePushTokenAsync } from '@/lib/notifications';
 import { installDevLocalStateResetHelper, resetLocalMessagingState } from '@/lib/resetLocalAppState';
 import { clearRemoteProfileCache } from '@/lib/remoteProfileCache';
@@ -159,6 +160,13 @@ export default function RootLayout() {
     if (loading) return;
     if (needsCreateUsername) return;
     if (!session?.user?.id) return;
+    return startUnifiedRentalsServerSync(session.user.id);
+  }, [loading, needsCreateUsername, session?.user?.id]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (needsCreateUsername) return;
+    if (!session?.user?.id) return;
     if (__DEV__) {
       console.log('[messageUnreadSync] auth ready', {
         loading,
@@ -223,6 +231,8 @@ export default function RootLayout() {
             >
               <Stack.Screen name="onboarding-terms" />
               <Stack.Screen name="(tabs)" />
+              <Stack.Screen name="activity-renting" />
+              <Stack.Screen name="activity-my-shop" />
               <Stack.Screen
                 name="request"
                 options={{

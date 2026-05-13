@@ -23,6 +23,9 @@ type Props = {
   footerLabel?: string;
   footerDisabled?: boolean;
   onFooterPress: () => void;
+  /** Optional text action below the primary CTA (e.g. “Back” on a review step). */
+  secondaryFooterLabel?: string;
+  onSecondaryFooterPress?: () => void;
   children: React.ReactNode;
   scrollStyle?: StyleProp<ViewStyle>;
   contentContainerStyle?: StyleProp<ViewStyle>;
@@ -43,6 +46,8 @@ export function WizardChrome({
   footerLabel = 'Continue',
   footerDisabled = false,
   onFooterPress,
+  secondaryFooterLabel,
+  onSecondaryFooterPress,
   children,
   scrollStyle,
   contentContainerStyle,
@@ -93,6 +98,15 @@ export function WizardChrome({
         >
           <Text style={styles.ctaText}>{footerLabel}</Text>
         </Pressable>
+        {secondaryFooterLabel && onSecondaryFooterPress ? (
+          <Pressable
+            onPress={onSecondaryFooterPress}
+            style={({ pressed }) => [styles.secondaryFooter, pressed && { opacity: 0.85 }]}
+            pressOpacityFeedback={false}
+          >
+            <Text style={styles.secondaryFooterText}>{secondaryFooterLabel}</Text>
+          </Pressable>
+        ) : null}
       </View>
 
       {Platform.OS !== 'web' ? <KeyboardToolbar showArrows={false} /> : null}
@@ -143,5 +157,16 @@ const styles = StyleSheet.create({
     color: ui.primaryOn,
     fontSize: 16,
     fontWeight: '700',
+  },
+  secondaryFooter: {
+    marginTop: 12,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  secondaryFooterText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: ui.primary,
   },
 });

@@ -7,16 +7,25 @@ import { ui } from '@/constants/appUi';
 
 type RootScreenHeaderProps = {
   title: string;
+  /** Optional supporting line under the title (keeps the right accessory aligned to the title row). */
+  subtitle?: string;
   rightAccessory?: ReactNode;
   style?: StyleProp<ViewStyle>;
 };
 
-export function RootScreenHeader({ title, rightAccessory, style }: RootScreenHeaderProps) {
+export function RootScreenHeader({ title, subtitle, rightAccessory, style }: RootScreenHeaderProps) {
   return (
     <View style={[styles.rootWrap, style]}>
-      <Text style={styles.rootTitle} numberOfLines={1}>
-        {title}
-      </Text>
+      <View style={styles.rootTitleBlock}>
+        <Text style={styles.rootTitle} numberOfLines={subtitle ? 2 : 1}>
+          {title}
+        </Text>
+        {subtitle ? (
+          <Text style={styles.rootSubtitle} numberOfLines={2}>
+            {subtitle}
+          </Text>
+        ) : null}
+      </View>
       {rightAccessory ? <View style={styles.rightSlot}>{rightAccessory}</View> : null}
     </View>
   );
@@ -58,16 +67,27 @@ const styles = StyleSheet.create({
   rootWrap: {
     minHeight: ui.headerInlineHeight,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     marginBottom: 16,
+    gap: 8,
+  },
+  rootTitleBlock: {
+    flex: 1,
+    minWidth: 0,
   },
   rootTitle: {
-    flex: 1,
     fontSize: ui.headerRootTitle,
     lineHeight: 34,
     fontWeight: '800',
     color: ui.textPrimary,
+  },
+  rootSubtitle: {
+    marginTop: 4,
+    fontSize: 14,
+    fontWeight: '500',
+    lineHeight: 20,
+    color: ui.textSecondary,
   },
   inlineWrap: {
     marginBottom: 14,

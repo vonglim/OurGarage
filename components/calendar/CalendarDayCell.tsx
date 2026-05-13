@@ -14,6 +14,8 @@ export type CalendarDayCellProps = {
   isToday: boolean;
   disabled: boolean;
   onPress?: (iso: string) => void;
+  /** Tighter cell for embedded read-only month previews. */
+  compact?: boolean;
 };
 
 export function CalendarDayCell({
@@ -23,9 +25,10 @@ export function CalendarDayCell({
   isToday,
   disabled,
   onPress,
+  compact = false,
 }: CalendarDayCellProps) {
   if (dayIso == null) {
-    return <View style={[styles.cell, styles.cellEmpty]} />;
+    return <View style={[styles.cell, compact && styles.cellCompact, styles.cellEmpty]} />;
   }
 
   const todayStr = isoDateFromLocalDate(new Date());
@@ -45,6 +48,7 @@ export function CalendarDayCell({
       disabled={disabled || !onPress}
       style={({ pressed }) => [
         styles.cell,
+        compact && styles.cellCompact,
         showSoftRange && styles.cellInRange,
         rangeRole === 'start' && styles.rangeLeft,
         rangeRole === 'end' && styles.rangeRight,
@@ -56,6 +60,7 @@ export function CalendarDayCell({
       <Text
         style={[
           styles.dayNum,
+          compact && styles.dayNumCompact,
           disabled && styles.dayNumDisabled,
           visual === 'booked' && styles.dayBooked,
           visual === 'pending' && styles.dayPending,
@@ -64,17 +69,20 @@ export function CalendarDayCell({
       >
         {Number(dayIso.slice(8, 10))}
       </Text>
-      <View style={styles.dotRow} pointerEvents="none">
-        {visual === 'booked' ? <View style={[styles.dot, styles.dotBooked]} /> : null}
-        {visual === 'pending' ? <View style={[styles.dot, styles.dotPending]} /> : null}
-        {visual === 'blocked' ? <View style={[styles.dot, styles.dotBlocked]} /> : null}
-        {visual === 'available' && !disabled ? <View style={[styles.dot, styles.dotAvail]} /> : null}
+      <View style={[styles.dotRow, compact && styles.dotRowCompact]} pointerEvents="none">
+        {visual === 'booked' ? <View style={[styles.dot, compact && styles.dotCompact, styles.dotBooked]} /> : null}
+        {visual === 'pending' ? <View style={[styles.dot, compact && styles.dotCompact, styles.dotPending]} /> : null}
+        {visual === 'blocked' ? <View style={[styles.dot, compact && styles.dotCompact, styles.dotBlocked]} /> : null}
+        {visual === 'available' && !disabled ? (
+          <View style={[styles.dot, compact && styles.dotCompact, styles.dotAvail]} />
+        ) : null}
       </View>
     </Pressable>
   );
 }
 
 const CELL_MIN_H = 48;
+const CELL_MIN_H_COMPACT = 24;
 
 const styles = StyleSheet.create({
   cell: {
@@ -83,6 +91,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 4,
+  },
+  cellCompact: {
+    minHeight: CELL_MIN_H_COMPACT,
+    paddingVertical: 0,
   },
   cellEmpty: {
     opacity: 0,
@@ -117,6 +129,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: ui.textPrimary,
   },
+  dayNumCompact: {
+    fontSize: 12,
+  },
   dayNumDisabled: {
     color: ui.textSecondary,
     opacity: 0.45,
@@ -138,10 +153,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  dotRowCompact: {
+    gap: 2,
+    marginTop: 0,
+    minHeight: 4,
+  },
   dot: {
     width: 5,
     height: 5,
     borderRadius: 2.5,
+  },
+  dotCompact: {
+    width: 3,
+    height: 3,
+    borderRadius: 1.5,
   },
   dotBooked: {
     backgroundColor: 'rgba(55, 65, 81, 0.85)',

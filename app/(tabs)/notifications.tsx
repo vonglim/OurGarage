@@ -61,6 +61,16 @@ function typePillStyle(t: AppNotification['type']) {
         backgroundColor: '#E3F2FD',
         color: ui.primary,
       };
+    case 'rental_request':
+      return {
+        backgroundColor: '#FFF8E1',
+        color: '#F57F17',
+      };
+    case 'rental_declined':
+      return {
+        backgroundColor: '#FCE8E6',
+        color: '#C62828',
+      };
     default:
       return {
         backgroundColor: ui.surfaceNeutral,
@@ -90,6 +100,10 @@ function typeLabel(t: AppNotification['type']): string {
       return 'Review';
     case 'message':
       return 'Message';
+    case 'rental_request':
+      return 'Rental request';
+    case 'rental_declined':
+      return 'Request declined';
     default:
       return '';
   }
@@ -150,8 +164,29 @@ export default function NotificationsScreen() {
         offerId: n.offerId,
         chatId: n.chatId,
         rentalId: n.rentalId,
+        listingId: n.listingId ?? null,
+        rentalRequestId: n.rentalRequestId ?? null,
       });
     }
+
+    if (n.type === 'rental_request') {
+      router.push({
+        pathname: '/activity-my-shop',
+        params: { section: 'inbox' },
+      });
+      return;
+    }
+    if (n.type === 'rental_declined') {
+      const lid =
+        typeof n.listingId === 'string' && n.listingId.trim() !== '' ? n.listingId.trim() : null;
+      if (lid) {
+        router.push({ pathname: '/listing-detail', params: { listingId: lid } });
+      } else {
+        router.push({ pathname: '/activity-renting', params: { section: 'rentals' } });
+      }
+      return;
+    }
+
     if (n.type === 'review') {
       router.push('/reviews');
       return;

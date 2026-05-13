@@ -43,6 +43,11 @@ export type ListingAvailabilityCalendarProps = {
   selectionMode?: 'renterRange' | 'ownerDay';
   onOwnerDayPress?: (iso: string, visual: ReturnType<typeof dayVisualState>) => void;
   rowsOverride?: ListingAvailabilityRow[] | null;
+  /**
+   * Embedded preview: current month + next two, no taps, compact chrome.
+   * Reuses the same store rows and `dayVisualState` as the full calendar.
+   */
+  readOnly?: boolean;
 };
 
 /**
@@ -54,11 +59,15 @@ export function ListingAvailabilityCalendar({
   selectionMode = 'ownerDay',
   onOwnerDayPress,
   rowsOverride,
+  readOnly = false,
 }: ListingAvailabilityCalendarProps) {
   const lid = listingId.trim();
   const storeRows = useListingAvailabilityStore((s) => s.byListingId[lid] ?? []);
   const rows = rowsOverride ?? storeRows;
-  const months = useMemo(() => enumerateMonths(1, 18), []);
+  const months = useMemo(
+    () => (readOnly ? enumerateMonths(0, 2) : enumerateMonths(1, 18)),
+    [readOnly]
+  );
 
   useEffect(() => {
     if (!lid) return;
@@ -66,26 +75,67 @@ export function ListingAvailabilityCalendar({
   }, [lid]);
 
   const initialY = useMemo(() => {
+    if (readOnly) return 0;
     const now = new Date();
     const key = `${now.getFullYear()}-${now.getMonth()}`;
     const idx = months.findIndex((m) => m.key === key);
     return Math.max(0, idx) * 360;
-  }, [months]);
+  }, [months, readOnly]);
 
   const getDayVisual = useCallback((iso: string) => dayVisualState(iso, rows), [rows]);
 
   const getRangeRole = useCallback(
     (iso: string) => {
-      if (!highlightRange) return 'none' as RangeEdgeRole;
+      if (readOnly || !highlightRange) return 'none' as RangeEdgeRole;
       return rangeRoleFor(iso, highlightRange.start, highlightRange.end);
     },
-    [highlightRange]
+    [highlightRange, readOnly]
   );
 
+  const effectiveSelectionMode = readOnly ? 'renterRange' : selectionMode;
+
   const onPressDay =
-    selectionMode === 'ownerDay' && onOwnerDayPress
-      ? (iso: string) => onOwnerDayPress(iso, dayVisualState(iso, rows))
-      : undefined;
+    readOnly
+      ? undefined
+      : selectionMode === 'ownerDay' && onOwnerDayPress
+        ? (iso: string) => onOwnerDayPress(iso, dayVisualState(iso, rows))
+        : undefined;
+
+  const gridProps = (item: MonthItem) => ({
+    year: item.year,
+    monthIndex0: item.month,
+    getDayVisual,
+    getRangeRole,
+    disablePast: false as const,
+    onPressDay,
+    selectionMode: effectiveSelectionMode,
+    readOnly,
+    dense: readOnly,
+  });
+
+  if (readOnly) {
+    /** Embed: bounded parent height — do not merge with full-screen `wrap` (flexGrow:0 collapsed the tree). */
+    return (
+      <View style={styles.wrapEmbed} key={lid}>
+        <ScrollView
+          style={styles.scrollEmbed}
+          contentContainerStyle={styles.scrollEmbedContent}
+          nestedScrollEnabled
+          showsVerticalScrollIndicator
+          keyboardShouldPersistTaps="handled"
+        >
+          {months.map((item, index) => (
+            <View
+              key={item.key}
+              style={index < months.length - 1 ? styles.monthEmbedWithDivider : undefined}
+            >
+              <CalendarMonthGrid {...gridProps(item)} />
+            </View>
+          ))}
+        </ScrollView>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.wrap} key={lid}>
@@ -95,16 +145,7 @@ export function ListingAvailabilityCalendar({
         keyboardShouldPersistTaps="handled"
       >
         {months.map((item) => (
-          <CalendarMonthGrid
-            key={item.key}
-            year={item.year}
-            monthIndex0={item.month}
-            getDayVisual={getDayVisual}
-            getRangeRole={getRangeRole}
-            disablePast={false}
-            onPressDay={onPressDay}
-            selectionMode={selectionMode}
-          />
+          <CalendarMonthGrid key={item.key} {...gridProps(item)} />
         ))}
       </ScrollView>
     </View>
@@ -116,5 +157,26 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#FFFFFF',
     minHeight: 400,
+  },
+  wrapEmbed: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    alignSelf: 'stretch',
+    overflow: 'hidden',
+    backgroundColor: ui.background,
+  },
+  scrollEmbed: {
+    flex: 1,
+  },
+  scrollEmbedContent: {
+    paddingTop: 0,
+    paddingBottom: 4,
+  },
+  monthEmbedWithDivider: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: ui.border,
+    marginBottom: 4,
+    paddingBottom: 6,
   },
 });

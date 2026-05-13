@@ -18,17 +18,14 @@ export type LifecycleNavigatorStep = { key: string; label: string };
 
 export type RentalLifecycleNavigatorProps = {
   steps: readonly LifecycleNavigatorStep[];
-  /** Per-step: phase fully completed */
   stepDone: boolean[];
-  /** Index of the step user is in (0..steps.length-1) */
   currentIndex: number;
-  /** Optional step that needs attention (amber) */
   attentionIndex: number | null;
-  /** All steps complete — show completion banner instead */
   transactionComplete: boolean;
   onStepPress: (index: number) => void;
-  /** Wide horizontal strip; swipe-ready structure for a future pager */
   horizontal?: boolean;
+  /** Tighter, lower-weight progress strip (`micro` = breadcrumb strip) */
+  density?: 'default' | 'compact' | 'micro';
 };
 
 function LifecycleNode({
@@ -39,6 +36,8 @@ function LifecycleNode({
   label,
   onPress,
   pulse,
+  compact,
+  micro,
 }: {
   done: boolean;
   current: boolean;
@@ -47,40 +46,58 @@ function LifecycleNode({
   label: string;
   onPress: () => void;
   pulse: Animated.Value;
+  compact: boolean;
+  micro: boolean;
 }) {
-  const scale = useMemo(() => pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }), [pulse]);
-  const glow = useMemo(() => pulse.interpolate({ inputRange: [0, 1], outputRange: [0.25, 0.55] }), [pulse]);
+  const scale = useMemo(() => pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] }), [pulse]);
+  const glow = useMemo(() => pulse.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0.45] }), [pulse]);
+
+  const circleSize = micro ? 14 : compact ? 20 : 30;
+  const iconMain = micro ? 8 : compact ? 11 : 14;
+  const iconLock = micro ? 7 : compact ? 9 : 11;
+  const innerCurrent = micro ? 5 : compact ? 7 : 10;
+  const innerFuture = micro ? 4 : compact ? 6 : 8;
 
   let borderColor = NODE_LOCKED;
   let bg = '#FFFFFF';
-  let icon: React.ReactNode = <Text style={styles.nodeDotMuted}> </Text>;
+  let icon: React.ReactNode = <Text style={[styles.nodeDotMuted, compact && styles.nodeDotMutedCompact]}> </Text>;
 
   if (done) {
     borderColor = NODE_DONE;
     bg = NODE_DONE;
-    icon = <Ionicons name="checkmark" size={14} color="#FFFFFF" />;
+    icon = <Ionicons name="checkmark" size={iconMain} color="#FFFFFF" />;
   } else if (attention) {
     borderColor = NODE_ATTENTION;
     bg = '#FFFBEB';
-    icon = <Ionicons name="alert" size={14} color={NODE_ATTENTION} />;
+    icon = <Ionicons name="alert" size={iconMain} color={NODE_ATTENTION} />;
   } else if (current) {
     borderColor = NODE_CURRENT;
     bg = '#EFF6FF';
-    icon = <View style={styles.nodeInnerCurrent} />;
+    icon = <View style={[styles.nodeInnerCurrent, { width: innerCurrent, height: innerCurrent, borderRadius: innerCurrent / 2 }]} />;
   } else if (locked) {
-    icon = <Ionicons name="lock-closed" size={11} color={NODE_LOCKED} />;
+    icon = <Ionicons name="lock-closed" size={iconLock} color={NODE_LOCKED} />;
   } else {
-    icon = <View style={styles.nodeInnerFuture} />;
+    icon = (
+      <View
+        style={[
+          styles.nodeInnerFuture,
+          { width: innerFuture, height: innerFuture, borderRadius: innerFuture / 2 },
+        ]}
+      />
+    );
   }
 
   const nodeBody = (
     <Animated.View
       style={[
         styles.nodeOuter,
-        current && !done && { transform: [{ scale }] },
+        (compact || micro) && styles.nodeOuterCompact,
+        current && !done && !compact && !micro && { transform: [{ scale }] },
         current &&
           !done &&
-          !attention && {
+          !attention &&
+          !compact &&
+          !micro && {
             shadowColor: NODE_CURRENT,
             shadowOffset: { width: 0, height: 0 },
             shadowOpacity: glow,
@@ -89,11 +106,27 @@ function LifecycleNode({
           },
       ]}
     >
-      <View style={[styles.nodeCircle, { borderColor, backgroundColor: bg }]}>{icon}</View>
+      <View
+        style={[
+          styles.nodeCircle,
+          (compact || micro) && styles.nodeCircleCompact,
+          {
+            width: circleSize,
+            height: circleSize,
+            borderRadius: circleSize / 2,
+            borderColor,
+            backgroundColor: bg,
+          },
+        ]}
+      >
+        {icon}
+      </View>
       <Text
-        numberOfLines={2}
+        numberOfLines={compact || micro ? 1 : 2}
         style={[
           styles.nodeLabel,
+          (compact || micro) && styles.nodeLabelCompact,
+          micro && styles.nodeLabelMicro,
           done && styles.nodeLabelDone,
           current && !done && styles.nodeLabelCurrent,
           locked && !current && !done && styles.nodeLabelMuted,
@@ -111,7 +144,12 @@ function LifecycleNode({
       accessibilityRole="button"
       accessibilityLabel={`${label} phase`}
       onPress={onPress}
-      style={({ pressed }) => [styles.nodePressable, pressed && { opacity: 0.88 }]}
+      style={({ pressed }) => [
+        styles.nodePressable,
+        (compact || micro) && styles.nodePressableCompact,
+        micro && styles.nodePressableMicro,
+        pressed && { opacity: 0.88 },
+      ]}
     >
       {nodeBody}
     </OgPressable>
@@ -126,10 +164,14 @@ export function RentalLifecycleNavigator({
   transactionComplete,
   onStepPress,
   horizontal = true,
+  density = 'default',
 }: RentalLifecycleNavigatorProps) {
+  const compact = density === 'compact' || density === 'micro';
+  const micro = density === 'micro';
   const pulse = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    if (compact) return;
     const anim = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, {
@@ -148,19 +190,21 @@ export function RentalLifecycleNavigator({
     );
     anim.start();
     return () => anim.stop();
-  }, [pulse]);
+  }, [pulse, compact]);
 
   if (transactionComplete) {
     return (
-      <View style={styles.completeBanner}>
-        <Ionicons name="checkmark-circle" size={22} color={NODE_DONE} />
-        <Text style={styles.completeBannerText}>Transaction complete</Text>
+      <View style={[styles.completeBanner, compact && styles.completeBannerCompact, micro && styles.completeBannerMicro]}>
+        <Ionicons name="checkmark-circle" size={micro ? 14 : compact ? 16 : 22} color={NODE_DONE} />
+        <Text style={[styles.completeBannerText, compact && styles.completeBannerTextCompact, micro && styles.completeBannerTextMicro]}>
+          Complete
+        </Text>
       </View>
     );
   }
 
   const row = (
-    <View style={styles.row}>
+    <View style={[styles.row, compact && styles.rowCompact]}>
       {steps.map((step, idx) => {
         const done = Boolean(stepDone[idx]);
         const current = idx === currentIndex;
@@ -178,11 +222,15 @@ export function RentalLifecycleNavigator({
               label={step.label}
               onPress={() => onStepPress(idx)}
               pulse={pulse}
+              compact={compact}
+              micro={micro}
             />
             {idx < steps.length - 1 ? (
               <View
                 style={[
                   styles.connector,
+                  compact && styles.connectorCompact,
+                  micro && styles.connectorMicro,
                   { backgroundColor: connectorDone ? CONNECTOR_DONE : CONNECTOR_MUTED },
                 ]}
               />
@@ -198,7 +246,11 @@ export function RentalLifecycleNavigator({
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.horizontalScrollContent}
+        contentContainerStyle={[
+          styles.horizontalScrollContent,
+          compact && styles.horizontalScrollContentCompact,
+          micro && styles.horizontalScrollContentMicro,
+        ]}
         keyboardShouldPersistTaps="handled"
       >
         {row}
@@ -215,12 +267,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
     alignItems: 'center',
   },
+  horizontalScrollContentCompact: {
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+  },
+  horizontalScrollContentMicro: {
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+    opacity: 0.92,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     minWidth: '100%',
     gap: 0,
+  },
+  rowCompact: {
+    alignItems: 'center',
   },
   completeBanner: {
     flexDirection: 'row',
@@ -234,10 +298,31 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(22, 163, 74, 0.25)',
   },
+  completeBannerCompact: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    gap: 6,
+    borderRadius: 10,
+  },
   completeBannerText: {
     fontSize: 15,
     fontWeight: '700',
     color: '#14532D',
+  },
+  completeBannerTextCompact: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  completeBannerMicro: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    gap: 4,
+    borderRadius: 8,
+    opacity: 0.9,
+  },
+  completeBannerTextMicro: {
+    fontSize: 11,
+    fontWeight: '600',
   },
   nodePressable: {
     flex: 1,
@@ -245,28 +330,33 @@ const styles = StyleSheet.create({
     maxWidth: 88,
     alignItems: 'center',
   },
+  nodePressableCompact: {
+    minWidth: 44,
+    maxWidth: 72,
+  },
+  nodePressableMicro: {
+    minWidth: 34,
+    maxWidth: 56,
+  },
   nodeOuter: {
     alignItems: 'center',
     gap: 6,
   },
+  nodeOuterCompact: {
+    gap: 3,
+  },
   nodeCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  nodeCircleCompact: {
+    borderWidth: StyleSheet.hairlineWidth,
+  },
   nodeInnerCurrent: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
     backgroundColor: NODE_CURRENT,
   },
   nodeInnerFuture: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
     backgroundColor: NODE_LOCKED,
     opacity: 0.6,
   },
@@ -274,12 +364,24 @@ const styles = StyleSheet.create({
     fontSize: 8,
     color: NODE_LOCKED,
   },
+  nodeDotMutedCompact: {
+    fontSize: 6,
+  },
   nodeLabel: {
     fontSize: 10,
     fontWeight: '600',
     color: LABEL_MUTED,
     textAlign: 'center',
     lineHeight: 12,
+  },
+  nodeLabelCompact: {
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '600',
+  },
+  nodeLabelMicro: {
+    fontSize: 8,
+    lineHeight: 10,
   },
   nodeLabelDone: {
     color: NODE_DONE,
@@ -302,5 +404,16 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     marginTop: 14,
     flexShrink: 0,
+  },
+  connectorCompact: {
+    width: 8,
+    height: 2,
+    marginTop: 10,
+  },
+  connectorMicro: {
+    width: 5,
+    height: 1.5,
+    marginTop: 7,
+    opacity: 0.75,
   },
 });

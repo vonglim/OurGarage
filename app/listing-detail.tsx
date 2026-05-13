@@ -1,5 +1,6 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
@@ -12,29 +13,32 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { BackHeader } from '@/components/AppHeaders';
+import { ListingAvailabilityCalendar } from '@/components/calendar/ListingAvailabilityCalendar';
 import { Pressable } from '@/components/Pressable';
 import { ProtectionSummaryCard } from '@/components/ProtectionSummaryCard';
-import { BackHeader } from '@/components/AppHeaders';
 import { ScreenEntrance } from '@/components/ScreenEntrance';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { ui } from '@/constants/appUi';
 import { useAuthUserId } from '@/lib/authUser';
 import { hydrateListingsFromSupabase } from '@/lib/hydrateListingsFromSupabase';
+import { getListingAvailabilityRanges } from '@/lib/listingAvailability';
 import { isToolListingOwner } from '@/lib/listingOwnership';
+import { listingDetailPriceForDuration } from '@/lib/listingRentalEstimate';
 import { formatUsd } from '@/lib/money';
 import { normalizeListingImages } from '@/lib/normalizeListingImages';
-import { formatMilesShort } from '@/lib/requestDistance';
+import { parseStructuredListingDescription } from '@/lib/listingStructuredDescription';
+import { formatListingDistanceAway } from '@/lib/requestDistance';
+import { showFeedbackToast } from '@/store/feedbackToastStore';
+import {
+  hydrateListingAvailability,
+  useListingAvailabilityStore,
+} from '@/store/listingAvailabilityStore';
 import type { ToolListing } from '@/store/listingsStore';
 import {
   formatListingPriceWithUnit,
   useListingsStore,
 } from '@/store/listingsStore';
-import { showFeedbackToast } from '@/store/feedbackToastStore';
-import { getListingAvailabilityRanges } from '@/lib/listingAvailability';
-import {
-  hydrateListingAvailability,
-  useListingAvailabilityStore,
-} from '@/store/listingAvailabilityStore';
 
 declare const __DEV__: boolean;
 
@@ -43,17 +47,12 @@ type ListingDetailRow = ToolListing & { images?: string[] };
 
 type DurationKey = 'full' | 'multi';
 
-const HERO_HEIGHT = 280;
-
-const DURATION_OPTIONS: { key: DurationKey; label: string }[] = [
-  { key: 'full', label: 'Full Day' },
-  { key: 'multi', label: 'Multi Day' },
-];
-
-function priceForDuration(basePrice: number, key: DurationKey, dayCount: number): number {
-  if (key === 'multi') return basePrice * Math.max(2, dayCount);
-  return basePrice;
+/** Hero height clamp (px): readable image without crowding listing body. */
+function clampHeroHeight(windowHeight: number): number {
+  return Math.min(270, Math.max(240, Math.round(windowHeight * 0.32)));
 }
+
+const DURATION_OPTIONS: { key: DurationKey }[] = [{ key: 'full' }, { key: 'multi' }];
 
 function unitForDurationSelection(key: DurationKey, listingPriceUnit?: string): string {
   if (key === 'multi') return 'total';
@@ -65,13 +64,28 @@ function firstParam(v: string | string[] | undefined): string | undefined {
   return Array.isArray(v) ? v[0] : v;
 }
 
+function hostDisplayFirstName(ownerName: string): string {
+  const t = ownerName.trim();
+  if (!t) return 'Host';
+  return t.split(/\s+/)[0] ?? 'Host';
+}
+
+function hostInitials(ownerName: string): string {
+  const parts = ownerName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase() || '?';
+}
+
 export default function ListingDetailScreen() {
   const router = useRouter();
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const heroDisplayHeight = useMemo(() => clampHeroHeight(windowHeight), [windowHeight]);
   const [heroWidth, setHeroWidth] = useState(windowWidth);
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [selectedDuration, setSelectedDuration] = useState<DurationKey>('full');
   const [multiDayCountInput, setMultiDayCountInput] = useState('2');
+  const [availabilityPreviewOpen, setAvailabilityPreviewOpen] = useState(false);
   const insets = useSafeAreaInsets();
   const currentUserId = useAuthUserId();
   const params = useLocalSearchParams<{ listingId?: string | string[] }>();
@@ -120,12 +134,52 @@ export default function ListingDetailScreen() {
     [availabilityRows]
   );
 
-  /** Sticky CTA: renter = 2 buttons + gap; owner = 4 stacked actions */
+  /** Merges `meta` (local wizard) with labeled lines in `description` (e.g. Supabase) — single source per fact. */
+  const listingFacts = useMemo(() => {
+    if (!listing) {
+      return { rows: [] as { label: string; value: string }[], narrative: '' };
+    }
+    const parsed = parseStructuredListingDescription(listing.description?.trim() ?? '');
+    const m = listing.meta;
+    const displayCategory = parsed.category?.trim() ?? '';
+    const displayCondition = (m?.conditionLabel?.trim() || parsed.condition?.trim()) ?? '';
+    const displayConditionNotes = parsed.conditionNotes?.trim() ?? '';
+    const displayIncluded = m?.includedItems?.length
+      ? m.includedItems.join(', ')
+      : (parsed.included?.trim() ?? '');
+    const displayPickup = (m?.handoffSummary?.trim() || parsed.pickupDelivery?.trim()) ?? '';
+    const displayDelivery = (m?.deliveryFeePreference?.trim() || parsed.deliveryFee?.trim()) ?? '';
+    const displayService = (m?.serviceArea?.trim() || parsed.serviceArea?.trim()) ?? '';
+
+    const rows: { label: string; value: string }[] = [];
+    if (displayCategory) rows.push({ label: 'Category', value: displayCategory });
+    if (displayCondition) rows.push({ label: 'Condition', value: displayCondition });
+    if (displayConditionNotes) rows.push({ label: 'Condition notes', value: displayConditionNotes });
+    if (displayIncluded) rows.push({ label: 'Included', value: displayIncluded });
+    if (displayPickup) rows.push({ label: 'Pickup / delivery', value: displayPickup });
+    if (displayDelivery) rows.push({ label: 'Delivery fee preference', value: displayDelivery });
+    if (displayService) rows.push({ label: 'Service area', value: displayService });
+
+    return { rows, narrative: parsed.narrative.trim() };
+  }, [listing]);
+
+  const trustDetailRows = useMemo(() => {
+    if (!listing) return [] as { label: string; value: string }[];
+    const m = listing.meta;
+    if (!m) return [];
+    const rows: { label: string; value: string }[] = [];
+    if (m.marketValue != null) rows.push({ label: 'Estimated value', value: formatUsd(m.marketValue) });
+    if (m.photoCount != null) rows.push({ label: 'Photos on file', value: String(m.photoCount) });
+    if (m.verificationStatus) rows.push({ label: 'Verification', value: m.verificationStatus });
+    return rows;
+  }, [listing]);
+
+  /** Sticky CTA: renter = 2 buttons + gap; owner = 4 stacked actions — keep compact so CTAs stay reachable. */
   const stickyCtaScrollPaddingBottom =
-    ui.spaceMd +
-    (isOwnListingForPad ? 4 * (ui.padButtonV * 2 + 44) + 3 * 10 : 2 * (ui.padButtonV * 2 + 44) + 10) +
+    8 +
+    (isOwnListingForPad ? 4 * (ui.padButtonV * 2 + 44) + 3 * 10 : 2 * (ui.padButtonV * 2 + 44) + 6) +
     insets.bottom +
-    ui.spaceSm;
+    6;
 
   const pageWidth = heroWidth > 0 ? heroWidth : windowWidth;
 
@@ -147,9 +201,10 @@ export default function ListingDetailScreen() {
     );
   }
 
-  const row = listing as ListingDetailRow;
-  const meta = row.meta;
-  const description = listing.description?.trim() ?? '';
+  const showFactsCard = listingFacts.rows.length > 0;
+  const metadataCardIsFirstGrouped = showFactsCard;
+  const availabilityCardIsFirstGrouped = !showFactsCard && !listingFacts.narrative;
+  const showTrustCard = trustDetailRows.length > 0;
 
   return (
     <ScreenWrapper style={styles.screenWrap}>
@@ -163,7 +218,7 @@ export default function ListingDetailScreen() {
                 onLayout={(e) => setHeroWidth(e.nativeEvent.layout.width)}
               >
                 {heroUrls.length === 0 ? (
-                  <View style={styles.heroPlaceholder} />
+                  <View style={[styles.heroPlaceholder, { height: heroDisplayHeight }]} />
                 ) : (
                   <>
                     <FlatList
@@ -176,12 +231,12 @@ export default function ListingDetailScreen() {
                       directionalLockEnabled
                       decelerationRate="fast"
                       keyboardShouldPersistTaps="handled"
-                      style={{ width: pageWidth, height: HERO_HEIGHT }}
+                      style={{ width: pageWidth, height: heroDisplayHeight }}
                       keyExtractor={(item, index) => `${listingId}-${index}`}
                       renderItem={({ item: uri, index }) => (
                         <Image
                           source={{ uri }}
-                          style={[styles.heroImage, { width: pageWidth }]}
+                          style={[styles.heroImage, { width: pageWidth, height: heroDisplayHeight }]}
                           resizeMode="cover"
                           accessibilityRole="image"
                           accessibilityLabel={`Photo ${index + 1} of ${heroUrls.length}`}
@@ -212,6 +267,26 @@ export default function ListingDetailScreen() {
                     ) : null}
                   </>
                 )}
+                <View style={styles.heroHostChipWrap} pointerEvents="box-none">
+                  <View
+                    style={styles.hostHeroChip}
+                    accessibilityRole="text"
+                    accessibilityLabel={`Host ${listing.ownerName}, ${listing.rating.toFixed(1)} stars`}
+                  >
+                    <View style={styles.hostAvatar}>
+                      <Text style={styles.hostAvatarText}>{hostInitials(listing.ownerName)}</Text>
+                    </View>
+                    <View style={styles.hostChipTextCol}>
+                      <Text style={styles.hostChipName} numberOfLines={1}>
+                        {hostDisplayFirstName(listing.ownerName)}
+                      </Text>
+                      <View style={styles.hostChipRatingRow}>
+                        <Ionicons name="star" size={11} color="#FBBF24" />
+                        <Text style={styles.hostChipRating}>{listing.rating.toFixed(1)}</Text>
+                      </View>
+                    </View>
+                  </View>
+                </View>
               </View>
 
               <ScrollView
@@ -220,79 +295,70 @@ export default function ListingDetailScreen() {
                   paddingBottom: stickyCtaScrollPaddingBottom,
                 }}
                 keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
               >
                 <View style={styles.contentBlock}>
                   <Text style={styles.title}>{listing.name}</Text>
-                  {meta?.conditionLabel ? (
-                    <View style={styles.conditionPill}>
-                      <Text style={styles.conditionPillText}>{meta.conditionLabel}</Text>
-                    </View>
-                  ) : null}
-                  <Text style={styles.price}>
-                    {formatListingPriceWithUnit(
-                      priceForDuration(
-                        listing.price,
-                        selectedDuration,
-                        Math.max(2, parseInt(multiDayCountInput || '0', 10) || 2)
-                      ),
-                      unitForDurationSelection(selectedDuration, listing.priceUnit)
-                    )}
-                  </Text>
-                  <Text style={styles.distance}>
-                    {formatMilesShort(listing.distance)}
-                  </Text>
+                  <View style={styles.priceDistanceRow}>
+                    <Text style={styles.price} numberOfLines={1}>
+                      {formatListingPriceWithUnit(
+                        listingDetailPriceForDuration(
+                          listing.price,
+                          selectedDuration,
+                          Math.max(2, parseInt(multiDayCountInput || '0', 10) || 2)
+                        ),
+                        unitForDurationSelection(selectedDuration, listing.priceUnit)
+                      )}
+                    </Text>
+                    <Text style={styles.distanceInline} numberOfLines={1}>
+                      {formatListingDistanceAway(listing.distance)}
+                    </Text>
+                  </View>
                   {isOwnListing ? (
                     <Text style={styles.yourListing}>Your listing</Text>
                   ) : null}
-                  <View style={styles.hostCard}>
-                    <Text style={styles.sectionHeading}>Host</Text>
-                    <Text style={styles.hostName}>{listing.ownerName}</Text>
-                    <Text style={styles.hostMeta}>{listing.rating.toFixed(1)} rating</Text>
-                  </View>
                 </View>
                 <View style={styles.durationSection}>
-                  <Text style={styles.durationHeading}>Select duration</Text>
-                  {DURATION_OPTIONS.map(({ key, label }) => {
-                    const selected = selectedDuration === key;
-                    const rowPrice = priceForDuration(
-                      listing.price,
-                      key,
-                      Math.max(2, parseInt(multiDayCountInput || '0', 10) || 2)
-                    );
-                    return (
-                      <Pressable
-                        key={key}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected }}
-                        onPress={() => setSelectedDuration(key)}
-                        style={({ pressed }) => [
-                          styles.durationOption,
-                          selected && styles.durationOptionSelected,
-                          pressed && styles.durationOptionPressed,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.durationOptionLabel,
-                            selected && styles.durationOptionLabelSelected,
+                  <View style={styles.durationPillRow}>
+                    {DURATION_OPTIONS.map(({ key }) => {
+                      const selected = selectedDuration === key;
+                      const rowPrice = listingDetailPriceForDuration(
+                        listing.price,
+                        key,
+                        Math.max(2, parseInt(multiDayCountInput || '0', 10) || 2)
+                      );
+                      const pillLabel = key === 'full' ? 'One Day' : 'Multi Day';
+                      return (
+                        <Pressable
+                          key={key}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected }}
+                          onPress={() => setSelectedDuration(key)}
+                          style={({ pressed }) => [
+                            styles.durationPill,
+                            selected && styles.durationPillSelected,
+                            pressed && styles.durationOptionPressed,
                           ]}
                         >
-                          {label}
-                        </Text>
-                        <Text
-                          style={[
-                            styles.durationOptionPrice,
-                            selected && styles.durationOptionPriceSelected,
-                          ]}
-                        >
-                          {formatUsd(rowPrice)}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
+                          <Text
+                            style={[styles.durationPillTitle, selected && styles.durationPillTitleSelected]}
+                            numberOfLines={1}
+                          >
+                            {pillLabel}
+                          </Text>
+                          <Text
+                            style={[styles.durationPillPrice, selected && styles.durationPillPriceSelected]}
+                            numberOfLines={1}
+                          >
+                            {formatUsd(rowPrice)}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
                   {selectedDuration === 'multi' ? (
                     <View style={styles.multiDayWrap}>
-                      <Text style={styles.durationHeading}>Number of days</Text>
+                      <Text style={styles.multiDayLabel}>Number of days</Text>
                       <Pressable
                         pressOpacityFeedback={false}
                         style={({ pressed }) => [styles.durationStepper, pressed && styles.durationOptionPressed]}
@@ -314,93 +380,139 @@ export default function ListingDetailScreen() {
                   ) : null}
                 </View>
 
-                {description ? (
-                  <View style={styles.descSection}>
-                    <Text style={styles.description}>{listing.description}</Text>
-                  </View>
-                ) : null}
-
-                {meta?.includedItems?.length ? (
-                  <View style={styles.storeSection}>
-                    <Text style={styles.sectionHeading}>What&apos;s included</Text>
-                    <View style={styles.chipRow}>
-                      {meta.includedItems.map((item) => (
-                        <View key={item} style={styles.detailChip}>
-                          <Text style={styles.detailChipText}>{item}</Text>
+                {showFactsCard ? (
+                  <View style={[styles.groupedCard, metadataCardIsFirstGrouped && styles.groupedCardFirst]}>
+                    <View style={styles.groupedCardInnerMeta}>
+                      {listingFacts.rows.map((fact, index) => (
+                        <View
+                          key={`${fact.label}-${index}`}
+                          style={[
+                            styles.metaFactBlock,
+                            index < listingFacts.rows.length - 1 && styles.metaFactBlockDivider,
+                          ]}
+                        >
+                          <Text style={styles.metaFactLabel}>{fact.label}</Text>
+                          <Text style={styles.metaFactValue}>{fact.value}</Text>
                         </View>
                       ))}
+                      <View style={[styles.mapPlaceholder, styles.mapInMetadataCard]}>
+                        <Text style={styles.mapPlaceholderText}>Map preview</Text>
+                      </View>
                     </View>
                   </View>
                 ) : null}
 
-                {meta?.handoffSummary || meta?.serviceArea ? (
-                  <View style={styles.storeSection}>
-                    <Text style={styles.sectionHeading}>Pickup / delivery</Text>
-                    <View style={styles.logisticsCard}>
-                      {meta.handoffSummary ? (
-                        <Text style={styles.logisticsPrimary}>{meta.handoffSummary}</Text>
-                      ) : null}
-                      {meta.serviceArea ? (
-                        <Text style={styles.logisticsSecondary}>Service area: {meta.serviceArea}</Text>
-                      ) : null}
-                    </View>
-                    <View style={styles.mapPlaceholder}>
-                      <Text style={styles.mapPlaceholderText}>Map preview</Text>
-                    </View>
+                {listingFacts.narrative ? (
+                  <View style={styles.aboutSection}>
+                    <Text style={styles.aboutSectionTitle}>About this listing</Text>
+                    <Text style={styles.aboutBody}>{listingFacts.narrative}</Text>
                   </View>
                 ) : null}
 
-                <View style={styles.storeSection}>
-                  <Text style={styles.sectionHeading}>Availability</Text>
-                  <Text style={styles.availSummary}>
-                    {availabilityBuckets.booked.length > 0
-                      ? `${availabilityBuckets.booked.length} booked segment(s). `
-                      : ''}
-                    {availabilityBuckets.pending.length > 0
-                      ? `${availabilityBuckets.pending.length} pending hold(s). `
-                      : ''}
-                    {availabilityBuckets.blocked.length > 0
-                      ? `${availabilityBuckets.blocked.length} blackout segment(s).`
-                      : availabilityBuckets.all.length === 0
-                        ? 'All dates are available unless you add blackouts.'
+                <View
+                  style={[
+                    styles.groupedCard,
+                    availabilityCardIsFirstGrouped && styles.groupedCardFirst,
+                  ]}
+                >
+                  <View style={styles.groupedCardHeaderPad}>
+                    <Text style={styles.metaFactLabel}>Availability</Text>
+                    <Text style={styles.groupedCardSummary}>
+                      {availabilityBuckets.booked.length > 0
+                        ? `${availabilityBuckets.booked.length} booked segment(s). `
                         : ''}
-                  </Text>
-                  {isOwnListing ? (
-                    <Text style={styles.placeholderLineMuted}>
-                      Use Manage availability in the toolbar below to block dates and review holds.
+                      {availabilityBuckets.pending.length > 0
+                        ? `${availabilityBuckets.pending.length} pending hold(s). `
+                        : ''}
+                      {availabilityBuckets.blocked.length > 0
+                        ? `${availabilityBuckets.blocked.length} blackout segment(s).`
+                        : availabilityBuckets.all.length === 0
+                          ? 'All dates are available unless the host adds blackouts.'
+                          : ''}
                     </Text>
+                    {isOwnListing ? (
+                      <Text style={styles.groupedCardOwnerHint}>
+                        Use Manage availability in the toolbar below to block dates and review holds.
+                      </Text>
+                    ) : null}
+                  </View>
+                  <View style={styles.cardFullBleedDivider} />
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: availabilityPreviewOpen }}
+                    accessibilityLabel={
+                      availabilityPreviewOpen ? 'Hide availability calendar' : 'Show availability calendar'
+                    }
+                    style={({ pressed }) => [
+                      styles.availToggleRowGrouped,
+                      pressed && styles.availPreviewTogglePressed,
+                    ]}
+                    onPress={() => setAvailabilityPreviewOpen((v) => !v)}
+                  >
+                    <Text style={styles.availPreviewToggleLabel}>
+                      {availabilityPreviewOpen ? 'Hide calendar' : 'Show calendar'}
+                    </Text>
+                    <Ionicons
+                      name={availabilityPreviewOpen ? 'chevron-up' : 'chevron-down'}
+                      size={18}
+                      color={ui.textSecondary}
+                    />
+                  </Pressable>
+                  {availabilityPreviewOpen ? (
+                    <>
+                      <View style={styles.cardFullBleedDivider} />
+                      <View style={styles.availCalendarShell}>
+                        <ListingAvailabilityCalendar listingId={listingId} readOnly />
+                      </View>
+                    </>
                   ) : null}
                 </View>
 
-                {meta?.marketValue != null || meta?.verificationStatus || meta?.photoCount != null ? (
-                  <View style={styles.storeSection}>
-                    <Text style={styles.sectionHeading}>Trust & verification</Text>
-                    {meta.marketValue != null ? (
-                      <Text style={styles.trustLine}>Estimated value {formatUsd(meta.marketValue)}</Text>
-                    ) : null}
-                    {meta.photoCount != null ? (
-                      <Text style={styles.trustLine}>{meta.photoCount} photos on file</Text>
-                    ) : null}
-                    {meta.verificationStatus ? (
-                      <Text style={styles.trustLine}>{meta.verificationStatus}</Text>
-                    ) : null}
-                    <Text style={styles.placeholderLineMuted}>
-                      ID and rental history checks will surface here as your storefront grows.
-                    </Text>
+                {showTrustCard ? (
+                  <View style={styles.groupedCard}>
+                    <View style={styles.groupedCardHeaderPad}>
+                      <Text style={styles.metaFactLabel}>Trust & verification</Text>
+                    </View>
+                    <View style={styles.cardFullBleedDivider} />
+                    {trustDetailRows.map((r, i) => (
+                      <React.Fragment key={r.label}>
+                        {i > 0 ? <View style={styles.cardFullBleedDivider} /> : null}
+                        <View style={styles.groupedCardRowPad}>
+                          <Text style={styles.metaFactLabel}>{r.label}</Text>
+                          <Text style={styles.metaFactValue}>{r.value}</Text>
+                        </View>
+                      </React.Fragment>
+                    ))}
+                    <View style={styles.cardFullBleedDivider} />
+                    <View style={styles.groupedCardFooterPad}>
+                      <Text style={styles.trustFooterNote}>
+                        ID and rental history checks will surface here as your storefront grows.
+                      </Text>
+                    </View>
                   </View>
                 ) : null}
 
-                <View style={styles.storeSection}>
-                  <Text style={styles.sectionHeading}>More from this host</Text>
-                  <Text style={styles.placeholderLine}>Related listings will appear here.</Text>
+                <View style={styles.groupedCard}>
+                  <View style={styles.groupedCardHeaderPad}>
+                    <Text style={styles.metaFactLabel}>More from this host</Text>
+                  </View>
+                  <View style={styles.cardFullBleedDivider} />
+                  <View style={styles.moreFromEmptyWell}>
+                    <Ionicons name="grid-outline" size={26} color={ui.textSecondary} style={styles.moreFromEmptyIcon} />
+                    <Text style={styles.moreFromEmptyTitle}>Nothing else to show yet</Text>
+                    <Text style={styles.moreFromEmptySub}>
+                      Other listings from this host will appear here when they're available.
+                    </Text>
+                  </View>
                 </View>
 
-                <View style={styles.protectionBlock}>
+                <View style={styles.termsSectionWrap}>
                   <ProtectionSummaryCard
                     replacementValue={Number(listing.replacementValue ?? 0)}
                     dailyLateFee={Number(listing.dailyLateFee ?? 0)}
                     maxLateFeeCap={Math.max(Number(listing.maxLateFeeCap ?? 0), Number(listing.dailyLateFee ?? 0))}
                     compact
+                    variant="terms"
                   />
                 </View>
               </ScrollView>
@@ -488,7 +600,7 @@ export default function ListingDetailScreen() {
                         selectedDuration === 'multi'
                           ? Math.max(2, parseInt(multiDayCountInput || '0', 10) || 2)
                           : 1;
-                      const price = priceForDuration(
+                      const price = listingDetailPriceForDuration(
                         listing.price,
                         selectedDuration,
                         Math.max(2, parseInt(multiDayCountInput || '0', 10) || 2)
@@ -539,7 +651,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    paddingTop: ui.spaceMd,
+    paddingTop: 8,
     paddingHorizontal: 0,
     backgroundColor: ui.surfaceGrouped,
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -621,21 +733,20 @@ const styles = StyleSheet.create({
     paddingBottom: ui.spaceMd,
   },
   inlineDetailHeader: {
-    marginBottom: ui.spaceSm,
+    marginBottom: 6,
   },
   /** Bleed hero to horizontal edges (ScreenWrapper uses 16px horizontal padding). */
   heroWrap: {
     marginHorizontal: -16,
-    marginBottom: ui.spaceMd,
+    marginBottom: ui.spaceSm,
     position: 'relative',
   },
   heroImage: {
-    height: HERO_HEIGHT,
     backgroundColor: ui.surfaceNeutral,
   },
   heroDots: {
     position: 'absolute',
-    bottom: 12,
+    bottom: 8,
     left: 0,
     right: 0,
     flexDirection: 'row',
@@ -657,12 +768,64 @@ const styles = StyleSheet.create({
   },
   heroPlaceholder: {
     width: '100%',
-    height: HERO_HEIGHT,
     backgroundColor: ui.surfaceNeutral,
+  },
+  heroHostChipWrap: {
+    position: 'absolute',
+    right: 10,
+    bottom: 36,
+    zIndex: 4,
+    maxWidth: '52%',
+  },
+  hostHeroChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: 'rgba(22, 27, 34, 0.58)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  hostAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hostAvatarText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: -0.3,
+  },
+  hostChipTextCol: {
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  hostChipName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: -0.2,
+  },
+  hostChipRatingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginTop: 1,
+  },
+  hostChipRating: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.92)',
   },
   contentBlock: {
     paddingHorizontal: 0,
-    marginBottom: ui.spaceMd,
+    marginBottom: 6,
   },
   title: {
     fontSize: 22,
@@ -670,106 +833,198 @@ const styles = StyleSheet.create({
     color: ui.textPrimary,
     marginBottom: ui.spaceSm,
   },
+  priceDistanceRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 2,
+  },
   price: {
     fontSize: 18,
     fontWeight: '600',
     color: ui.textPrimary,
-    marginBottom: 4,
+    flexShrink: 0,
+    maxWidth: '58%',
   },
-  distance: {
+  distanceInline: {
+    flex: 1,
     fontSize: 15,
+    fontWeight: '500',
     color: ui.textSecondary,
+    textAlign: 'right',
   },
   yourListing: {
-    marginTop: ui.spaceSm,
+    marginTop: 6,
     fontSize: 14,
     fontWeight: '600',
     color: ui.primary,
   },
-  conditionPill: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    backgroundColor: 'rgba(22, 163, 74, 0.12)',
-    marginBottom: ui.spaceSm,
-  },
-  conditionPillText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#16A34A',
-  },
-  hostCard: {
-    marginTop: ui.spaceMd,
-    padding: ui.spaceMd,
+  groupedCard: {
+    marginBottom: 16,
     borderRadius: ui.radiusInput,
-    backgroundColor: ui.background,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: ui.border,
+    backgroundColor: ui.background,
+    overflow: 'hidden',
   },
-  sectionHeading: {
+  groupedCardFirst: {
+    marginTop: 12,
+  },
+  groupedCardInnerMeta: {
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 14,
+  },
+  groupedCardHeaderPad: {
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 12,
+  },
+  groupedCardSummary: {
+    fontSize: 14,
+    fontWeight: '400',
+    color: ui.textSecondary,
+    lineHeight: 20,
+    marginTop: 2,
+  },
+  groupedCardOwnerHint: {
+    fontSize: 13,
+    fontWeight: '400',
+    color: ui.textSecondary,
+    lineHeight: 18,
+    marginTop: 10,
+  },
+  groupedCardRowPad: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  groupedCardFooterPad: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 14,
+  },
+  cardFullBleedDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: ui.border,
+  },
+  availToggleRowGrouped: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  availCalendarShell: {
+    height: 200,
+    maxHeight: 220,
+    minHeight: 188,
+    backgroundColor: ui.background,
+    overflow: 'hidden',
+  },
+  trustFooterNote: {
+    fontSize: 13,
+    fontWeight: '400',
+    color: ui.textSecondary,
+    lineHeight: 18,
+  },
+  moreFromEmptyWell: {
+    paddingHorizontal: 16,
+    paddingVertical: 22,
+    alignItems: 'center',
+  },
+  moreFromEmptyIcon: {
+    opacity: 0.45,
+    marginBottom: 10,
+  },
+  moreFromEmptyTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: ui.textPrimary,
+    letterSpacing: -0.2,
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  moreFromEmptySub: {
+    fontSize: 14,
+    fontWeight: '400',
+    color: ui.textSecondary,
+    lineHeight: 20,
+    textAlign: 'center',
+    maxWidth: 280,
+  },
+  termsSectionWrap: {
+    marginBottom: 16,
+  },
+  metaFactBlock: {
+    paddingVertical: 16,
+  },
+  metaFactBlockDivider: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: ui.border,
+  },
+  metaFactLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: ui.textSecondary,
+    letterSpacing: 0.55,
+    textTransform: 'uppercase',
+    marginBottom: 8,
+  },
+  metaFactValue: {
+    fontSize: 16,
+    fontWeight: '400',
+    color: ui.textPrimary,
+    lineHeight: 24,
+  },
+  mapInMetadataCard: {
+    marginTop: 6,
+    marginBottom: 0,
+  },
+  aboutSection: {
+    marginBottom: 16,
+    marginTop: 2,
+  },
+  aboutSectionTitle: {
     fontSize: 15,
     fontWeight: '700',
     color: ui.textPrimary,
-    marginBottom: ui.spaceSm,
+    marginBottom: 10,
+    letterSpacing: -0.25,
   },
-  hostName: {
+  aboutBody: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '400',
     color: ui.textPrimary,
+    lineHeight: 24,
   },
-  hostMeta: {
+  detailParagraph: {
+    fontSize: 15,
+    color: ui.textPrimary,
+    lineHeight: 24,
+    marginBottom: 8,
+  },
+  detailParagraphTight: {
     marginTop: 4,
-    fontSize: 14,
-    color: ui.textSecondary,
   },
-  storeSection: {
-    marginBottom: ui.spaceLg,
-    paddingHorizontal: 0,
-  },
-  chipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  detailChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 999,
-    backgroundColor: ui.surfaceNeutral,
-  },
-  detailChipText: {
-    fontSize: 14,
-    fontWeight: '500',
+  detailBold: {
+    fontWeight: '700',
     color: ui.textPrimary,
   },
-  logisticsCard: {
-    padding: ui.spaceMd,
-    borderRadius: ui.radiusInput,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: ui.border,
-    backgroundColor: ui.background,
-    marginBottom: ui.spaceSm,
-  },
-  logisticsPrimary: {
-    fontSize: 16,
-    fontWeight: '600',
+  detailValueText: {
+    fontWeight: '400',
     color: ui.textPrimary,
-  },
-  logisticsSecondary: {
-    marginTop: 6,
-    fontSize: 14,
-    color: ui.textSecondary,
   },
   mapPlaceholder: {
-    height: 140,
+    height: 100,
+    marginTop: ui.spaceSm,
     borderRadius: ui.radiusInput,
     backgroundColor: ui.surfaceNeutral,
     alignItems: 'center',
     justifyContent: 'center',
   },
   mapPlaceholderText: {
-    fontSize: 14,
+    fontSize: 13,
     color: ui.textSecondary,
     fontWeight: '600',
   },
@@ -778,34 +1033,19 @@ const styles = StyleSheet.create({
     color: ui.textSecondary,
     lineHeight: 22,
   },
-  availSummary: {
-    fontSize: 15,
+  availPreviewTogglePressed: {
+    opacity: 0.92,
+  },
+  availPreviewToggleLabel: {
+    fontSize: 14,
+    fontWeight: '600',
     color: ui.textPrimary,
-    lineHeight: 22,
-    marginBottom: ui.spaceSm,
   },
   placeholderLineMuted: {
-    fontSize: 14,
+    fontSize: 13,
     color: ui.textSecondary,
-    lineHeight: 20,
-    marginTop: ui.spaceSm,
-  },
-  trustLine: {
-    fontSize: 15,
-    color: ui.textPrimary,
-    marginBottom: 6,
-  },
-  descSection: {
-    paddingHorizontal: 0,
-    marginBottom: ui.spaceLg,
-  },
-  protectionBlock: {
-    marginBottom: ui.spaceLg,
-  },
-  description: {
-    fontSize: 16,
-    color: ui.textPrimary,
-    lineHeight: 24,
+    lineHeight: 18,
+    marginTop: 6,
   },
   primaryBtn: {
     paddingVertical: ui.padButtonV,
@@ -822,27 +1062,26 @@ const styles = StyleSheet.create({
     color: ui.primaryOn,
   },
   durationSection: {
-    marginBottom: ui.spaceMd,
+    marginTop: 2,
+    marginBottom: 10,
   },
-  durationHeading: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: ui.textPrimary,
-    marginBottom: ui.spaceSm,
-  },
-  durationOption: {
+  durationPillRow: {
     flexDirection: 'row',
+    gap: 8,
+  },
+  durationPill: {
+    flex: 1,
+    minWidth: 0,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: ui.spaceMd,
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 6,
     borderRadius: ui.radiusInput,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: ui.border,
     backgroundColor: ui.background,
-    marginBottom: ui.spaceSm,
   },
-  durationOptionSelected: {
+  durationPillSelected: {
     borderWidth: 2,
     borderColor: ui.primary,
     backgroundColor: ui.surfaceTintPrimary,
@@ -850,11 +1089,38 @@ const styles = StyleSheet.create({
   durationOptionPressed: {
     opacity: 0.92,
   },
+  durationPillTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: ui.textPrimary,
+    textAlign: 'center',
+  },
+  durationPillTitleSelected: {
+    color: ui.primary,
+    fontWeight: '700',
+  },
+  durationPillPrice: {
+    marginTop: 2,
+    fontSize: 12,
+    fontWeight: '600',
+    color: ui.textSecondary,
+    textAlign: 'center',
+  },
+  durationPillPriceSelected: {
+    color: ui.primary,
+    fontWeight: '700',
+  },
   multiDayWrap: {
-    marginTop: ui.spaceSm,
+    marginTop: 4,
     flexDirection: 'row',
     alignItems: 'center',
     gap: ui.spaceSm,
+  },
+  multiDayLabel: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: ui.textSecondary,
+    minWidth: 100,
   },
   durationStepper: {
     width: 32,
@@ -878,22 +1144,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: ui.textPrimary,
-  },
-  durationOptionLabel: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: ui.textPrimary,
-  },
-  durationOptionLabelSelected: {
-    fontWeight: '700',
-    color: ui.primary,
-  },
-  durationOptionPrice: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: ui.textSecondary,
-  },
-  durationOptionPriceSelected: {
-    color: ui.primary,
   },
 });
