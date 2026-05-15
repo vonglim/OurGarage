@@ -14,6 +14,8 @@ export type RentalWorkspaceHeroProps = {
   uxPhase: RentalWorkspaceUxPhase;
   chipLabel: string;
   dateRangeLine: string;
+  /** When false, status chip is hidden (e.g. ACTIVE duplicates ON RENT workbench). */
+  showStatusChip?: boolean;
 };
 
 function badgePalette(phase: RentalWorkspaceUxPhase) {
@@ -45,20 +47,31 @@ export function RentalWorkspaceHero({
   uxPhase,
   chipLabel,
   dateRangeLine,
+  showStatusChip = true,
 }: RentalWorkspaceHeroProps) {
   const chip = badgePalette(uxPhase);
   const displayTitle = title.trim() || 'Rental item';
+  const showChip = showStatusChip && chipLabel.trim().length > 0;
 
   return (
     <View style={styles.card}>
       <View style={styles.row}>
-        {thumbUri ? (
-          <Image source={{ uri: thumbUri }} style={styles.thumb} contentFit="cover" accessibilityIgnoresInvertColors />
-        ) : (
-          <View style={styles.thumbPh} accessibilityElementsHidden>
-            <Ionicons name="cube-outline" size={20} color={ui.textSecondary} />
-          </View>
-        )}
+        <View style={styles.thumbWrap}>
+          {thumbUri ? (
+            <Image source={{ uri: thumbUri }} style={styles.thumb} contentFit="cover" accessibilityIgnoresInvertColors />
+          ) : (
+            <View style={styles.thumbPh} accessibilityElementsHidden>
+              <Ionicons name="cube-outline" size={20} color={ui.textSecondary} />
+            </View>
+          )}
+          {showChip ? (
+            <View style={[styles.floatingBadge, { backgroundColor: chip.bg, borderColor: chip.border }]}>
+              <Text style={[styles.floatingBadgeText, { color: chip.fg }]} numberOfLines={1}>
+                {chipLabel}
+              </Text>
+            </View>
+          ) : null}
+        </View>
         <View style={styles.textCol}>
           <Text style={styles.title} numberOfLines={2}>
             {displayTitle}
@@ -66,13 +79,6 @@ export function RentalWorkspaceHero({
           <Text style={styles.dates} numberOfLines={1}>
             {dateRangeLine}
           </Text>
-          <View style={styles.chipRow}>
-            <View style={[styles.badge, { backgroundColor: chip.bg, borderColor: chip.border }]}>
-              <Text style={[styles.badgeText, { color: chip.fg }]} numberOfLines={1}>
-                {chipLabel}
-              </Text>
-            </View>
-          </View>
           <Text style={styles.relationship} numberOfLines={1}>
             {relationshipLine}
           </Text>
@@ -98,6 +104,7 @@ const styles = StyleSheet.create({
     ...shadowCard,
   },
   row: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  thumbWrap: { position: 'relative' },
   thumb: { width: 52, height: 52, borderRadius: 12, backgroundColor: ui.surfaceInput },
   thumbPh: {
     width: 52,
@@ -118,17 +125,19 @@ const styles = StyleSheet.create({
     lineHeight: 21,
   },
   dates: { fontSize: 12, fontWeight: '700', color: ui.textPrimary, marginTop: 1 },
-  chipRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
-  badge: {
-    paddingVertical: 3,
-    paddingHorizontal: 8,
+  floatingBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    paddingVertical: 2,
+    paddingHorizontal: 6,
     borderRadius: 999,
     borderWidth: StyleSheet.hairlineWidth,
-    alignSelf: 'flex-start',
+    maxWidth: 72,
   },
-  badgeText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.15, textAlign: 'center' },
+  floatingBadgeText: { fontSize: 8, fontWeight: '800', letterSpacing: 0.12 },
   relationship: {
-    marginTop: 4,
+    marginTop: 6,
     fontSize: 12,
     fontWeight: '600',
     color: ui.textSecondary,

@@ -37,6 +37,8 @@ export function buildRentalWorkspaceTimelineModel(input: {
   pickupIso: string | null | undefined;
   returnIso: string | null | undefined;
   viewerRole?: RentalWorkspaceTimelineViewerRole;
+  /** Pending meetup/extension proposal during active rental. */
+  hasPendingExtensionProposal?: boolean;
 }): RentalWorkspaceTimelineEvent[] {
   const role = input.viewerRole ?? 'renter';
   const events: RentalWorkspaceTimelineEvent[] = [];
@@ -119,6 +121,18 @@ export function buildRentalWorkspaceTimelineModel(input: {
     });
   }
 
+  if (input.hasPendingExtensionProposal && input.lifecyclePhase === 'active') {
+    events.push({
+      id: 'extension',
+      title: role === 'owner' ? 'Extension requested' : 'Extension pending',
+      subtitle:
+        role === 'owner'
+          ? 'Approve or decline the new return date in the ON RENT card or Messages.'
+          : 'Waiting for the owner to approve your new return date.',
+      tone: 'current',
+    });
+  }
+
   if (input.returnCompleted) {
     events.push({
       id: 'return',
@@ -128,14 +142,20 @@ export function buildRentalWorkspaceTimelineModel(input: {
     });
   } else if (input.handoffCompleted) {
     const returnCurrent = input.lifecyclePhase === 'return' || st === 'return_pending';
+    const extensionBlocksReturn =
+      input.hasPendingExtensionProposal && input.lifecyclePhase === 'active' && !returnCurrent;
     const returnSubtitle =
       role === 'owner'
         ? returnCurrent
           ? 'Review renter return photos and confirm condition.'
-          : 'Opens when the renter starts the return window.'
+          : extensionBlocksReturn
+            ? 'Respond to the extension request first.'
+            : 'Opens when the renter starts the return window.'
         : returnCurrent
           ? 'Your photos, checklist, and final confirmation.'
-          : 'Plan return photos and drop-off before the window.';
+          : extensionBlocksReturn
+            ? 'Return timing updates once the owner responds.'
+            : 'Plan return photos and drop-off before the window.';
     events.push({
       id: 'return',
       title: 'Return & drop-off',

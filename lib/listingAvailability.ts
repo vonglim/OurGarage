@@ -208,6 +208,49 @@ export async function removePendingAvailabilityHold(offerId: string): Promise<{ 
   return { ok: true };
 }
 
+/** Extend a booked hold when an approved rental extension moves the return date later. */
+export async function extendBookedAvailabilityEndForOffer(
+  offerId: string,
+  newReturnIso: string
+): Promise<{ ok: boolean; message?: string }> {
+  if (!isSupabaseConfigured()) return { ok: false, message: 'Server not configured.' };
+  const id = offerId.trim();
+  const endDate = newReturnIso.trim().slice(0, 10);
+  if (!id || endDate.length < 10) return { ok: false, message: 'Missing offer or date.' };
+  const supabase = getSupabase();
+  const { data, error: fetchErr } = await supabase
+    .from('listing_availability')
+    .select('id, end_date')
+    .eq('source_offer_id', id)
+    .eq('availability_type', 'booked')
+    .limit(1)
+    .maybeSingle();
+  if (fetchErr) {
+    if (__DEV__) console.warn('[listing_availability] extend booked fetch', fetchErr.message);
+    return { ok: false, message: fetchErr.message };
+  }
+  if (!data) return { ok: true };
+  const currentEnd =
+    typeof data.end_date === 'string'
+      ? data.end_date.slice(0, 10)
+      : data.end_date instanceof Date
+        ? data.end_date.toISOString().slice(0, 10)
+        : '';
+  if (currentEnd && compareIsoDate(endDate, currentEnd) <= 0) return { ok: true };
+  const rowId = typeof data.id === 'string' ? data.id : '';
+  if (!rowId) return { ok: true };
+  const { error } = await supabase
+    .from('listing_availability')
+    .update({ end_date: endDate })
+    .eq('id', rowId)
+    .eq('availability_type', 'booked');
+  if (error) {
+    if (__DEV__) console.warn('[listing_availability] extend booked', error.message);
+    return { ok: false, message: error.message };
+  }
+  return { ok: true };
+}
+
 export async function convertPendingToBooked(offerId: string): Promise<{ ok: boolean; message?: string }> {
   if (!isSupabaseConfigured()) return { ok: false, message: 'Server not configured.' };
   const id = offerId.trim();

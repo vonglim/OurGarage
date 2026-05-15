@@ -1,4 +1,8 @@
 import type { RentalWorkspaceStage } from '@/lib/rentalLifecyclePhase';
+import {
+  activeExtensionUrgencyLine,
+  activeOnRentSummaryLine,
+} from '@/lib/rentalWorkspaceRoleCopy';
 import type { RentalWorkspaceUxPhase } from '@/lib/rentalWorkspaceUxPhase';
 
 /** Visual / copy lane for the stage workbench shell (UI only). */
@@ -26,6 +30,8 @@ export type RentalWorkspacePrimaryStageModel = {
   benchTone: RentalWorkspaceBenchTone;
   /** Short operational line (timing, location, progress). */
   contextLine: string | null;
+  /** Active-stage urgency line (extensions, deadlines). */
+  urgencyLine?: string | null;
   secondaryAction: RentalWorkspaceSecondaryAction | null;
 };
 
@@ -60,6 +66,10 @@ type PrimaryResolveInput = {
   onFocusReturnSection: () => void;
   onOpenChat: () => void;
   onConfirmReturn: () => void;
+  onRequestExtension: () => void;
+  onApproveExtension: () => void;
+  onDeclineExtension: () => void;
+  onManageReturn: () => void;
 };
 
 function shortPickupSummary(input: PrimaryResolveInput): string {
@@ -218,23 +228,69 @@ export function resolveRentalWorkspacePrimaryStageModel(
   }
 
   if (input.workspaceStage === 'active') {
-    const ownerSummary = sched
-      ? `The renter has your item until ${sched}. Stay in the thread for return questions or plan changes.`
-      : guide ||
-        'Your listing is live — keep pickup and return notes, photos, and timing in Messages so nothing drifts.';
-    const renterSummary = sched
-      ? `You’re on the clock until ${sched}. Line up return photos and drop-off details before the window closes.`
-      : guide ||
-        'You have the gear — treat it well, keep the owner posted, and document anything unusual in Messages.';
+    const summaryLine = activeOnRentSummaryLine(input.viewerRole, sched);
+    const urgencyLine = activeExtensionUrgencyLine(input.viewerRole);
+
+    if (input.showMeetingAccept) {
+      return {
+        stageLabel: 'ON RENT',
+        summaryLine:
+          guide ||
+          (input.viewerRole === 'owner'
+            ? `${who} requested a return extension — approve or decline to keep late fees accurate.`
+            : `Waiting on ${who} to respond to your extension request.`),
+        primaryLabel: input.proposalBusy ? 'Saving…' : 'Approve extension',
+        primaryDisabled: input.proposalBusy,
+        onPrimary: input.onApproveExtension,
+        benchTone: 'active',
+        contextLine: ctx,
+        urgencyLine,
+        secondaryAction: {
+          label: 'Decline',
+          onPress: input.onDeclineExtension,
+          disabled: input.proposalBusy,
+        },
+      };
+    }
+
+    if (input.showMeetingPendingPill) {
+      return {
+        stageLabel: 'ON RENT',
+        summaryLine: guide || `Extension pending — waiting on ${who} to respond.`,
+        primaryLabel: 'Open messages',
+        primaryDisabled: false,
+        onPrimary: input.onOpenChat,
+        benchTone: 'active',
+        contextLine: ctx,
+        urgencyLine,
+        secondaryAction: issueAction(input),
+      };
+    }
+
+    if (input.viewerRole === 'renter') {
+      return {
+        stageLabel: 'ON RENT',
+        summaryLine,
+        primaryLabel: input.proposalBusy ? 'Sending…' : 'Request extension',
+        primaryDisabled: input.proposalBusy,
+        onPrimary: input.onRequestExtension,
+        benchTone: 'active',
+        contextLine: ctx,
+        urgencyLine,
+        secondaryAction: { label: 'Open messages', onPress: input.onOpenChat, disabled: false },
+      };
+    }
+
     return {
       stageLabel: 'ON RENT',
-      summaryLine: input.viewerRole === 'owner' ? ownerSummary : renterSummary,
-      primaryLabel: 'Open messages',
+      summaryLine,
+      primaryLabel: 'Coordinate return',
       primaryDisabled: false,
-      onPrimary: input.onOpenChat,
+      onPrimary: input.onManageReturn,
       benchTone: 'active',
       contextLine: ctx,
-      secondaryAction: issueAction(input),
+      urgencyLine,
+      secondaryAction: { label: 'Open messages', onPress: input.onOpenChat, disabled: false },
     };
   }
 

@@ -18,10 +18,27 @@ export function buildMeetupProposalMessageBody(input: {
   returnTimeIso: string;
   meetupLocation: string;
   durationWarningLine?: string | null;
+  /** When true, frames the proposal as a return extension (active rental). */
+  isExtension?: boolean;
+  extensionNote?: string | null;
 }): string {
   const pickup = formatProposalInstant(input.meetupTimeIso);
   const ret = formatProposalInstant(input.returnTimeIso);
   const loc = String(input.meetupLocation ?? '').trim();
+  const note = String(input.extensionNote ?? '').trim();
+
+  if (input.isExtension) {
+    return [
+      'Extension requested',
+      `Return time proposed: ${ret}`,
+      `Pickup (unchanged): ${pickup}`,
+      ...(loc ? [`📍 ${loc}`] : []),
+      ...(note ? [`Note: ${note}`] : []),
+      'Extensions must be approved by the owner to avoid late return fees.',
+      ...(input.durationWarningLine ? [input.durationWarningLine] : []),
+    ].join('\n');
+  }
+
   return [
     `Pickup time proposed: ${pickup}`,
     `Return time proposed: ${ret}`,
@@ -40,6 +57,8 @@ export async function insertMeetupProposalOfferMessage(input: {
   returnTimeIso: string;
   meetupLocation: string;
   durationWarningLine?: string | null;
+  isExtension?: boolean;
+  extensionNote?: string | null;
 }): Promise<string | null> {
   const offerId = input.offerId.trim();
   const authorId = input.authorId.trim();
@@ -53,6 +72,8 @@ export async function insertMeetupProposalOfferMessage(input: {
     returnTimeIso: input.returnTimeIso,
     meetupLocation: input.meetupLocation,
     durationWarningLine: input.durationWarningLine,
+    isExtension: input.isExtension,
+    extensionNote: input.extensionNote,
   });
 
   const row: Record<string, unknown> = {

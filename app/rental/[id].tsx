@@ -38,6 +38,7 @@ import {
 import { AppKeyboardAwareScrollView } from '@/components/AppKeyboardAwareScrollView';
 import { BackHeader } from '@/components/AppHeaders';
 import { RentalLifecycleNavigator } from '@/components/RentalLifecycleNavigator';
+import { RentalExtensionRequestModal } from '@/components/rentalWorkspace/RentalExtensionRequestModal';
 import { RentalWorkspaceHero } from '@/components/rentalWorkspace/RentalWorkspaceHero';
 import { RentalWorkspaceStageWorkbench } from '@/components/rentalWorkspace/RentalWorkspaceStageWorkbench';
 import { RentalWorkspaceUpdatesSection } from '@/components/rentalWorkspace/RentalWorkspaceUpdatesSection';
@@ -72,6 +73,15 @@ import { parseListingIntentSnapshot, type ListingIntentSnapshot } from '@/lib/li
 import { normalizeListingImages } from '@/lib/normalizeListingImages';
 import { fetchAndMergeProfileNames } from '@/lib/remoteProfileCache';
 import { buildRentalWorkspaceHeroModel } from '@/lib/rentalWorkspaceHeroModel';
+import {
+  isReturnExtensionProposal,
+  resolveRentalPickupIso,
+  resolveRentalReturnIso,
+} from '@/lib/rentalExtensionProposal';
+import {
+  acceptRentalMeetupProposal,
+  declineRentalMeetupProposal,
+} from '@/lib/rentalMeetupProposalLifecycle';
 import { resolveRentalWorkspacePrimaryStageModel } from '@/lib/rentalWorkspacePrimaryStageModel';
 import { buildRentalWorkspaceTimelineModel } from '@/lib/rentalWorkspaceTimelineModel';
 import {
@@ -82,11 +92,25 @@ import {
   activeReturnCountdownFragment,
   buildActiveWorkbenchContextLine,
   formatReturnWorkbenchContextLine,
+  returnGuidanceBullets,
+  returnGuidanceMuted,
+  returnGuidanceTitle,
+  returnInfoBannerText,
+  returnNotesAccordionHelper,
+  returnNotesAccordionTitle,
   returnPhotosSectionHelper,
+  returnPrimaryCtaLabel,
+  returnPrimaryFootnote,
   returnResponsibilitiesSectionTitle,
   returnSectionCollapsedMeta,
+  returnSectionIntroLine,
   workspaceReturnGuidanceLine,
 } from '@/lib/rentalWorkspaceRoleCopy';
+import {
+  bucketRenterReturnPhotos,
+  storageCategoryFromReturnTile,
+  type ReturnPhotoCategory,
+} from '@/lib/returnVerificationPhotoBuckets';
 import { deriveRentalWorkspaceUxPhase, rentalWorkspaceUxPhaseBadgeLabel } from '@/lib/rentalWorkspaceUxPhase';
 import { insertRentalAgreementSnapshot } from '@/lib/rentalAgreement';
 import {
@@ -351,14 +375,14 @@ const RENTER_PICKUP_ITEMS = [
 ] as const;
 
 const OWNER_RETURN_ITEMS = [
-  { id: 'or-review-return', label: 'Review return condition' },
-  { id: 'or-review-ret-notes', label: 'Review return notes' },
+  { id: 'or-review-return', label: 'Review return photos' },
+  { id: 'or-review-ret-notes', label: 'Confirm returned condition' },
 ] as const;
 
 const RENTER_RETURN_ITEMS = [
-  { id: 'rr-upload-photos', label: 'Upload return photos' },
-  { id: 'rr-document-wear', label: 'Document issues/wear' },
-  { id: 'rr-confirm-accessories', label: 'Confirm accessories included' },
+  { id: 'rr-upload-photos', label: 'Upload return item photos' },
+  { id: 'rr-confirm-accessories', label: 'Confirm all accessories are included' },
+  { id: 'rr-document-wear', label: 'Note any wear or issues (optional)' },
 ] as const;
 
 type ChecklistMaps = { owner: Record<string, boolean>; renter: Record<string, boolean> };
@@ -1290,6 +1314,7 @@ export default function RentalScreen() {
   );
   const [request, setRequest] = useState<any>(null);
   const [heroSupplement, setHeroSupplement] = useState<RentalHeroSupplement | null>(null);
+  const [extensionModalVisible, setExtensionModalVisible] = useState(false);
   /** Section Y offsets inside scroll content (for lifecycle navigator). */
   const lifecycleSectionYRef = useRef<Partial<Record<string, number>>>({});
   const [signHandoffBusy, setSignHandoffBusy] = useState(false);
@@ -1334,6 +1359,7 @@ export default function RentalScreen() {
   const [addingRenterNote, setAddingRenterNote] = useState(false);
   const [ownerHandoffNotesExpanded, setOwnerHandoffNotesExpanded] = useState(false);
   const [renterHandoffNotesExpanded, setRenterHandoffNotesExpanded] = useState(false);
+  const [returnNotesExpanded, setReturnNotesExpanded] = useState(false);
   const [pickupChecklistPanelExpanded, setPickupChecklistPanelExpanded] = useState(true);
   const prevPickupPanelSatisfiedRef = useRef(false);
   const [ownerHandoffLinkDraft, setOwnerHandoffLinkDraft] = useState('');
@@ -1939,7 +1965,13 @@ export default function RentalScreen() {
   }, [photoViewerVisible, photoViewerIndex, viewerSourceUri]);
 
   const onProposeRentalDetails = useCallback(
-    async (input: { meetupTimeIso: string; returnTimeIso: string; meetupLocation: string }): Promise<boolean> => {
+    async (input: {
+      meetupTimeIso: string;
+      returnTimeIso: string;
+      meetupLocation: string;
+      extensionNote?: string;
+      isExtension?: boolean;
+    }): Promise<boolean> => {
       if (!rental || !me) return false;
       const baselineDurationHours = resolveAgreementBaselineDurationHours(rental, request);
       const proposedDurationHours = durationHoursBetween(input.meetupTimeIso, input.returnTimeIso);
@@ -1948,7 +1980,15 @@ export default function RentalScreen() {
         proposedDurationHours,
         graceHours: DURATION_GRACE_HOURS,
       });
-      if (durationEval.warningTriggered) {
+      const isExtension =
+        input.isExtension === true ||
+        isReturnExtensionProposal({
+          baselinePickupIso: rental.agreed_pickup_datetime ?? resolveRentalPickupIso(rental),
+          baselineReturnIso: rental.agreed_return_datetime ?? resolveRentalReturnIso(rental),
+          proposedPickupIso: input.meetupTimeIso,
+          proposedReturnIso: input.returnTimeIso,
+        });
+      if (durationEval.warningTriggered && !isExtension) {
         const continueProposal = await new Promise<boolean>((resolve) => {
           Alert.alert(
             'Duration change',
@@ -2018,7 +2058,9 @@ export default function RentalScreen() {
             meetupTimeIso: input.meetupTimeIso,
             returnTimeIso: input.returnTimeIso,
             meetupLocation: input.meetupLocation,
-            durationWarningLine: durationEval.warningLine,
+            durationWarningLine: isExtension ? null : durationEval.warningLine,
+            isExtension,
+            extensionNote: input.extensionNote,
           });
           if (!messageId) {
             Alert.alert('Could not post proposal', 'Chat proposal message could not be created.');
@@ -2028,12 +2070,16 @@ export default function RentalScreen() {
             actorId: me,
             recipientUserId: receiverId,
             type: 'message',
-            title: durationEval.warningTriggered
-              ? `${getProfileNameForUserId(me)} proposed updated meetup times with a changed rental duration`
-              : `${getProfileNameForUserId(me)} proposed a pickup time`,
-            body: String(request?.title ?? '').trim()
-              ? `New meetup proposal for ${String(request?.title).trim()}`
-              : 'A meetup time was proposed.',
+            title: isExtension
+              ? `${getProfileNameForUserId(me)} requested a rental extension`
+              : durationEval.warningTriggered
+                ? `${getProfileNameForUserId(me)} proposed updated meetup times with a changed rental duration`
+                : `${getProfileNameForUserId(me)} proposed a pickup time`,
+            body: isExtension
+              ? 'Review the new return date and approve or decline in Messages.'
+              : String(request?.title ?? '').trim()
+                ? `New meetup proposal for ${String(request?.title).trim()}`
+                : 'A meetup time was proposed.',
             offerId,
             requestId: requestRowId,
             rentalId: rental.id,
@@ -2056,17 +2102,9 @@ export default function RentalScreen() {
     if (!rental || !me) return;
     setProposalBusy(true);
     try {
-      const patch: Record<string, unknown> = {
-        confirmed_by_owner: true,
-        confirmed_by_renter: true,
-        owner_confirmed: true,
-        renter_confirmed: true,
-        agreement_status: 'confirmed',
-        confirmed_at: new Date().toISOString(),
-      };
-      const { error } = await supabase.from('rentals').update(patch).eq('id', rental.id);
-      if (error) {
-        Alert.alert('Could not confirm yet', 'Please try again.');
+      const result = await acceptRentalMeetupProposal(supabase, rental, me);
+      if (!result.ok) {
+        Alert.alert('Could not confirm yet', result.message ?? 'Please try again.');
         return;
       }
       await refreshVerificationState();
@@ -2074,6 +2112,38 @@ export default function RentalScreen() {
       setProposalBusy(false);
     }
   }, [me, refreshVerificationState, rental, supabase]);
+
+  const onDeclineMeetingProposal = useCallback(async () => {
+    if (!rental || !me) return;
+    const proceed = await new Promise<boolean>((resolve) => {
+      Alert.alert(
+        'Decline extension?',
+        'The original return window stays in effect. The renter will be notified in Messages.',
+        [
+          { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Decline', style: 'destructive', onPress: () => resolve(true) },
+        ]
+      );
+    });
+    if (!proceed) return;
+    setProposalBusy(true);
+    try {
+      const itemTitle =
+        typeof request?.title === 'string'
+          ? request.title
+          : typeof request?.toolName === 'string'
+            ? request.toolName
+            : null;
+      const result = await declineRentalMeetupProposal(supabase, rental, me, { itemTitle });
+      if (!result.ok) {
+        Alert.alert('Could not decline', result.message ?? 'Please try again.');
+        return;
+      }
+      await refreshVerificationState();
+    } finally {
+      setProposalBusy(false);
+    }
+  }, [me, refreshVerificationState, rental, request, supabase]);
 
   const openMeetingProposalEditor = useCallback(() => {
     proposalEditorRef.current?.openProposeModal();
@@ -2529,6 +2599,8 @@ export default function RentalScreen() {
   const renterReturnPhotos = returnEvidenceDisplay.filter(
     (p) => normalizePhase(p.phase) === 'return' && normalizeRole(p.role) === 'renter'
   );
+  const renterReturnBuckets = bucketRenterReturnPhotos(renterReturnPhotos);
+  const returnItemPhotosComplete = renterReturnPhotos.length >= REQUIRED_RETURN_PHOTOS;
   const ownerPickupDoneEffective = buildOwnerPickupDoneEffective(pickupChecklist.owner, ownerPickupPhotos);
   const renterPickupDoneEffective = buildRenterPickupDoneEffective(
     pickupChecklist.renter,
@@ -3131,12 +3203,16 @@ export default function RentalScreen() {
     );
   };
 
-  const openEvidenceCamera = (phase: VerificationPhase, pickupCategory?: PickupPhotoCategory) => {
+  const openEvidenceCamera = (
+    phase: VerificationPhase,
+    tileCategory?: PickupPhotoCategory | ReturnPhotoCategory
+  ) => {
     if (!me) return;
     if (phase === 'pickup' && viewerRole === 'renter') return;
-    if (phase === 'pickup' && viewerRole === 'owner' && !pickupCategory) {
+    if (phase === 'pickup' && viewerRole === 'owner' && !tileCategory) {
       return;
     }
+    if (phase === 'return' && viewerRole !== 'renter') return;
     if (phase === 'pickup' && viewerRole === 'owner' && !canUploadPickup) {
       Alert.alert(
         'Pickup photos locked',
@@ -3162,11 +3238,16 @@ export default function RentalScreen() {
     }
     const st = useCameraSessionStore.getState();
     st.setCapturedPhotoUris([]);
+    const storageCategory =
+      phase === 'pickup' && viewerRole === 'owner'
+        ? (tileCategory as PickupPhotoCategory | undefined) ?? null
+        : phase === 'return' && viewerRole === 'renter'
+          ? storageCategoryFromReturnTile((tileCategory as ReturnPhotoCategory | undefined) ?? 'item')
+          : null;
     st.setRentalEvidenceSession({
       rentalId: rental.id,
       phase,
-      pickupPhotoCategory:
-        phase === 'pickup' && viewerRole === 'owner' ? pickupCategory ?? null : null,
+      pickupPhotoCategory: storageCategory,
     });
     router.push('/camera');
   };
@@ -3183,6 +3264,37 @@ export default function RentalScreen() {
     const idx = pickupEvidenceDisplay.findIndex((p) => p.id === id);
     if (idx >= 0) openPhotoViewer('pickup', idx);
   };
+
+  const openReturnPhotoById = (id: string) => {
+    const idx = returnEvidenceDisplay.findIndex((p) => p.id === id);
+    if (idx >= 0) openPhotoViewer('return', idx);
+  };
+
+  const returnRequiredDoneCount = returnItems.filter((i) => Boolean(returnDoneForRole[i.id])).length;
+  const renterReturnPrepComplete =
+    viewerRole === 'renter' && renterReturnChecklistDone && renterReturnPhotoRequirementMet;
+
+  let returnPrimaryLabel = returnPrimaryCtaLabel(viewerRole, false);
+  let returnPrimaryDisabled = true;
+  let returnPrimaryOnPress: (() => void) | undefined;
+  const returnPrimaryFootnoteText = returnPrimaryFootnote(
+    viewerRole,
+    viewerRole === 'owner' ? returnReady : renterReturnPrepComplete,
+    renterReturnPhotos.length,
+    REQUIRED_RETURN_PHOTOS
+  );
+
+  if (viewerRole === 'owner' && returnWorkflowEnabled && !returnCompleted) {
+    returnPrimaryLabel = returnPrimaryCtaLabel('owner', returnReady);
+    returnPrimaryDisabled = !returnReady;
+    returnPrimaryOnPress = () => void onConfirmReturn();
+  } else if (viewerRole === 'renter' && returnWorkflowEnabled && !returnCompleted) {
+    returnPrimaryLabel = returnPrimaryCtaLabel('renter', renterReturnPrepComplete);
+    returnPrimaryDisabled = !renterReturnPrepComplete;
+    returnPrimaryOnPress = renterReturnPrepComplete
+      ? () => showFeedbackToast('Return prep complete — coordinate drop-off in Messages.')
+      : () => openEvidenceCamera('return', 'item');
+  }
 
   let pickupPrimaryLabel = '';
   let pickupPrimaryDisabled = true;
@@ -3288,6 +3400,9 @@ export default function RentalScreen() {
     return `${pd} – ${rd}`;
   })();
 
+  const hasPendingExtensionProposal =
+    workspaceStage === 'active' && hasPendingProposal;
+
   const workspaceTimelineEvents = buildRentalWorkspaceTimelineModel({
     rentalStatus,
     termsCompleted,
@@ -3299,6 +3414,7 @@ export default function RentalScreen() {
     pickupIso: meetingPickupForHero,
     returnIso: meetingReturnForHero,
     viewerRole,
+    hasPendingExtensionProposal,
   });
 
   const currentWorkspaceEvents = workspaceTimelineEvents.filter((e) => e.tone === 'current');
@@ -3386,6 +3502,20 @@ export default function RentalScreen() {
     onFocusReturnSection,
     onOpenChat: openRentalChat,
     onConfirmReturn,
+    onRequestExtension: () => {
+      if (!resolveRentalReturnIso(rental)) {
+        Alert.alert('Return date missing', 'Set meetup return details before requesting an extension.');
+        return;
+      }
+      if (hasPendingProposal && iProposedLast) {
+        Alert.alert('Extension pending', 'Waiting for the owner to respond to your current request.');
+        return;
+      }
+      setExtensionModalVisible(true);
+    },
+    onApproveExtension: () => void onAcceptMeetingProposal(),
+    onDeclineExtension: () => void onDeclineMeetingProposal(),
+    onManageReturn: onFocusReturnSection,
   });
 
   const agreementCollapsedMinimal =
@@ -4335,39 +4465,236 @@ export default function RentalScreen() {
                     </View>
                   ) : null}
                 </>
+              ) : returnCompleted ? (
+                <View style={styles.handoffConfirmedSummary}>
+                  <Text style={styles.handoffConfirmedTitle}>✅ Return complete</Text>
+                  <Text style={styles.handoffConfirmedMeta}>Return photos and confirmations are on file.</Text>
+                  <Text style={styles.handoffConfirmedLock}>Return photos and checklist are locked.</Text>
+                </View>
               ) : (
                 <>
+                  <Text style={[styles.handoffSectionHelper, { marginBottom: 10 }]}>
+                    {returnSectionIntroLine(viewerRole)}
+                  </Text>
                   {!returnCompleted && !returnWindow.allowed && returnWindow.helperText ? (
                     <View style={[styles.handoffInfoBanner, styles.handoffInfoBannerRenter, { marginBottom: 12 }]}>
                       <Ionicons name="time-outline" size={18} color="rgba(217, 119, 6, 0.95)" />
                       <Text style={styles.handoffInfoBannerTextRenter}>{returnWindow.helperText}</Text>
                     </View>
                   ) : null}
+
                   <View style={styles.handoffSection}>
                     <View style={styles.handoffSectionTitleRow}>
-                      <Ionicons name="images-outline" size={18} color={ui.primary} />
-                      <Text style={styles.handoffSectionTitle}>Return photos</Text>
+                      <Ionicons name="shield-checkmark" size={18} color="#166534" />
+                      <Text style={styles.handoffSectionTitle}>Return & drop-off photos</Text>
                     </View>
                     <Text style={styles.handoffSectionHelper}>{returnPhotosSectionHelper(viewerRole)}</Text>
-                  <VerificationPhotosSubsection
-                    photos={returnEvidenceDisplay}
-                    uploading={uploadingEvidence}
-                    onAddPress={() => openEvidenceCamera('return')}
-                    onPhotoPress={(idx) => openPhotoViewer('return', idx)}
-                    onDeletePhoto={(photoId) => {
-                      const photo = returnEvidenceDisplay.find((p) => p.id === photoId);
-                      if (photo) confirmDeletePhoto(photo);
-                    }}
-                    canDeletePhoto={(photo) => canDeletePhoto(photo)}
-                    addDisabled={!canUploadReturn}
-                    addDisabledReason={returnPhotoUploadBlockedExplanation}
-                  />
-                  <Text style={styles.photoWindowHelper}>
-                    {returnCompleted
-                      ? 'Return photos are locked after return confirmation is completed.'
-                      : 'Return photos stay editable until return confirmation is completed.'}
-                  </Text>
+
+                    {viewerRole === 'renter' ? (
+                      <View style={styles.handoffTileRow}>
+                        <Pressable
+                          pressOpacityFeedback={false}
+                          onPress={() => openEvidenceCamera('return', 'item')}
+                          style={({ pressed }) => [
+                            styles.handoffPhotoTile,
+                            returnItemPhotosComplete && styles.handoffPhotoTileHighlight,
+                            !canUploadReturn && styles.handoffPhotoTileLocked,
+                            pressed && canUploadReturn && { opacity: 0.92 },
+                          ]}
+                        >
+                          {returnItemPhotosComplete ? (
+                            <Ionicons name="checkmark-circle" size={24} color="#16a34a" />
+                          ) : (
+                            <Ionicons name="camera-outline" size={22} color={ui.textSecondary} />
+                          )}
+                          <Text style={styles.handoffTileLabel}>Return item photos</Text>
+                          <Text
+                            style={[
+                              styles.handoffTileCount,
+                              returnItemPhotosComplete && styles.handoffTileCountComplete,
+                            ]}
+                          >
+                            {`${renterReturnBuckets.item.length} · ${renterReturnPhotos.length} / ${REQUIRED_RETURN_PHOTOS}${
+                              returnItemPhotosComplete ? ' ✓' : ''
+                            }`}
+                          </Text>
+                        </Pressable>
+                        <Pressable
+                          pressOpacityFeedback={false}
+                          onPress={() => openEvidenceCamera('return', 'damage')}
+                          style={({ pressed }) => [
+                            styles.handoffPhotoTile,
+                            renterReturnBuckets.damage.length > 0 && styles.handoffPhotoTileHighlight,
+                            !canUploadReturn && styles.handoffPhotoTileLocked,
+                            pressed && canUploadReturn && { opacity: 0.92 },
+                          ]}
+                        >
+                          {renterReturnBuckets.damage.length > 0 ? (
+                            <Ionicons name="checkmark-circle" size={24} color="#16a34a" />
+                          ) : (
+                            <Ionicons name="alert-circle-outline" size={22} color={ui.textSecondary} />
+                          )}
+                          <Text style={styles.handoffTileLabel}>Damage / issues</Text>
+                          <Text style={styles.handoffTileCount}>
+                            {renterReturnBuckets.damage.length > 0
+                              ? `${renterReturnBuckets.damage.length} photo${renterReturnBuckets.damage.length === 1 ? '' : 's'}`
+                              : 'Optional'}
+                          </Text>
+                        </Pressable>
+                        <Pressable
+                          pressOpacityFeedback={false}
+                          onPress={() => openEvidenceCamera('return', 'additional')}
+                          style={({ pressed }) => [
+                            styles.handoffPhotoTile,
+                            renterReturnBuckets.additional.length > 0 && styles.handoffPhotoTileHighlight,
+                            !canUploadReturn && styles.handoffPhotoTileLocked,
+                            pressed && canUploadReturn && { opacity: 0.92 },
+                          ]}
+                        >
+                          <Ionicons name="add" size={26} color={ui.textSecondary} />
+                          <Text style={styles.handoffTileLabel}>Additional photos</Text>
+                          <Text style={styles.handoffTileCount}>
+                            {renterReturnBuckets.additional.length > 0
+                              ? `${renterReturnBuckets.additional.length} extra`
+                              : 'Optional'}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    ) : null}
+
+                    <View
+                      style={[
+                        styles.handoffExamplePanel,
+                        viewerRole === 'renter' && styles.handoffExamplePanelRenter,
+                      ]}
+                    >
+                      <View style={styles.handoffExampleLeft}>
+                        <Text style={styles.handoffExampleTitle}>{returnGuidanceTitle(viewerRole)}</Text>
+                        {returnGuidanceBullets(viewerRole).map((line) => (
+                          <Text key={line} style={styles.handoffExampleBody}>
+                            • {line}
+                          </Text>
+                        ))}
+                        <Text style={styles.handoffExampleMuted}>{returnGuidanceMuted(viewerRole)}</Text>
+                      </View>
+                    </View>
+
+                    <Text style={styles.handoffOwnerPreviewHead}>Preview</Text>
+                    <Text style={styles.handoffOwnerPreviewSub}>
+                      {viewerRole === 'owner'
+                        ? 'Renter return photos grouped the same way they captured them.'
+                        : 'Your return photos — the owner sees this same layout when reviewing drop-off.'}
+                    </Text>
+
+                    <Text style={styles.handoffEvidenceGroupLabel}>Return item photos</Text>
+                    {renterReturnBuckets.item.length > 0 ? (
+                      <PickupHandoffItemPhotoRow
+                        photos={renterReturnBuckets.item}
+                        openPickupPhotoById={openReturnPhotoById}
+                        canDeletePhoto={canDeletePhoto}
+                        confirmDeletePhoto={confirmDeletePhoto}
+                      />
+                    ) : (
+                      <View style={styles.handoffEvidenceEmptyBlock}>
+                        <Text style={styles.handoffEvidenceEmptyTitle}>
+                          {viewerRole === 'owner' ? 'Waiting for return photos' : 'No return item photos yet'}
+                        </Text>
+                        <Text style={styles.handoffEvidenceEmptyBody}>
+                          {viewerRole === 'owner'
+                            ? 'The renter uploads return item photos before drop-off. They appear here for your review.'
+                            : 'Use the Return item photos tile above — add at least three clear shots of the full item.'}
+                        </Text>
+                      </View>
+                    )}
+
+                    {renterReturnBuckets.damage.length > 0 ? (
+                      <>
+                        <Text style={styles.handoffEvidenceGroupLabel}>Damage / issues (optional)</Text>
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator={false}
+                          contentContainerStyle={styles.handoffEvidenceGallery}
+                        >
+                          {renterReturnBuckets.damage.map((p) => (
+                            <RentalEvidenceThumbnail
+                              key={p.id}
+                              uri={p.signedUrl}
+                              size="handoffSquare"
+                              category="return"
+                              canDelete={canDeletePhoto(p)}
+                              onPress={() => openReturnPhotoById(p.id)}
+                              onDelete={() => confirmDeletePhoto(p)}
+                            />
+                          ))}
+                        </ScrollView>
+                      </>
+                    ) : null}
+
+                    {renterReturnBuckets.additional.length > 0 ? (
+                      <>
+                        <Text style={styles.handoffEvidenceGroupLabel}>Additional photos</Text>
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator={false}
+                          contentContainerStyle={styles.handoffEvidenceGallery}
+                        >
+                          {renterReturnBuckets.additional.map((p) => (
+                            <RentalEvidenceThumbnail
+                              key={p.id}
+                              uri={p.signedUrl}
+                              size="handoffSquare"
+                              category="additional"
+                              canDelete={canDeletePhoto(p)}
+                              onPress={() => openReturnPhotoById(p.id)}
+                              onDelete={() => confirmDeletePhoto(p)}
+                            />
+                          ))}
+                        </ScrollView>
+                      </>
+                    ) : null}
+
+                    <Text style={styles.handoffPrivacyHint}>Photos are only visible to participants in this rental.</Text>
+                    {!returnCompleted && returnWindow.helperText && returnWindow.allowed ? (
+                      <Text style={styles.photoWindowHelper}>{returnWindow.helperText}</Text>
+                    ) : null}
+                    <Text style={styles.photoWindowHelper}>
+                      {returnCompleted
+                        ? 'Return photos are locked after return confirmation is completed.'
+                        : 'Return photos stay editable until return confirmation is completed.'}
+                    </Text>
                   </View>
+
+                  <View style={styles.handoffSection}>
+                    <HandoffOwnerNotesAccordion
+                      expanded={returnNotesExpanded}
+                      onToggle={() => setReturnNotesExpanded((v) => !v)}
+                      mode={viewerRole}
+                      title={returnNotesAccordionTitle(viewerRole)}
+                      helperCollapsed={returnNotesAccordionHelper(viewerRole)}
+                      childrenExpanded={
+                        viewerRole === 'renter' ? (
+                          <>
+                            <NoteList notes={renterNotes} />
+                            <AddNoteInput
+                              value={renterNoteDraft}
+                              onChangeText={setRenterNoteDraft}
+                              onAdd={onAddRenterNote}
+                              disabled={renterInputDisabled}
+                              disabledLabel="Notes locked 🔒"
+                              loading={addingRenterNote}
+                              placeholder="Wear, accessories, or anything the owner should know…"
+                            />
+                          </>
+                        ) : (
+                          <NoteList
+                            notes={renterNotes}
+                            emptyText="No return notes from the renter yet."
+                          />
+                        )
+                      }
+                    />
+                  </View>
+
                   <View style={styles.handoffSection}>
                     <View style={styles.handoffRespHeader}>
                       <View style={styles.handoffRespTitleRow}>
@@ -4376,82 +4703,11 @@ export default function RentalScreen() {
                           {returnResponsibilitiesSectionTitle(viewerRole)}
                         </Text>
                       </View>
-                    </View>
-                  <View style={styles.verificationSubheadRow}>
-                    <Text style={[styles.verificationSubhead, styles.verificationSubheadSpaced]}>Checklist</Text>
-                    <Pressable
-                      pressOpacityFeedback={false}
-                      onPress={() => {
-                        if (returnCompleted) {
-                          Alert.alert(
-                            'Return checklist locked',
-                            'Return is complete. This checklist can no longer be edited.'
-                          );
-                          return;
-                        }
-                        const allTrue = Object.fromEntries(returnItems.map((item) => [item.id, true]));
-                        if (!me) return;
-                        void (async () => {
-                          try {
-                            await persistChecklistState(supabase, rental.id, 'return', me, allTrue);
-                            if (__DEV__) console.log('[verification mutation] return mark-all ok', { rentalId: rental.id });
-                            await refreshVerificationState();
-                          } catch (error) {
-                            if (__DEV__) console.warn('[verification mutation] return mark-all failed', { rentalId: rental.id, error });
-                          }
-                        })();
-                      }}
-                    >
-                      <Text style={[styles.markAllText, returnCompleted && styles.markAllTextDisabled]}>
-                        Check All
+                      <Text style={styles.handoffProgressPill}>
+                        {`${returnRequiredDoneCount} / ${returnItems.length} completed`}
                       </Text>
-                    </Pressable>
-                  </View>
-                  {checklistTwoColumns ? (
-                    <View style={styles.checklistTwoColWrap}>
-                      <View style={styles.checklistCol}>
-                        {returnChecklistLeft.map((item) => (
-                          <ChecklistRow
-                            key={item.id}
-                            label={item.label}
-                            checked={Boolean(returnDoneForRole[item.id])}
-                            onToggle={() => toggleReturnItem(item.id)}
-                            disabled={!returnWorkflowEnabled || returnCompleted}
-                            onDisabledPress={() =>
-                              Alert.alert(
-                                'Return checklist locked',
-                                returnCompleted
-                                  ? 'Return is complete. This checklist can no longer be edited.'
-                                  : 'Return details unlock after handoff is confirmed.'
-                              )
-                            }
-                            light
-                          />
-                        ))}
-                      </View>
-                      <View style={styles.checklistCol}>
-                        {returnChecklistRight.map((item) => (
-                          <ChecklistRow
-                            key={item.id}
-                            label={item.label}
-                            checked={Boolean(returnDoneForRole[item.id])}
-                            onToggle={() => toggleReturnItem(item.id)}
-                            disabled={!returnWorkflowEnabled || returnCompleted}
-                            onDisabledPress={() =>
-                              Alert.alert(
-                                'Return checklist locked',
-                                returnCompleted
-                                  ? 'Return is complete. This checklist can no longer be edited.'
-                                  : 'Return details unlock after handoff is confirmed.'
-                              )
-                            }
-                            light
-                          />
-                        ))}
-                      </View>
                     </View>
-                  ) : (
-                    returnItems.map((item) => (
+                    {returnItems.map((item) => (
                       <ChecklistRow
                         key={item.id}
                         label={item.label}
@@ -4466,30 +4722,64 @@ export default function RentalScreen() {
                               : 'Return details unlock after handoff is confirmed.'
                           )
                         }
-                        light
                       />
-                    ))
-                  )}
+                    ))}
                   </View>
-                  {viewerRole === 'renter' ? (
-                    <View style={styles.notesGroup}>
-                      <Text style={styles.notesGroupTitle}>Your notes</Text>
-                      <NoteList notes={renterNotes} />
-                      <AddNoteInput
-                        value={renterNoteDraft}
-                        onChangeText={setRenterNoteDraft}
-                        onAdd={onAddRenterNote}
-                        disabled={renterInputDisabled}
-                        disabledLabel="Notes locked 🔒"
-                        loading={addingRenterNote}
-                        placeholder="Add a note about the return or item condition…"
-                      />
+
+                  <View
+                    style={[
+                      styles.handoffInfoBanner,
+                      viewerRole === 'renter' ? styles.handoffInfoBannerRenter : null,
+                    ]}
+                  >
+                    <Ionicons
+                      name="information-circle-outline"
+                      size={18}
+                      color={
+                        viewerRole === 'renter' ? 'rgba(37, 99, 235, 0.75)' : 'rgba(37, 99, 235, 0.78)'
+                      }
+                    />
+                    <Text
+                      style={
+                        viewerRole === 'renter'
+                          ? styles.handoffInfoBannerTextRenter
+                          : styles.handoffInfoBannerText
+                      }
+                    >
+                      {returnInfoBannerText(viewerRole)}
+                    </Text>
+                  </View>
+
+                  {returnPrimaryOnPress ? (
+                    <Pressable
+                      pressOpacityFeedback={false}
+                      haptic
+                      disabled={returnPrimaryDisabled}
+                      onPress={returnPrimaryOnPress}
+                      style={({ pressed }) => [
+                        styles.handoffPrimaryBtn,
+                        returnPrimaryDisabled && styles.handoffPrimaryBtnDisabled,
+                        pressed && !returnPrimaryDisabled && styles.startButtonPressed,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.handoffPrimaryBtnText,
+                          returnPrimaryDisabled && styles.handoffPrimaryBtnTextDisabled,
+                        ]}
+                      >
+                        {returnPrimaryLabel}
+                      </Text>
+                    </Pressable>
+                  ) : (
+                    <View style={[styles.handoffPrimaryBtn, styles.handoffPrimaryBtnDisabled]}>
+                      <Text style={[styles.handoffPrimaryBtnText, styles.handoffPrimaryBtnTextDisabled]}>
+                        {returnPrimaryLabel}
+                      </Text>
                     </View>
-                  ) : renterNotes.length > 0 ? (
-                    <View style={styles.notesGroup}>
-                      <Text style={styles.notesGroupTitle}>Renter notes</Text>
-                      <NoteList notes={renterNotes} />
-                    </View>
+                  )}
+                  {returnPrimaryFootnoteText ? (
+                    <Text style={styles.handoffPrimaryFootnote}>{returnPrimaryFootnoteText}</Text>
                   ) : null}
                 </>
               )}
@@ -4549,6 +4839,22 @@ export default function RentalScreen() {
               uxPhase={workspaceUxPhase}
               chipLabel={workspaceHeroChipLabel}
               dateRangeLine={heroDateRangeLine}
+              showStatusChip={workspaceUxPhase !== 'ACTIVE'}
+            />
+
+            <RentalExtensionRequestModal
+              visible={extensionModalVisible}
+              busy={proposalBusy}
+              currentReturnIso={resolveRentalReturnIso(rental)}
+              currentPickupIso={resolveRentalPickupIso(rental)}
+              meetupLocation={(rental.meetup_location || rental.return_location || '').trim()}
+              onClose={() => setExtensionModalVisible(false)}
+              onSubmit={(input) =>
+                onProposeRentalDetails({
+                  ...input,
+                  isExtension: true,
+                })
+              }
             />
 
             {DEV_TOOLS_ENABLED && devLifecycleOverride != null ? (

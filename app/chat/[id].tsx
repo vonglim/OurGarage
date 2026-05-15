@@ -35,6 +35,10 @@ import {
   OFFER_MEETUP_PROPOSAL_KIND,
   insertMeetupProposalOfferMessage,
 } from '@/lib/meetupProposalThreadEvent';
+import {
+  acceptRentalMeetupProposal,
+  declineRentalMeetupProposal,
+} from '@/lib/rentalMeetupProposalLifecycle';
 import { getProfileNameForUserId } from '@/lib/profileDisplayName';
 import {
   DURATION_GRACE_HOURS,
@@ -134,14 +138,17 @@ function parseMeetupProposalLines(text: string): {
   returnAt: string;
   location: string;
   durationWarning: string;
+  isExtension: boolean;
 } | null {
   const t = text.trim();
   if (!t) return null;
+  const isExtension = /^Extension requested/i.test(t);
   const lines = t.split('\n').map((l) => l.trim());
   const pickup =
     lines
-      .find((line) => /^Pickup time proposed:/i.test(line))
+      .find((line) => /^Pickup time proposed:/i.test(line) || /^Pickup \(unchanged\):/i.test(line))
       ?.replace(/^Pickup time proposed:\s*/i, '')
+      .replace(/^Pickup \(unchanged\):\s*/i, '')
       .trim() ?? '';
   const returnAt =
     lines
@@ -155,8 +162,8 @@ function parseMeetupProposalLines(text: string): {
       .find((line) => /^⚠\s*Duration changed/i.test(line))
       ?.replace(/^⚠\s*/i, '')
       .trim() ?? '';
-  if (!pickup && !returnAt && !location && !durationWarning) return null;
-  return { pickup, returnAt, location, durationWarning };
+  if (!pickup && !returnAt && !location && !durationWarning && !isExtension) return null;
+  return { pickup, returnAt, location, durationWarning, isExtension };
 }
 
 function parseRentalUpdateMessage(text: string): {
@@ -164,6 +171,7 @@ function parseRentalUpdateMessage(text: string): {
   returnAt: string;
   location: string;
   durationWarning: string;
+  isExtension: boolean;
 } | null {
   if (!text.startsWith('Rental details updated:')) return null;
   const lines = text.split('\n');
@@ -171,7 +179,7 @@ function parseRentalUpdateMessage(text: string): {
   const returnAt = lines.find((line) => line.startsWith('🔁 Return:'))?.replace('🔁 Return:', '').trim() ?? '';
   const location = lines.find((line) => line.startsWith('📍'))?.replace('📍', '').trim() ?? '';
   if (!pickup && !returnAt && !location) return null;
-  return { pickup, returnAt, location, durationWarning: '' };
+  return { pickup, returnAt, location, durationWarning: '', isExtension: false };
 }
 
 function mapOfferMessageRows(
@@ -621,35 +629,18 @@ export default function ChatDetailScreen() {
 
       setAcceptingMessageId(message.id);
       try {
-        const { data, error } = await getSupabase()
-          .from('rentals')
-          .update(patch)
-          .eq('id', rental.id)
-          .select('*')
-          .single();
-        if (error) {
+        const result = await acceptRentalMeetupProposal(getSupabase(), rental, meId);
+        if (!result.ok) {
           if (__DEV__) {
-            console.warn('[proposal-confirm] accept update failed', {
-              routeId: id,
-              threadOfferId,
-              threadRentalId,
+            console.warn('[proposal-confirm] accept failed', {
               rentalId: rental.id,
-              error: error.message,
-              code: error.code,
-              details: error.details,
-              hint: error.hint,
-              patchKeys: Object.keys(patch),
+              message: result.message,
             });
           }
           showFeedbackToast('Could not confirm yet.');
           return;
         }
-        if (__DEV__) {
-          console.log('[proposal-confirm] accept update ok', {
-            rentalId: rental.id,
-            updatedId: (data as { id?: string } | null)?.id ?? null,
-          });
-        }
+        const { data } = await getSupabase().from('rentals').select('*').eq('id', rental.id).single();
         if (data) setRental(data as RentalMeetupDetails);
         setAcceptedMessageIds((prev) => (prev.includes(message.id) ? prev : [...prev, message.id]));
       } finally {
@@ -657,6 +648,37 @@ export default function ChatDetailScreen() {
       }
     },
     [rental, meId, id, threadOfferId, threadRentalId]
+  );
+
+  const onDeclineRentalSystemMessage = useCallback(
+    async (message: ChatMessage) => {
+      if (!rental || !meId) return;
+      if (message.senderId === meId) return;
+      const proceed = await new Promise<boolean>((resolve) => {
+        Alert.alert(
+          'Decline extension?',
+          'The original return window stays in effect.',
+          [
+            { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+            { text: 'Decline', style: 'destructive', onPress: () => resolve(true) },
+          ]
+        );
+      });
+      if (!proceed) return;
+      setAcceptingMessageId(message.id);
+      try {
+        const result = await declineRentalMeetupProposal(getSupabase(), rental, meId);
+        if (!result.ok) {
+          showFeedbackToast('Could not decline.');
+          return;
+        }
+        const { data } = await getSupabase().from('rentals').select('*').eq('id', rental.id).single();
+        if (data) setRental(data as RentalMeetupDetails);
+      } finally {
+        setAcceptingMessageId(null);
+      }
+    },
+    [rental, meId]
   );
 
   const insertMeetupProposalMessage = useCallback(
@@ -1113,7 +1135,11 @@ export default function ChatDetailScreen() {
                               {isRentalDetailsSystem ? (
                                 <View style={styles.systemCardBody}>
                                   <Text style={styles.systemTitle}>
-                                    {isMeetupProposal ? `${proposerName} proposed a meetup` : 'Rental updated'}
+                                    {isMeetupProposal
+                                      ? proposalDetails?.isExtension
+                                        ? `${proposerName} requested an extension`
+                                        : `${proposerName} proposed a meetup`
+                                      : 'Rental updated'}
                                   </Text>
                                   {proposalDetails?.location ? (
                                     <Text style={styles.systemLine}>
@@ -1167,9 +1193,26 @@ export default function ChatDetailScreen() {
                                     ]}
                                   >
                                     <Text style={styles.systemAcceptText}>
-                                      {acceptingMessageId === message.id ? 'Accepting...' : 'Accept'}
+                                      {acceptingMessageId === message.id
+                                        ? 'Saving…'
+                                        : proposalDetails?.isExtension
+                                          ? 'Approve'
+                                          : 'Accept'}
                                     </Text>
                                   </Pressable>
+                                  {proposalDetails?.isExtension ? (
+                                    <Pressable
+                                      pressOpacityFeedback={false}
+                                      onPress={() => void onDeclineRentalSystemMessage(message)}
+                                      disabled={acceptingMessageId === message.id}
+                                      style={({ pressed }) => [
+                                        styles.systemDeclineBtn,
+                                        pressed && styles.systemAcceptBtnPressed,
+                                      ]}
+                                    >
+                                      <Text style={styles.systemDeclineText}>Decline</Text>
+                                    </Pressable>
+                                  ) : null}
                                 </View>
                               ) : null}
                               {showAcceptedState ? (
@@ -1478,6 +1521,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
     flexDirection: 'row',
     justifyContent: 'flex-start',
+    gap: 8,
   },
   systemAcceptBtn: {
     borderRadius: 7,
@@ -1492,6 +1536,19 @@ const styles = StyleSheet.create({
   },
   systemAcceptText: {
     color: '#305A95',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  systemDeclineBtn: {
+    borderRadius: 7,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(220, 38, 38, 0.35)',
+    backgroundColor: 'rgba(254, 242, 242, 0.9)',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  systemDeclineText: {
+    color: '#B91C1C',
     fontSize: 11,
     fontWeight: '700',
   },

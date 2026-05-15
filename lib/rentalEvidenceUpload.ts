@@ -109,8 +109,12 @@ export async function uploadRentalEvidencePhoto(params: {
     console.log('[rentalEvidenceUpload] storage ok', path);
   }
 
-  const wantsPickupCategory =
-    phase === 'pickup' && role === 'owner' && pickupPhotoCategory != null && String(pickupPhotoCategory).trim() !== '';
+  const categoryTrimmed =
+    pickupPhotoCategory != null && String(pickupPhotoCategory).trim() !== ''
+      ? String(pickupPhotoCategory).trim()
+      : '';
+  const wantsPickupCategory = phase === 'pickup' && role === 'owner' && categoryTrimmed !== '';
+  const wantsReturnCategory = phase === 'return' && role === 'renter' && categoryTrimmed !== '';
 
   const { row: inserted, error: insertErr } = await insertVerificationPhotoRow(client, {
     rental_id: rentalId,
@@ -119,11 +123,12 @@ export async function uploadRentalEvidencePhoto(params: {
     role,
     storage_path: path,
     public_url: '',
-    pickup_photo_category: wantsPickupCategory ? pickupPhotoCategory : null,
+    pickup_photo_category:
+      wantsPickupCategory || wantsReturnCategory ? (categoryTrimmed as typeof pickupPhotoCategory) : null,
   });
 
   if (!inserted) {
-    if (wantsPickupCategory && insertErr != null && isMissingPickupPhotoCategoryColumnError(insertErr)) {
+    if ((wantsPickupCategory || wantsReturnCategory) && insertErr != null && isMissingPickupPhotoCategoryColumnError(insertErr)) {
       if (__DEV__) {
         console.warn(
           '[rentalEvidenceUpload] pickup_photo_category missing on rental_verification_photos — apply supabase/migrations/045_pickup_photo_category.sql in Supabase, then reload schema (Dashboard → API → Reload schema or wait for cache).'
