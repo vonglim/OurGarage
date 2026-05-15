@@ -20,7 +20,7 @@ function randomId(): string {
 
 /** User-facing when Storage returns bucket-not-found (migration / wrong project). */
 export const RENTAL_EVIDENCE_BUCKET_MISSING_MESSAGE =
-  'Rental evidence storage bucket is missing from Supabase. Apply migration 028 (or create the rental-evidence bucket) in the same project as this app.';
+  'Rental photo storage bucket is missing from Supabase. Apply migration 028 (or create the rental-evidence bucket) in the same project as this app.';
 
 export type RentalEvidenceUploadFailure = {
   ok: false;

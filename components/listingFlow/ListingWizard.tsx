@@ -15,6 +15,7 @@ import {
   ListingConditionStepContent,
   ListingHandoffStepContent,
   ListingIncludedStepContent,
+  ListingLiveVerificationStepContent,
   ListingPhotosStepContent,
   ListingPricingStepContent,
   ListingProtectionStepContent,
@@ -23,6 +24,7 @@ import {
 import {
   buildListingPublishPayload,
   effectiveListingTitle,
+  listingLiveVerificationStepReady,
   listingPhotoSlotsPendingUpload,
   listingPhotosStepReady,
   listingWizardPublishReady,
@@ -37,7 +39,7 @@ import { parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { useListingsStore } from '@/store/listingsStore';
 
-type ScreenStep = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+type ScreenStep = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 
 export function ListingWizard() {
   const router = useRouter();
@@ -74,7 +76,7 @@ export function ListingWizard() {
   );
 
   useEffect(() => {
-    if (step === 2) {
+    if (step === 3) {
       const t = setTimeout(() => searchRef.current?.focus(), 220);
       return () => clearTimeout(t);
     }
@@ -88,12 +90,14 @@ export function ListingWizard() {
       case 1:
         return listingPhotosStepReady(draft);
       case 2:
-        return titleLine.length > 0;
+        return listingLiveVerificationStepReady(draft);
       case 3:
-        return draft.condition != null;
+        return titleLine.length > 0;
       case 4:
+        return draft.condition != null;
+      case 5:
         return true;
-      case 5: {
+      case 6: {
         if (draft.serviceArea.trim().length < 2) return false;
         const deliveryish = draft.handoff === 'delivery' || draft.handoff === 'both';
         if (deliveryish) {
@@ -106,13 +110,13 @@ export function ListingWizard() {
         }
         return true;
       }
-      case 6: {
+      case 7: {
         const n = parseMoneyToNumber(sanitizeMoneyDigits(draft.dailyRate));
         return n != null && n > 0;
       }
-      case 7:
+      case 8:
         return true;
-      case 8: {
+      case 9: {
         if (!listingWizardPublishReady(draft)) return false;
         return (
           buildListingPublishPayload(draft, {
@@ -127,10 +131,10 @@ export function ListingWizard() {
   }, [step, draft, titleLine]);
 
   const goNext = useCallback(() => {
-    if (step === 2 && titleLine && !draft.brandModelDisplay.trim()) {
+    if (step === 3 && titleLine && !draft.brandModelDisplay.trim()) {
       updateDraft({ brandModelDisplay: draft.brandModelQuery.trim() });
     }
-    if (step < 8) {
+    if (step < 9) {
       setStep((s) => (s + 1) as ScreenStep);
     }
   }, [step, titleLine, draft.brandModelDisplay, draft.brandModelQuery, updateDraft]);
@@ -205,14 +209,14 @@ export function ListingWizard() {
   const onFooterPress = useCallback(() => {
     Keyboard.dismiss();
     if (!canContinue || isPublishing) return;
-    if (step < 8) {
+    if (step < 9) {
       goNext();
       return;
     }
     void publishListing();
   }, [canContinue, step, goNext, isPublishing, publishListing]);
 
-  const onEditFromReview = useCallback((targetStep: 1 | 2 | 3 | 4 | 5 | 6 | 7) => {
+  const onEditFromReview = useCallback((targetStep: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9) => {
     setStep(targetStep);
   }, []);
 
@@ -222,7 +226,7 @@ export function ListingWizard() {
       updateDraft,
       searchRef,
       onEditStep: onEditFromReview,
-      ...(step >= 5 && step <= 6 ? { parentScrollRef: mainScrollRef } : {}),
+      ...(step >= 6 && step <= 7 ? { parentScrollRef: mainScrollRef } : {}),
     }),
     [draft, updateDraft, onEditFromReview, step]
   );
@@ -232,18 +236,20 @@ export function ListingWizard() {
       case 1:
         return <ListingPhotosStepContent {...stepProps} />;
       case 2:
-        return <ListingBrandStepContent {...stepProps} />;
+        return <ListingLiveVerificationStepContent {...stepProps} />;
       case 3:
-        return <ListingConditionStepContent {...stepProps} />;
+        return <ListingBrandStepContent {...stepProps} />;
       case 4:
-        return <ListingIncludedStepContent {...stepProps} />;
+        return <ListingConditionStepContent {...stepProps} />;
       case 5:
-        return <ListingHandoffStepContent {...stepProps} />;
+        return <ListingIncludedStepContent {...stepProps} />;
       case 6:
-        return <ListingPricingStepContent {...stepProps} />;
+        return <ListingHandoffStepContent {...stepProps} />;
       case 7:
-        return <ListingProtectionStepContent {...stepProps} />;
+        return <ListingPricingStepContent {...stepProps} />;
       case 8:
+        return <ListingProtectionStepContent {...stepProps} />;
+      case 9:
         return <ListingReviewStepContent {...stepProps} />;
       default:
         return null;
@@ -251,15 +257,15 @@ export function ListingWizard() {
   }, [step, stepProps]);
 
   const footerLabel =
-    step === 8
+    step === 9
       ? isPublishing
         ? 'Publishing…'
         : 'Publish Listing'
-      : step === 7
+      : step === 8
         ? 'Review listing'
         : 'Continue';
 
-  const reviewMode = step === 8;
+  const reviewMode = step === 9;
   const chromeTitle = reviewMode ? 'Review your listing' : 'Create a Listing';
   const chromeSubtitle = reviewMode
     ? 'Check everything before you publish.'
@@ -272,7 +278,7 @@ export function ListingWizard() {
           <ListingWizardChrome
             title={chromeTitle}
             subtitle={chromeSubtitle}
-            stepIndex={step <= 7 ? step : TOTAL_LISTING_WIZARD_STEPS}
+            stepIndex={step <= 8 ? step : TOTAL_LISTING_WIZARD_STEPS}
             totalSteps={TOTAL_LISTING_WIZARD_STEPS}
             reviewMode={reviewMode}
             publishCta={reviewMode}

@@ -1,10 +1,12 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Keyboard,
+  Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -25,11 +27,7 @@ import {
   wizardTrustSectionTitle,
 } from '@/constants/wizardCopy';
 import { useAuthUserDisplayName } from '@/lib/authUser';
-import {
-  offerWizardPickPhotoSource,
-  pickPhotoFromLibrary,
-  takePhotoFromCamera,
-} from '@/lib/makeOfferWizardPickImages';
+import { pickPhotoFromLibrary, takePhotoFromCamera } from '@/lib/makeOfferWizardPickImages';
 import { formatUsd, parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
 import { uploadOfferImage } from '@/lib/uploadOfferImage';
 import { getApproximateLocationZipForRequest } from '@/lib/userLocation';
@@ -55,6 +53,8 @@ import { filterListingBrandSuggestions, POPULAR_BRAND_CHIPS, SUGGESTED_INCLUDED_
 import { useListingNumericKeyboardToolbarSync } from './ListingNumericKeyboardToolbarContext';
 import type { ListingCondition, ListingHandoff, ListingPhotoSlot, ListingWizardDraft } from './listingTypes';
 
+const POSSESSION_VERIFICATION_EXAMPLE = require('@/assets/images/possession-verification-example.png');
+
 type DraftUpdater = (patch: Partial<ListingWizardDraft> | ((prev: ListingWizardDraft) => ListingWizardDraft)) => void;
 
 export type ListingStepsContentProps = {
@@ -62,7 +62,7 @@ export type ListingStepsContentProps = {
   updateDraft: DraftUpdater;
   searchRef: React.RefObject<TextInput | null>;
   parentScrollRef?: React.RefObject<ScrollView | null>;
-  onEditStep: (step: 1 | 2 | 3 | 4 | 5 | 6 | 7) => void;
+  onEditStep: (step: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9) => void;
 };
 
 const CONDITIONS: { key: ListingCondition; title: string; desc: string }[] = [
@@ -99,11 +99,19 @@ function draftToListingBootstrap(d: ListingWizardDraft): MediaCaptureListingBoot
   return { items, coverId };
 }
 
-/** Step 1 — Photos (premium capture via `/media-capture`) */
+const SHOWCASE_PHOTO_TIPS = [
+  'Bright, even lighting',
+  'Tidy background so the item reads clearly',
+  'Multiple angles and any accessories',
+  'Sharp shots convert better — they signal trust',
+];
+
+/** Step 1 — Showcase only (premium capture via `/media-capture`) */
 export function ListingPhotosStepContent({ draft, updateDraft }: ListingStepsContentProps) {
   const router = useRouter();
   const draftRef = useRef(draft);
   draftRef.current = draft;
+  const [tipsOpen, setTipsOpen] = useState(false);
 
   const openMediaCapture = useCallback(() => {
     const boot = draftToListingBootstrap(draftRef.current);
@@ -119,30 +127,63 @@ export function ListingPhotosStepContent({ draft, updateDraft }: ListingStepsCon
 
   return (
     <View style={styles.pad}>
-      <Text style={styles.h1}>Add photos of your item</Text>
-      <WizardSubtitle>
-        Clear photos help renters feel confident{'\n'}and get more bookings.
-      </WizardSubtitle>
+      <Text style={styles.showcaseEyebrow}>Showcase</Text>
+      <Text style={styles.h1}>Make it easy to say yes</Text>
+      <WizardSubtitle>Hero shot + a few angles — keep it bright and fun.</WizardSubtitle>
+
+      <View style={styles.showcaseActionsRow}>
+        <Pressable
+          onPress={() => setTipsOpen(true)}
+          style={({ pressed }) => [styles.photoTipsChip, pressed && { opacity: 0.88 }]}
+          hitSlop={6}
+        >
+          <Ionicons name="sparkles-outline" size={16} color={ui.primary} />
+          <Text style={styles.photoTipsChipText}>Photo tips</Text>
+        </Pressable>
+      </View>
+      <Text style={styles.nextStepHint}>You&apos;ll confirm current condition in the next step.</Text>
+
+      <Modal visible={tipsOpen} transparent animationType="fade" onRequestClose={() => setTipsOpen(false)}>
+        <Pressable style={styles.photoTipsModalBackdrop} onPress={() => setTipsOpen(false)}>
+          <View style={styles.photoTipsModalCard}>
+            <View style={styles.photoTipsModalHeader}>
+              <Text style={styles.photoTipsModalTitle}>Quick photo tips</Text>
+              <Pressable onPress={() => setTipsOpen(false)} hitSlop={12} accessibilityLabel="Close tips">
+                <Ionicons name="close" size={22} color={ui.textSecondary} />
+              </Pressable>
+            </View>
+            {SHOWCASE_PHOTO_TIPS.map((line) => (
+              <View key={line} style={styles.photoTipsModalRow}>
+                <Text style={styles.photoTipsModalBullet}>·</Text>
+                <Text style={styles.photoTipsModalLine}>{line}</Text>
+              </View>
+            ))}
+            <Text style={styles.photoTipsModalFooter}>Small upgrades here lift trust and bookings.</Text>
+          </View>
+        </Pressable>
+      </Modal>
 
       {!hasCover ? (
         <Pressable
           onPress={openMediaCapture}
-          style={({ pressed }) => [styles.captureHeroCard, pressed && { opacity: 0.94 }]}
+          style={({ pressed }) => [styles.captureHeroCard, styles.showcaseHeroCard, pressed && { opacity: 0.94 }]}
           accessibilityRole="button"
-          accessibilityLabel="Open camera to add listing photos"
+          accessibilityLabel="Add showcase photos for your listing"
         >
           <View style={styles.captureHeroInner}>
-            <Ionicons name="camera" size={36} color={ui.primary} />
-            <Text style={styles.captureHeroTitle}>Capture photos</Text>
-            <Text style={styles.captureHeroSub}>Fullscreen camera · up to {MAX_LISTING_TOTAL_PHOTOS} shots · import OK</Text>
+            <Ionicons name="images-outline" size={36} color={ui.primary} />
+            <Text style={styles.captureHeroTitle}>Add showcase photos</Text>
+            <Text style={styles.captureHeroSub}>
+              Fullscreen capture · camera or library · up to {MAX_LISTING_TOTAL_PHOTOS} shots
+            </Text>
           </View>
         </Pressable>
       ) : (
         <Pressable
           onPress={openMediaCapture}
-          style={({ pressed }) => [styles.storefrontHeroCard, pressed && { opacity: 0.97 }]}
+          style={({ pressed }) => [styles.storefrontHeroCard, styles.showcaseHeroCard, pressed && { opacity: 0.97 }]}
           accessibilityRole="button"
-          accessibilityLabel="Edit listing photos"
+          accessibilityLabel="Edit showcase photos"
         >
           <View style={styles.storefrontHeroFrame}>
             {coverUri ? (
@@ -155,7 +196,7 @@ export function ListingPhotosStepContent({ draft, updateDraft }: ListingStepsCon
             ) : null}
             <View style={styles.storefrontHeroEditPill} pointerEvents="none">
               <Ionicons name="images-outline" size={16} color="#fff" />
-              <Text style={styles.storefrontHeroEditText}>Edit photos</Text>
+              <Text style={styles.storefrontHeroEditText}>Edit showcase</Text>
             </View>
           </View>
         </Pressable>
@@ -192,7 +233,109 @@ export function ListingPhotosStepContent({ draft, updateDraft }: ListingStepsCon
   );
 }
 
-/** Step 2 */
+/** Step 2 — Live possession verification (required) + optional supporting shots */
+export function ListingLiveVerificationStepContent({ draft, updateDraft }: ListingStepsContentProps) {
+  const pickSlot = useCallback(
+    async (key: 'verificationPossession' | 'verificationSerial' | 'verificationReceipt') => {
+      const prev = draft[key];
+      const uri =
+        Platform.OS === 'web' ? await pickPhotoFromLibrary() : await takePhotoFromCamera();
+      if (!uri) return;
+      updateDraft({ [key]: { localUri: uri, remoteUrl: null, uploading: true } } as Partial<ListingWizardDraft>);
+      await uploadSlot(
+        uri,
+        (remoteUrl) =>
+          updateDraft({ [key]: { localUri: uri, remoteUrl, uploading: false } } as Partial<ListingWizardDraft>),
+        () => updateDraft({ [key]: prev } as Partial<ListingWizardDraft>)
+      );
+    },
+    [draft, updateDraft]
+  );
+
+  const live = Platform.OS !== 'web';
+
+  return (
+    <View style={styles.pad}>
+      <Text style={styles.liveVerEyebrow}>Live possession check</Text>
+      <Text style={styles.h1}>Show renters it&apos;s really yours</Text>
+      <WizardSubtitle>
+        A quick current-item photo with your handwritten @username and today&apos;s date helps the community stay
+        trustworthy and helps renters feel confident — same upload flow you already use.
+      </WizardSubtitle>
+
+      <View style={styles.possessionExampleCard}>
+        <Text style={styles.possessionExampleKicker}>Here&apos;s the idea</Text>
+        <View style={styles.possessionExampleRow}>
+          <View style={styles.possessionExampleThumbWrap}>
+            <Image source={POSSESSION_VERIFICATION_EXAMPLE} style={styles.possessionExampleImg} contentFit="cover" />
+            <View style={styles.possessionSampleBadge} pointerEvents="none">
+              <Text style={styles.possessionSampleBadgeText}>SAMPLE</Text>
+            </View>
+          </View>
+          <View style={styles.possessionExampleCopy}>
+            <Text style={styles.possessionExampleTitle}>Friendly guide</Text>
+            <Text style={styles.possessionExampleLine}>· Whole item in frame</Text>
+            <Text style={styles.possessionExampleLine}>· @username on a note</Text>
+            <Text style={styles.possessionExampleLine}>· Today&apos;s date next to it</Text>
+            <Text style={styles.possessionExampleLine}>· Bright, easy to read</Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.verifShell}>
+        <View style={styles.verifShellHeader}>
+          <Ionicons name="shield-checkmark-outline" size={18} color="#7C6AE8" />
+          <Text style={styles.verifShellTitle}>Your fresh verification photo</Text>
+        </View>
+        <Text style={styles.verifShellBody}>
+          {live
+            ? 'Renters see this as a current-item photo from your camera — no gallery picks on the app.'
+            : 'Choose one clear image with @username and today&apos;s date visible beside the item.'}
+        </Text>
+        <VerifPhotoRow
+          label="Current item photo (required)"
+          slot={draft.verificationPossession}
+          onPick={() => void pickSlot('verificationPossession')}
+          hintOverride={
+            live
+              ? 'Hold your note beside the item, then tap to capture.'
+              : 'Choose an image with @username and today\'s date next to the item.'
+          }
+        />
+
+        <Text style={[styles.fieldLabel, { marginTop: 16, marginBottom: 6 }]}>Extra trust details (optional)</Text>
+        <Text style={styles.verifOptionalIntro}>
+          Serial or receipt photos are a nice add-on if you want — they&apos;re not required to publish.
+        </Text>
+        <VerifPhotoRow
+          label="Serial / model plate (optional)"
+          slot={draft.verificationSerial}
+          onPick={() => void pickSlot('verificationSerial')}
+          hintOverride={
+            live ? 'Camera capture · tap to add or replace' : 'Tap to add or replace (library on web)'
+          }
+        />
+        <VerifPhotoRow
+          label="Receipt (optional)"
+          slot={draft.verificationReceipt}
+          onPick={() => void pickSlot('verificationReceipt')}
+          hintOverride={
+            live ? 'Camera capture · tap to add or replace' : 'Tap to add or replace (library on web)'
+          }
+        />
+
+        <View style={styles.verifCaptureTips}>
+          <Text style={styles.verifCaptureTipsTitle}>Quick tips</Text>
+          <Text style={styles.verifCaptureTipLine}>Fit the whole item comfortably</Text>
+          <Text style={styles.verifCaptureTipLine}>Bold marker reads best</Text>
+          <Text style={styles.verifCaptureTipLine}>Soft, even light</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/** Step 3 */
 export function ListingBrandStepContent({ draft, updateDraft, searchRef }: ListingStepsContentProps) {
   const q = draft.brandModelQuery.trim();
   const suggestions = q.length >= 1 ? filterListingBrandSuggestions(q, 4) : [];
@@ -268,7 +411,7 @@ export function ListingBrandStepContent({ draft, updateDraft, searchRef }: Listi
   );
 }
 
-/** Step 3 */
+/** Step 4 */
 export function ListingConditionStepContent({ draft, updateDraft }: ListingStepsContentProps) {
   return (
     <View style={styles.pad}>
@@ -315,7 +458,7 @@ export function ListingConditionStepContent({ draft, updateDraft }: ListingSteps
   );
 }
 
-/** Step 4 */
+/** Step 5 */
 export function ListingIncludedStepContent({ draft, updateDraft }: ListingStepsContentProps) {
   const [pending, setPending] = React.useState('');
   const add = (t: string) => {
@@ -368,7 +511,7 @@ export function ListingIncludedStepContent({ draft, updateDraft }: ListingStepsC
   );
 }
 
-/** Step 5 */
+/** Step 6 */
 export function ListingHandoffStepContent({ draft, updateDraft, parentScrollRef }: ListingStepsContentProps) {
   const { onNumericFocus, onNumericBlur } = useListingNumericKeyboardToolbarSync();
   const nudge = useCallback(() => {
@@ -511,7 +654,7 @@ export function ListingHandoffStepContent({ draft, updateDraft, parentScrollRef 
   );
 }
 
-/** Step 6 */
+/** Step 7 */
 export function ListingPricingStepContent({ draft, updateDraft, parentScrollRef }: ListingStepsContentProps) {
   const { onNumericFocus, onNumericBlur } = useListingNumericKeyboardToolbarSync();
   const nudge = useCallback(() => {
@@ -575,18 +718,24 @@ function VerifPhotoRow({
   label,
   slot,
   onPick,
+  hintOverride,
 }: {
   label: string;
   slot: ListingPhotoSlot | null;
   onPick: () => void;
+  hintOverride?: string;
 }) {
+  const live = Platform.OS !== 'web';
+  const hint =
+    hintOverride ??
+    (live ? 'Live camera capture · tap to add or replace' : 'Tap to add or replace (library on web)');
   return (
-    <Pressable onPress={onPick} style={styles.verRow}>
-      <View style={styles.verThumb}>
+    <Pressable onPress={onPick} style={[styles.verRow, live && styles.verRowLive]}>
+      <View style={[styles.verThumb, live && styles.verThumbLive]}>
         {slot?.localUri ? (
           <Image source={{ uri: slot.remoteUrl ?? slot.localUri }} style={styles.verImg} />
         ) : (
-          <Ionicons name="image-outline" size={28} color={ui.textSecondary} />
+          <Ionicons name={live ? 'videocam-outline' : 'image-outline'} size={28} color={live ? '#6D28D9' : ui.textSecondary} />
         )}
         {slot?.uploading ? (
           <View style={styles.verSpin}>
@@ -596,40 +745,22 @@ function VerifPhotoRow({
       </View>
       <View style={{ flex: 1 }}>
         <Text style={styles.verLabel}>{label}</Text>
-        <Text style={styles.verHint}>Tap to add or replace</Text>
+        <Text style={styles.verHint}>{hint}</Text>
       </View>
       <Ionicons name="chevron-forward" size={20} color={ui.textSecondary} />
     </Pressable>
   );
 }
 
-/** Step 7 */
+/** Step 8 — Protection value (live verification is step 2) */
 export function ListingProtectionStepContent({ draft, updateDraft }: ListingStepsContentProps) {
   const { onNumericFocus, onNumericBlur } = useListingNumericKeyboardToolbarSync();
 
-  const pickSlot = useCallback(
-    async (key: 'verificationSerial' | 'verificationReceipt') => {
-      const prev = draft[key];
-      const src = await offerWizardPickPhotoSource();
-      if (!src) return;
-      const uri = src === 'camera' ? await takePhotoFromCamera() : await pickPhotoFromLibrary();
-      if (!uri) return;
-      updateDraft({ [key]: { localUri: uri, remoteUrl: null, uploading: true } } as Partial<ListingWizardDraft>);
-      await uploadSlot(
-        uri,
-        (remoteUrl) =>
-          updateDraft({ [key]: { localUri: uri, remoteUrl, uploading: false } } as Partial<ListingWizardDraft>),
-        () => updateDraft({ [key]: prev } as Partial<ListingWizardDraft>)
-      );
-    },
-    [draft, updateDraft]
-  );
-
   return (
     <View style={styles.pad}>
-      <Text style={styles.h1}>Protection & verification</Text>
+      <Text style={styles.h1}>Protection & value</Text>
       <WizardSubtitle>
-        A few details help renters trust your listing{'\n'}and set fair protection.
+        Estimated value helps set fair holds. Your fresh verification photo from step 2 is already on file.
       </WizardSubtitle>
 
       <Text style={styles.fieldLabel}>Estimated market value</Text>
@@ -648,19 +779,15 @@ export function ListingProtectionStepContent({ draft, updateDraft }: ListingStep
         />
       </View>
 
-      <Text style={[styles.fieldLabel, { marginTop: 20 }]}>Verification photos</Text>
-      <VerifPhotoRow label="Serial / model plate" slot={draft.verificationSerial} onPick={() => void pickSlot('verificationSerial')} />
-      <VerifPhotoRow label="Receipt (optional)" slot={draft.verificationReceipt} onPick={() => void pickSlot('verificationReceipt')} />
-
       <View style={styles.protectCard}>
         <Text style={styles.protectTitle}>How protection works</Text>
         <Text style={styles.protectSectionTitle}>Temporary authorization holds</Text>
         <Text style={styles.protectSectionBody}>
           We may place a temporary hold on the renter&apos;s card during active rentals.
         </Text>
-        <Text style={styles.protectSectionTitle}>Verification helps build trust</Text>
+        <Text style={styles.protectSectionTitle}>Clear details help everyone</Text>
         <Text style={styles.protectSectionBody}>
-          Photos and serial details help reduce fraud and support disputes if issues happen.
+          Good photos and accurate info make it easier to resolve questions quickly if something comes up.
         </Text>
         <Text style={styles.protectSectionTitle}>You stay in control</Text>
         <Text style={styles.protectSectionBody}>
@@ -671,7 +798,7 @@ export function ListingProtectionStepContent({ draft, updateDraft }: ListingStep
   );
 }
 
-/** Review — storefront-style preview before publish */
+/** Step 9 — storefront-style preview before publish */
 export function ListingReviewStepContent({ draft, onEditStep }: ListingStepsContentProps) {
   const hostName = useAuthUserDisplayName();
   const title = effectiveListingTitle(draft);
@@ -705,14 +832,14 @@ export function ListingReviewStepContent({ draft, onEditStep }: ListingStepsCont
           hitSlop={8}
         >
           <Ionicons name="camera-outline" size={15} color={ui.primary} />
-          <Text style={styles.storeHeroEditFabText}>Photos</Text>
+          <Text style={styles.storeHeroEditFabText}>Showcase</Text>
         </Pressable>
       </View>
 
       <View style={styles.storeBlock}>
         <View style={styles.storeTitleRow}>
           <Text style={styles.storeTitle}>{title || 'Your listing'}</Text>
-          <Pressable onPress={() => onEditStep(2)} hitSlop={10}>
+          <Pressable onPress={() => onEditStep(3)} hitSlop={10}>
             <Text style={styles.storeEditLink}>Edit</Text>
           </Pressable>
         </View>
@@ -722,7 +849,7 @@ export function ListingReviewStepContent({ draft, onEditStep }: ListingStepsCont
             <View style={styles.storeCondPill}>
               <Text style={styles.storeCondPillText}>{condLabel}</Text>
             </View>
-            <Pressable onPress={() => onEditStep(3)} hitSlop={10}>
+            <Pressable onPress={() => onEditStep(4)} hitSlop={10}>
               <Text style={styles.storeEditLink}>Edit</Text>
             </Pressable>
           </View>
@@ -730,7 +857,7 @@ export function ListingReviewStepContent({ draft, onEditStep }: ListingStepsCont
 
         <View style={styles.storePriceRow}>
           <Text style={styles.storePrice}>{rate != null ? `${formatUsd(rate)} / day` : '—'}</Text>
-          <Pressable onPress={() => onEditStep(6)} hitSlop={10}>
+          <Pressable onPress={() => onEditStep(7)} hitSlop={10}>
             <Text style={styles.storeEditLink}>Edit</Text>
           </Pressable>
         </View>
@@ -746,7 +873,7 @@ export function ListingReviewStepContent({ draft, onEditStep }: ListingStepsCont
         <View style={styles.storeSection}>
           <View style={styles.storeSectionHeadRow}>
             <Text style={styles.storeSectionHeading}>What&apos;s included</Text>
-            <Pressable onPress={() => onEditStep(4)} hitSlop={10}>
+            <Pressable onPress={() => onEditStep(5)} hitSlop={10}>
               <Text style={styles.storeEditLink}>{draft.included.length ? 'Edit' : 'Add'}</Text>
             </Pressable>
           </View>
@@ -766,7 +893,7 @@ export function ListingReviewStepContent({ draft, onEditStep }: ListingStepsCont
         <View style={styles.storeSection}>
           <View style={styles.storeSectionHeadRow}>
             <Text style={styles.storeSectionHeading}>Pickup / delivery</Text>
-            <Pressable onPress={() => onEditStep(5)} hitSlop={10}>
+            <Pressable onPress={() => onEditStep(6)} hitSlop={10}>
               <Text style={styles.storeEditLink}>Edit</Text>
             </Pressable>
           </View>
@@ -779,7 +906,7 @@ export function ListingReviewStepContent({ draft, onEditStep }: ListingStepsCont
         <View style={styles.storeSection}>
           <View style={styles.storeSectionHeadRow}>
             <Text style={styles.storeSectionHeading}>About this listing</Text>
-            <Pressable onPress={() => onEditStep(2)} hitSlop={10}>
+            <Pressable onPress={() => onEditStep(3)} hitSlop={10}>
               <Text style={styles.storeEditLink}>Edit</Text>
             </Pressable>
           </View>
@@ -788,10 +915,15 @@ export function ListingReviewStepContent({ draft, onEditStep }: ListingStepsCont
 
         <View style={styles.storeSection}>
           <View style={styles.storeSectionHeadRow}>
-            <Text style={styles.storeSectionHeading}>Trust & verification</Text>
-            <Pressable onPress={() => onEditStep(7)} hitSlop={10}>
-              <Text style={styles.storeEditLink}>Edit</Text>
-            </Pressable>
+            <Text style={styles.storeSectionHeading}>Verification & protection</Text>
+            <View style={styles.storeTrustEditRow}>
+              <Pressable onPress={() => onEditStep(2)} hitSlop={10}>
+                <Text style={styles.storeEditLink}>Fresh photo</Text>
+              </Pressable>
+              <Pressable onPress={() => onEditStep(8)} hitSlop={10}>
+                <Text style={styles.storeEditLink}>Value</Text>
+              </Pressable>
+            </View>
           </View>
           {mv != null && mv >= 0 ? (
             <Text style={styles.storeTrustLine}>Estimated value {formatUsd(mv)}</Text>
@@ -805,7 +937,7 @@ export function ListingReviewStepContent({ draft, onEditStep }: ListingStepsCont
             Temporary holds may apply during active rentals. Verification helps if something goes wrong. You stay in control
             of bookings and pricing.
           </Text>
-          <Pressable onPress={() => onEditStep(7)} hitSlop={8} style={styles.storeProtectionEdit}>
+          <Pressable onPress={() => onEditStep(8)} hitSlop={8} style={styles.storeProtectionEdit}>
             <Text style={styles.storeEditLink}>Edit protection details</Text>
           </Pressable>
         </View>
@@ -821,6 +953,134 @@ const styles = StyleSheet.create({
   helperMuted: { fontSize: 13, color: ui.textMuted, marginTop: 8, lineHeight: 18 },
   charHint: { fontSize: 12, color: ui.textMuted, textAlign: 'right', marginTop: 6 },
   spacer32: { minHeight: 32 },
+  showcaseEyebrow: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+    color: ui.textSecondary,
+    marginBottom: 6,
+  },
+  liveVerEyebrow: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+    color: '#6D28D9',
+    marginBottom: 6,
+  },
+  possessionExampleCard: {
+    marginBottom: 16,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+    backgroundColor: ui.surfaceGrouped,
+  },
+  possessionExampleKicker: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    color: ui.textSecondary,
+    textTransform: 'uppercase',
+    marginBottom: 10,
+  },
+  possessionExampleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  possessionExampleThumbWrap: {
+    width: 118,
+    height: 118,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: ui.surfaceNeutral,
+    position: 'relative',
+  },
+  possessionExampleImg: { width: '100%', height: '100%' },
+  possessionSampleBadge: {
+    position: 'absolute',
+    left: 6,
+    top: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#2563EB',
+  },
+  possessionSampleBadgeText: { fontSize: 9, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.6 },
+  possessionExampleCopy: { flex: 1, minWidth: 0 },
+  possessionExampleTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: ui.textPrimary,
+    marginBottom: 8,
+    letterSpacing: -0.2,
+  },
+  possessionExampleLine: { fontSize: 13, color: ui.textSecondary, lineHeight: 19, marginTop: 2 },
+  verifOptionalIntro: {
+    fontSize: 12,
+    color: ui.textSecondary,
+    lineHeight: 17,
+    marginBottom: 4,
+  },
+  showcaseActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    marginBottom: 6,
+  },
+  photoTipsChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+    backgroundColor: ui.surfaceGrouped,
+  },
+  photoTipsChipText: { fontSize: 13, fontWeight: '700', color: ui.textPrimary },
+  nextStepHint: {
+    fontSize: 12,
+    color: ui.textMuted,
+    lineHeight: 17,
+    marginBottom: 12,
+  },
+  photoTipsModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  photoTipsModalCard: {
+    borderRadius: 16,
+    padding: 18,
+    backgroundColor: ui.background,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: ui.border,
+    maxWidth: 400,
+    width: '100%',
+    alignSelf: 'center',
+  },
+  photoTipsModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  photoTipsModalTitle: { fontSize: 17, fontWeight: '800', color: ui.textPrimary, letterSpacing: -0.3 },
+  photoTipsModalRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 8 },
+  photoTipsModalBullet: { fontSize: 15, color: ui.primary, lineHeight: 22 },
+  photoTipsModalLine: { flex: 1, fontSize: 14, color: ui.textSecondary, lineHeight: 21 },
+  photoTipsModalFooter: {
+    marginTop: 14,
+    fontSize: 13,
+    color: ui.textMuted,
+    lineHeight: 18,
+  },
+  showcaseHeroCard: {
+    borderLeftWidth: 4,
+    borderLeftColor: ui.primary,
+  },
   captureHeroCard: {
     ...cardChrome,
     marginTop: 6,
@@ -1046,6 +1306,16 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: ui.border,
   },
+  verRowLive: {
+    paddingHorizontal: 10,
+    marginHorizontal: -10,
+    borderRadius: 12,
+    borderBottomWidth: 0,
+    backgroundColor: 'rgba(124, 58, 237, 0.035)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(124, 58, 237, 0.14)',
+    marginBottom: 8,
+  },
   verThumb: {
     width: 56,
     height: 56,
@@ -1057,6 +1327,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: ui.surfaceNeutral,
   },
+  verThumbLive: {
+    borderColor: 'rgba(124, 58, 237, 0.28)',
+    backgroundColor: 'rgba(124, 58, 237, 0.045)',
+  },
   verImg: { width: '100%', height: '100%' },
   verSpin: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.65)' },
   verLabel: { fontSize: 15, fontWeight: '700', color: ui.textPrimary },
@@ -1064,6 +1338,25 @@ const styles = StyleSheet.create({
   protectCard: {
     ...wizardTrustCardShell,
   },
+  verifShell: {
+    marginTop: 20,
+    padding: 14,
+    borderRadius: ui.radiusProminent,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(124, 58, 237, 0.14)',
+    backgroundColor: 'rgba(124, 58, 237, 0.025)',
+  },
+  verifShellHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  verifShellTitle: { fontSize: 15, fontWeight: '800', color: ui.textPrimary, letterSpacing: -0.2 },
+  verifShellBody: { fontSize: 13, color: ui.textSecondary, lineHeight: 19, marginBottom: 12 },
+  verifCaptureTips: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(124, 58, 237, 0.1)',
+  },
+  verifCaptureTipsTitle: { fontSize: 12, fontWeight: '700', color: '#6D5FD6', marginBottom: 6 },
+  verifCaptureTipLine: { fontSize: 12, color: ui.textSecondary, lineHeight: 18, marginTop: 2 },
   protectTitle: { ...wizardTrustMainTitle },
   protectSectionTitle: { ...wizardTrustSectionTitle },
   protectSectionBody: { ...wizardTrustSectionBody },
@@ -1123,6 +1416,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: ui.spaceSm,
   },
+  storeTrustEditRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   storeSection: { marginBottom: ui.spaceLg },
   storeHostName: { fontSize: 16, fontWeight: '600', color: ui.textPrimary },
   storeHostMeta: { marginTop: 4, fontSize: 14, color: ui.textSecondary },

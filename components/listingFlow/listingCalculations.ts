@@ -45,10 +45,15 @@ export function handoffSummaryLine(draft: ListingWizardDraft): string {
 }
 
 export function verificationStatusLine(draft: ListingWizardDraft): string {
+  const p = draft.verificationPossession?.remoteUrl ? 1 : 0;
   const s = draft.verificationSerial?.remoteUrl ? 1 : 0;
   const r = draft.verificationReceipt?.remoteUrl ? 1 : 0;
-  if (s === 0 && r === 0) return 'Add verification photos';
-  return `Serial ${s ? '✓' : '—'}${r ? ' · Receipt ✓' : ''}`;
+  if (!p && !s && !r) return 'Add a quick live possession check';
+  const parts: string[] = [];
+  parts.push(p ? 'Fresh photo ✓' : 'Fresh photo —');
+  if (s) parts.push('Serial ✓');
+  if (r) parts.push('Receipt ✓');
+  return parts.join(' · ');
 }
 
 function listingCoverAndGalleryUrlsReady(draft: ListingWizardDraft): boolean {
@@ -67,11 +72,18 @@ export function listingPhotosStepReady(draft: ListingWizardDraft): boolean {
   return listingCoverAndGalleryUrlsReady(draft);
 }
 
-/** Review-step gate: no pending slots, no in-flight uploads, verification slots finished if started, remote URLs only. */
+/** Live possession photo (item + @username + date) uploaded and persisted — required before publish. */
+export function listingLiveVerificationStepReady(draft: ListingWizardDraft): boolean {
+  const p = draft.verificationPossession;
+  return !!(p?.remoteUrl && !p.uploading && isPersistedRemoteImageUrl(p.remoteUrl));
+}
+
+/** Review-step gate: no pending slots, no in-flight uploads, showcase + required live verification complete. */
 export function listingWizardPublishReady(draft: ListingWizardDraft): boolean {
   if (listingPhotoSlotsPendingUpload(draft).length > 0) return false;
   if (listingHasInFlightUploads(draft)) return false;
   if (!listingCoverAndGalleryUrlsReady(draft)) return false;
+  if (!listingLiveVerificationStepReady(draft)) return false;
   return true;
 }
 
@@ -84,6 +96,9 @@ export function listingPhotoSlotsPendingUpload(draft: ListingWizardDraft): { slo
   draft.galleryPhotos.forEach((p, i) => {
     if (p.localUri && !p.remoteUrl) pending.push({ slot: `gallery-${i}`, uri: p.localUri });
   });
+  if (draft.verificationPossession?.localUri && !draft.verificationPossession.remoteUrl) {
+    pending.push({ slot: 'possession', uri: draft.verificationPossession.localUri });
+  }
   if (draft.verificationSerial?.localUri && !draft.verificationSerial.remoteUrl) {
     pending.push({ slot: 'serial', uri: draft.verificationSerial.localUri });
   }
@@ -96,6 +111,7 @@ export function listingPhotoSlotsPendingUpload(draft: ListingWizardDraft): { slo
 export function listingHasInFlightUploads(draft: ListingWizardDraft): boolean {
   if (draft.coverPhoto?.uploading) return true;
   if (draft.galleryPhotos.some((p) => p.uploading)) return true;
+  if (draft.verificationPossession?.uploading) return true;
   if (draft.verificationSerial?.uploading) return true;
   if (draft.verificationReceipt?.uploading) return true;
   return false;

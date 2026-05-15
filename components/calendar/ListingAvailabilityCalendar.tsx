@@ -51,7 +51,7 @@ export type ListingAvailabilityCalendarProps = {
 };
 
 /**
- * Full vertical month scroller with availability coloring.
+ * Full vertical month scroller with availability day treatments (cell shapes / strikethroughs).
  */
 export function ListingAvailabilityCalendar({
   listingId,

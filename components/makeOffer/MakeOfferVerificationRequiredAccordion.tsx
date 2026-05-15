@@ -6,17 +6,17 @@ import { Modal, Platform, StyleSheet, Text, View } from 'react-native';
 import { Pressable } from '@/components/Pressable';
 import { ui } from '@/constants/appUi';
 
-const PICKUP_VERIFICATION_EXAMPLE = require('@/assets/images/pickup-verification-example.png');
+const PICKUP_VERIFICATION_EXAMPLE = require('@/assets/images/possession-verification-example.png');
 
 /** Same owner-facing copy as Pickup / Handoff Details → verification example panel (`app/rental/[id].tsx`). */
-const VERIFICATION_PANEL_TITLE = 'Verification photo required';
+const VERIFICATION_PANEL_TITLE = 'Live possession check';
 const VERIFICATION_PANEL_BODY =
-  "Include a handwritten note showing your username and today's date next to the item.";
+  "Take a fresh verification photo of the full item with your handwritten @username and today's date visible next to it.";
 const VERIFICATION_PANEL_MUTED =
-  'This helps confirm the photo was taken for this rental and protects both parties in case of disputes.';
+  'Confirms the item is currently with you, helps renters feel confident, and keeps the marketplace reliable.';
 
 const VERIFICATION_MODAL_CAPTION =
-  "Include a handwritten note showing your username and today's date next to the item. Save it as your Verification Photo. This helps confirm the photo was taken for this rental and protects both parties in case of disputes.";
+  "Same idea as the sample: handwritten @username and today's date beside the item — a quick, human way to show what's in your hands for this rental.";
 
 export function MakeOfferVerificationRequiredAccordion() {
   const [expanded, setExpanded] = useState(false);
@@ -56,7 +56,7 @@ export function MakeOfferVerificationRequiredAccordion() {
               onPress={() => setExampleModalVisible(true)}
               style={({ pressed }) => [styles.exampleImageWrap, pressed && styles.exampleImageWrapPressed]}
               accessibilityRole="button"
-              accessibilityLabel="View enlarged verification photo example"
+              accessibilityLabel="View enlarged live possession check example"
             >
               <Image source={PICKUP_VERIFICATION_EXAMPLE} style={styles.exampleImage} contentFit="cover" />
               <View style={styles.exampleBadge}>
@@ -142,9 +142,9 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 11,
     borderRadius: ui.radiusCard,
-    backgroundColor: 'rgba(34, 197, 94, 0.08)',
+    backgroundColor: 'rgba(34, 197, 94, 0.06)',
     borderWidth: 1,
-    borderColor: 'rgba(34, 197, 94, 0.35)',
+    borderColor: 'rgba(34, 197, 94, 0.22)',
   },
   exampleLeft: {
     flex: 1,

@@ -18,6 +18,30 @@ export type ListingIntentSnapshot = {
   replacement_value: number | null;
 };
 
+export function parseListingIntentSnapshot(raw: unknown): ListingIntentSnapshot | null {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  const listing_id = typeof o.listing_id === 'string' ? o.listing_id.trim() : '';
+  if (!listing_id) return null;
+  const titleRaw = typeof o.title === 'string' ? o.title.trim() : '';
+  const title = titleRaw.length > 0 ? titleRaw : 'Listing';
+  return {
+    listing_id,
+    title,
+    hero_image_url: typeof o.hero_image_url === 'string' ? o.hero_image_url : null,
+    daily_price: typeof o.daily_price === 'number' && Number.isFinite(o.daily_price) ? o.daily_price : 0,
+    price_unit: typeof o.price_unit === 'string' ? o.price_unit : null,
+    condition_label: typeof o.condition_label === 'string' ? o.condition_label : null,
+    delivery_available: typeof o.delivery_available === 'boolean' ? o.delivery_available : null,
+    handoff_summary: typeof o.handoff_summary === 'string' ? o.handoff_summary : null,
+    service_area: typeof o.service_area === 'string' ? o.service_area : null,
+    replacement_value:
+      typeof o.replacement_value === 'number' && Number.isFinite(o.replacement_value)
+        ? o.replacement_value
+        : null,
+  };
+}
+
 export function buildListingIntentSnapshot(
   listing: ToolListing,
   normalizedImageUrls: string[]

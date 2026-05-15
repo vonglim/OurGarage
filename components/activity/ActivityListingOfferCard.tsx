@@ -6,14 +6,25 @@ import { Pressable } from '@/components/Pressable';
 import { ui } from '@/constants/appUi';
 import { formatUsd } from '@/lib/money';
 import type { NegotiationDeliveryMethod } from '@/lib/negotiationDelivery';
+import {
+  listingOfferOwnerCanRespond,
+  listingOfferRemainingDeclinesBeforeLock,
+  listingOfferRemainingOwnerCounters,
+} from '@/lib/listingOfferNegotiationUi';
 import type { ListingOfferActivityRow } from '@/store/listingOffersActivityStore';
 
 function formatStatusBadge(row: ListingOfferActivityRow): string {
+  if (row.negotiationLocked || row.status === 'declined' || row.status === 'closed') {
+    return 'Closed';
+  }
   if (row.status === 'accepted' || row.status === 'pending_confirmation') return 'Accepted';
-  if (row.status === 'declined' || row.status === 'closed') return 'Declined';
-  if (row.posterCounterCount > 0) return 'Countered';
-  if (row.status === 'pending') return 'Pending offer';
-  return row.status;
+  if (row.status === 'pending') {
+    const k = row.lastNegotiationEventKind ?? '';
+    if (k === 'proposal_declined') return 'Offer declined';
+    if (k === 'poster_counter') return 'Counter sent';
+    if (row.posterCounterCount > 0) return 'In negotiation';
+  }
+  return 'Pending offer';
 }
 
 function deliverySummary(method: NegotiationDeliveryMethod | null, fee: number | null): string {
@@ -31,7 +42,7 @@ type Props = {
   onPress: () => void;
   onAccept?: () => void;
   onDecline?: () => void;
-  onCounter?: () => void;
+  onCounter?: (offerId: string) => void;
   busy?: boolean;
 };
 
@@ -47,8 +58,14 @@ export function ActivityListingOfferCard({
 }: Props) {
   const title = row.snapshot?.title ?? 'Listing';
   const hero = row.snapshot?.hero_image_url?.trim();
-  const showOwnerActions =
-    role === 'owner' && row.status === 'pending' && onAccept && onDecline && onCounter;
+  const ownerCanAct =
+    role === 'owner' &&
+    listingOfferOwnerCanRespond(row) &&
+    onAccept &&
+    onDecline &&
+    onCounter;
+  const countersLeft = listingOfferRemainingOwnerCounters(row);
+  const declinesLeft = listingOfferRemainingDeclinesBeforeLock(row);
 
   return (
     <View style={styles.card}>
@@ -76,7 +93,7 @@ export function ActivityListingOfferCard({
           {deliverySummary(row.negotiationDeliveryMethod, row.negotiationDeliveryFee)}
         </Text>
       </Pressable>
-      {showOwnerActions ? (
+      {ownerCanAct ? (
         <View style={styles.actions}>
           <Pressable
             onPress={() => onAccept?.()}
@@ -85,20 +102,30 @@ export function ActivityListingOfferCard({
           >
             <Text style={styles.btnPrimaryText}>Accept</Text>
           </Pressable>
-          <Pressable
-            onPress={() => onDecline?.()}
-            disabled={busy}
-            style={({ pressed }) => [styles.btnGhost, pressed && { opacity: 0.9 }, busy && { opacity: 0.5 }]}
-          >
-            <Text style={styles.btnGhostText}>Decline</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => onCounter?.()}
-            disabled={busy}
-            style={({ pressed }) => [styles.btnGhost, pressed && { opacity: 0.9 }, busy && { opacity: 0.5 }]}
-          >
-            <Text style={styles.btnGhostText}>Counter</Text>
-          </Pressable>
+          <View style={styles.secondaryRow}>
+            <Pressable
+              onPress={() => onCounter?.(row.id)}
+              disabled={busy || countersLeft <= 0}
+              style={({ pressed }) => [
+                styles.btnSecondary,
+                pressed && { opacity: 0.9 },
+                (busy || countersLeft <= 0) && { opacity: 0.45 },
+              ]}
+            >
+              <Text style={styles.btnSecondaryText}>Counter</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => onDecline?.()}
+              disabled={busy}
+              style={({ pressed }) => [styles.btnDecline, pressed && { opacity: 0.85 }, busy && { opacity: 0.5 }]}
+            >
+              <Text style={styles.btnDeclineText}>Decline</Text>
+            </Pressable>
+          </View>
+          <Text style={styles.negotiationMeta}>
+            {countersLeft} counter{countersLeft === 1 ? '' : 's'} left · after{' '}
+            {declinesLeft === 1 ? '1 more decline' : `${declinesLeft} more declines`} this thread closes
+          </Text>
         </View>
       ) : null}
     </View>
@@ -169,34 +196,56 @@ const styles = StyleSheet.create({
     color: ui.textSecondary,
   },
   actions: {
+    paddingHorizontal: ui.spaceMd,
+    paddingBottom: ui.spaceMd,
+    gap: 10,
+  },
+  secondaryRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    paddingHorizontal: ui.spaceMd,
-    paddingBottom: ui.spaceMd,
+    alignItems: 'center',
+  },
+  negotiationMeta: {
+    fontSize: 12,
+    color: ui.textMuted,
+    lineHeight: 16,
   },
   btnPrimary: {
-    paddingVertical: 10,
+    paddingVertical: 12,
     paddingHorizontal: 14,
     borderRadius: ui.radiusButton,
     backgroundColor: ui.primary,
+    alignItems: 'center',
   },
   btnPrimaryText: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '700',
     color: ui.primaryOn,
   },
-  btnGhost: {
-    paddingVertical: 10,
+  btnSecondary: {
+    flex: 1,
+    minWidth: 120,
+    paddingVertical: 11,
     paddingHorizontal: 14,
     borderRadius: ui.radiusButton,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: ui.border,
-    backgroundColor: ui.surfaceGrouped,
+    borderWidth: 2,
+    borderColor: ui.primary,
+    backgroundColor: ui.background,
+    alignItems: 'center',
   },
-  btnGhostText: {
+  btnSecondaryText: {
     fontSize: 14,
     fontWeight: '700',
     color: ui.primary,
+  },
+  btnDecline: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  btnDeclineText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: ui.textMuted,
   },
 });

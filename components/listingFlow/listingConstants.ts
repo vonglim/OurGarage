@@ -4,7 +4,8 @@ export {
   MAO_PROGRESS_TRACK as LISTING_TRACK,
 } from '@/components/makeOfferFlow/constants';
 
-export const TOTAL_LISTING_WIZARD_STEPS = 7;
+/** Numbered steps before review (showcase → live verification → … → protection). */
+export const TOTAL_LISTING_WIZARD_STEPS = 8;
 /** Total photos (cover + additional) allowed in listing wizard step 1. */
 export const MAX_LISTING_TOTAL_PHOTOS = 10;
 /** Max gallery slots when cover uses one slot (cover + gallery ≤ MAX_LISTING_TOTAL_PHOTOS). */

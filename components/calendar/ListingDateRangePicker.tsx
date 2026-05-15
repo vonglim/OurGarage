@@ -45,6 +45,8 @@ export type ListingDateRangePickerProps = {
   endDate: string | null;
   onChange: (start: string | null, end: string | null) => void;
   ignoreOfferId?: string | null;
+  /** Tighter cells (e.g. offer wizard) — same availability logic as full calendar. */
+  dense?: boolean;
 };
 
 /**
@@ -57,6 +59,7 @@ export function ListingDateRangePicker({
   endDate,
   onChange,
   ignoreOfferId,
+  dense = false,
 }: ListingDateRangePickerProps) {
   const months = useMemo(() => enumerateMonths(1, 18), []);
   const initialY = useMemo(() => {
@@ -106,6 +109,7 @@ export function ListingDateRangePicker({
             disablePast
             onPressDay={onPressDay}
             selectionMode="renterRange"
+            dense={dense}
           />
         ))}
       </ScrollView>

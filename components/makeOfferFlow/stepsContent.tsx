@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   Alert,
   Keyboard,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -36,7 +37,7 @@ import { MAO_PROGRESS_GREEN, MAO_SUGGESTION_BG } from './constants';
 import { filterBrandSuggestions, SUGGESTED_ACCESSORIES, type BrandSuggestion } from './mockSuggestions';
 import type { ConditionOption, WizardDraft, WizardPhotoSlot } from './types';
 
-const PICKUP_VERIFICATION_EXAMPLE = require('@/assets/images/pickup-verification-example.png');
+const POSSESSION_VERIFICATION_EXAMPLE = require('@/assets/images/possession-verification-example.png');
 
 const CONDITIONS: { key: ConditionOption; title: string; desc: string }[] = [
   { key: 'excellent', title: 'Excellent', desc: 'Looks clean with little to no wear' },
@@ -601,7 +602,7 @@ export function MarketValueStepContent({ draft, updateDraft }: StepsContentProps
           icon="shield-outline"
           iconColor="#7C3AED"
           title="Helps protect everyone"
-          body="It encourages responsible rentals and helps prevent disputes."
+          body="It encourages thoughtful rentals and helps everyone stay on the same page."
           rightIcon="information-circle-outline"
         />
       </View>
@@ -646,51 +647,8 @@ function InfoRow({
   );
 }
 
-/** Step 7 */
-export function VerificationStepContent({ draft, updateDraft }: StepsContentProps) {
-  const uploadVerification = useCallback(
-    async (uri: string, previous: WizardPhotoSlot | null) => {
-      updateDraft({ verificationPhoto: { localUri: uri, remoteUrl: null, uploading: true } });
-      try {
-        const remoteUrl = await uploadOfferImage(uri);
-        updateDraft({ verificationPhoto: { localUri: uri, remoteUrl, uploading: false } });
-      } catch {
-        showFeedbackToast('Could not upload. Try again.');
-        updateDraft({ verificationPhoto: previous });
-      }
-    },
-    [updateDraft]
-  );
-
-  const pickAndUploadVerification = useCallback(async () => {
-    const previous = draft.verificationPhoto;
-    const src = await offerWizardPickPhotoSource();
-    if (!src) return;
-    let uri: string | null = null;
-    if (src === 'camera') uri = await takePhotoFromCamera();
-    else uri = await pickPhotoFromLibrary();
-    if (!uri) return;
-    await uploadVerification(uri, previous);
-  }, [draft.verificationPhoto, uploadVerification]);
-
-  const onVerificationPress = useCallback(() => {
-    const slot = draft.verificationPhoto;
-    if (slot?.uploading) return;
-    if (slot?.remoteUrl) {
-      Alert.alert('Verification photo', undefined, [
-        { text: 'Replace', onPress: () => void pickAndUploadVerification() },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: () => updateDraft({ verificationPhoto: null }),
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
-      return;
-    }
-    void pickAndUploadVerification();
-  }, [draft.verificationPhoto, pickAndUploadVerification, updateDraft]);
-
+/** Step 7 — optional supporting photos */
+export function OfferSupportingPhotosStepContent({ draft, updateDraft }: StepsContentProps) {
   const appendItemSlot = useCallback(
     async (uri: string) => {
       updateDraft((p) => ({
@@ -813,7 +771,6 @@ export function VerificationStepContent({ draft, updateDraft }: StepsContentProp
     ]);
   }, [draft.serialPhotos, runSerialAddFlow, updateDraft]);
 
-  const vSlot = draft.verificationPhoto;
   const itemPhotos = draft.itemPhotos;
   const serialPhotos = draft.serialPhotos;
 
@@ -822,66 +779,11 @@ export function VerificationStepContent({ draft, updateDraft }: StepsContentProp
 
   return (
     <View style={styles.stepPad}>
-      <Text style={styles.centerHeading}>Let&apos;s verify the item</Text>
-      <WizardSubtitle>Photos help protect both sides{'\n'}during rentals.</WizardSubtitle>
-
-      <Text style={styles.tierLabel}>Required</Text>
-      <View style={[styles.verifyCard, styles.verifyCardPurple]}>
-        <View style={styles.verifyLeft}>
-          <Ionicons name="shield-checkmark" size={22} color="#7C3AED" />
-        </View>
-        <View style={styles.verifyMid}>
-          <View style={styles.verifyTitleRow}>
-            <Text style={styles.verifyTitle}>Verification photo</Text>
-            <View style={styles.badgeReq}>
-              <Text style={styles.badgeReqText}>REQUIRED</Text>
-            </View>
-          </View>
-          <Text style={styles.verifyDesc}>A photo of the item with your username and today&apos;s date.</Text>
-        </View>
-        <View style={styles.verifyMediaCol}>
-          <Pressable
-            pressOpacityFeedback={false}
-            onPress={onVerificationPress}
-            style={({ pressed }) => [styles.verifyTapTarget, pressed && styles.chipPressIn]}
-          >
-            {vSlot ? (
-              <View style={styles.verifyPreviewWrap}>
-                <Image
-                  source={{ uri: slotDisplayUri(vSlot) }}
-                  style={styles.verifyPreviewImg}
-                  contentFit="cover"
-                />
-                {vSlot.uploading ? (
-                  <View style={styles.verifyPreviewSpinner}>
-                    <ActivityIndicator color={ui.primary} />
-                  </View>
-                ) : null}
-                {!vSlot.uploading && vSlot.remoteUrl ? (
-                  <View style={styles.verifyOkBadge} accessibilityLabel="Uploaded">
-                    <Ionicons name="checkmark" size={12} color={ui.primaryOn} />
-                  </View>
-                ) : null}
-              </View>
-            ) : (
-              <View style={styles.uploadTile}>
-                <Ionicons name="add" size={20} color={ui.primary} />
-                <Text style={styles.uploadTileText}>Add photo</Text>
-              </View>
-            )}
-          </Pressable>
-          {vSlot?.remoteUrl && !vSlot.uploading ? (
-            <Pressable
-              onPress={() => void pickAndUploadVerification()}
-              hitSlop={10}
-              style={styles.verifyReplaceLink}
-              accessibilityLabel="Replace verification photo"
-            >
-              <Text style={styles.verifyReplaceLinkText}>Replace</Text>
-            </Pressable>
-          ) : null}
-        </View>
-      </View>
+      <Text style={styles.centerHeading}>Supporting photos</Text>
+      <WizardSubtitle>
+        Totally optional — extra angles or serial details help the host feel confident they&apos;re looking at the right
+        kit.
+      </WizardSubtitle>
 
       <Text style={styles.tierLabel}>Recommended</Text>
       <View style={[styles.verifyCard, styles.verifyCardBlue]}>
@@ -1008,38 +910,176 @@ export function VerificationStepContent({ draft, updateDraft }: StepsContentProp
           )}
         </Pressable>
       </View>
+    </View>
+  );
+}
+
+/** Step 8 — required live verification for this request */
+export function OfferLiveVerificationStepContent({ draft, updateDraft }: StepsContentProps) {
+  const uploadVerification = useCallback(
+    async (uri: string, previous: WizardPhotoSlot | null) => {
+      updateDraft({ verificationPhoto: { localUri: uri, remoteUrl: null, uploading: true } });
+      try {
+        const remoteUrl = await uploadOfferImage(uri);
+        updateDraft({ verificationPhoto: { localUri: uri, remoteUrl, uploading: false } });
+      } catch {
+        showFeedbackToast('Could not upload. Try again.');
+        updateDraft({ verificationPhoto: previous });
+      }
+    },
+    [updateDraft]
+  );
+
+  const pickAndUploadVerification = useCallback(async () => {
+    const previous = draft.verificationPhoto;
+    const uri =
+      Platform.OS === 'web' ? await pickPhotoFromLibrary() : await takePhotoFromCamera();
+    if (!uri) return;
+    await uploadVerification(uri, previous);
+  }, [draft.verificationPhoto, uploadVerification]);
+
+  const onVerificationPress = useCallback(() => {
+    const slot = draft.verificationPhoto;
+    if (slot?.uploading) return;
+    if (slot?.remoteUrl) {
+      Alert.alert('Live verification', undefined, [
+        { text: 'Recapture', onPress: () => void pickAndUploadVerification() },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => updateDraft({ verificationPhoto: null }),
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+      return;
+    }
+    void pickAndUploadVerification();
+  }, [draft.verificationPhoto, pickAndUploadVerification, updateDraft]);
+
+  const vSlot = draft.verificationPhoto;
+
+  return (
+    <View style={styles.stepPad}>
+      <Text style={styles.centerHeading}>Live possession check</Text>
+      <WizardSubtitle>
+        One fresh photo so the host knows the item is available and in your hands right now.
+      </WizardSubtitle>
+
+      <Text style={styles.verifyHandoffNote}>
+        Listing photos can be older. This photo is tied to your offer, keeps everyone accountable, and helps renters feel
+        confident — separate from the host&apos;s listing photos.
+      </Text>
+
+      <Text style={styles.tierLabel}>Required</Text>
+      <View style={[styles.verifyCard, styles.verifyCardPurple]}>
+        <View style={styles.verifyLeft}>
+          <Ionicons name="shield-checkmark" size={22} color="#7C3AED" />
+        </View>
+        <View style={styles.verifyMid}>
+          <View style={styles.verifyTitleRow}>
+            <Text style={styles.verifyTitle}>Fresh verification photo</Text>
+            <View style={styles.badgeReq}>
+              <Text style={styles.badgeReqText}>REQUIRED</Text>
+            </View>
+          </View>
+          <Text style={styles.verifyDesc}>
+            The actual item in frame with your handwritten @username and today&apos;s date — held next to it like the
+            sample below.
+          </Text>
+          <Text style={styles.verifyCaptureHint}>
+            {Platform.OS === 'web'
+              ? 'On web, pick one clear image from your files.'
+              : 'Camera on the app keeps this feeling current and community-friendly.'}
+          </Text>
+        </View>
+        <View style={styles.verifyMediaCol}>
+          <Pressable
+            pressOpacityFeedback={false}
+            onPress={onVerificationPress}
+            style={({ pressed }) => [styles.verifyTapTarget, pressed && styles.chipPressIn]}
+          >
+            {vSlot ? (
+              <View style={styles.verifyPreviewWrap}>
+                <Image
+                  source={{ uri: slotDisplayUri(vSlot) }}
+                  style={styles.verifyPreviewImg}
+                  contentFit="cover"
+                />
+                {vSlot.uploading ? (
+                  <View style={styles.verifyPreviewSpinner}>
+                    <ActivityIndicator color={ui.primary} />
+                  </View>
+                ) : null}
+                {!vSlot.uploading && vSlot.remoteUrl ? (
+                  <View style={styles.verifyOkBadge} accessibilityLabel="Uploaded">
+                    <Ionicons name="checkmark" size={12} color={ui.primaryOn} />
+                  </View>
+                ) : null}
+              </View>
+            ) : (
+              <View style={[styles.uploadTile, styles.uploadTileLive]}>
+                <Ionicons name="videocam-outline" size={20} color="#5B21B6" />
+                <Text style={[styles.uploadTileText, styles.uploadTileLiveText]}>Capture</Text>
+              </View>
+            )}
+          </Pressable>
+          {vSlot?.remoteUrl && !vSlot.uploading ? (
+            <Pressable
+              onPress={() => void pickAndUploadVerification()}
+              hitSlop={10}
+              style={styles.verifyReplaceLink}
+              accessibilityLabel="Recapture live verification"
+            >
+              <Text style={styles.verifyReplaceLinkText}>Recapture</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+
+      <View style={styles.verifQuickTips}>
+        <Text style={styles.verifQuickTipsTitle}>Quick checklist</Text>
+        <Text style={styles.verifQuickTipLine}>Whole item visible</Text>
+        <Text style={styles.verifQuickTipLine}>@username + today&apos;s date on a note</Text>
+        <Text style={styles.verifQuickTipLine}>Bright, even light</Text>
+      </View>
 
       <View style={styles.exampleExplain}>
         <View style={styles.exampleExplainHead}>
           <Ionicons name="shield-checkmark" size={18} color="#7C3AED" />
-          <Text style={styles.exampleExplainTitle}>Why we need a verification photo</Text>
+          <Text style={styles.exampleExplainTitle}>Sample layout</Text>
         </View>
         <Text style={styles.exampleExplainBody}>
-          This helps confirm you have the item in your possession and protects both you and the renter.
+          A simple note next to the gear is all you need — it keeps the marketplace friendly and transparent.
         </Text>
         <View style={styles.exampleRow}>
-          <Image source={PICKUP_VERIFICATION_EXAMPLE} style={styles.exampleImg} contentFit="cover" />
+          <Image source={POSSESSION_VERIFICATION_EXAMPLE} style={styles.exampleImg} contentFit="cover" />
           <View style={styles.checklistCol}>
-            <Text style={styles.exampleBadge}>EXAMPLE</Text>
-            {['Handwritten username', "Today's date", 'Item clearly visible', 'Helps prevent disputes'].map(
-              (line) => (
-                <View key={line} style={styles.checkRow}>
-                  <Ionicons name="checkmark-circle" size={16} color="#7C3AED" />
-                  <Text style={styles.checkText}>{line}</Text>
-                </View>
-              )
-            )}
+            <Text style={styles.exampleBadge}>SAMPLE</Text>
+            {[
+              'Handwritten @username',
+              'Today&apos;s date',
+              'Full item in frame',
+              'Helps renters feel confident',
+            ].map((line) => (
+              <View key={line} style={styles.checkRow}>
+                <Ionicons name="checkmark-circle" size={16} color="#7C3AED" />
+                <Text style={styles.checkText}>{line}</Text>
+              </View>
+            ))}
           </View>
         </View>
       </View>
 
       <View style={styles.lockNote}>
         <Ionicons name="lock-closed-outline" size={14} color={ui.textSecondary} />
-        <Text style={styles.lockNoteText}>Your photos are only used for verification and safety.</Text>
+        <Text style={styles.lockNoteText}>Only used for this offer so the rental community stays accountable.</Text>
       </View>
     </View>
   );
 }
+
+/** Maps review row index → wizard step (1-based). */
+const OFFER_REVIEW_EDIT_STEP = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 
 /** Final review */
 export function ReviewStepContent({
@@ -1066,7 +1106,7 @@ export function ReviewStepContent({
                 <Text style={styles.reviewLabel}>{row.label}</Text>
                 <Text style={styles.reviewValue}>{row.value}</Text>
               </View>
-              <Pressable onPress={() => onEditStep(i + 1)} style={styles.editBtn}>
+              <Pressable onPress={() => onEditStep(OFFER_REVIEW_EDIT_STEP[i]!)} style={styles.editBtn}>
                 <Text style={styles.editBtnText}>Edit</Text>
               </Pressable>
             </View>
@@ -1120,10 +1160,14 @@ export function buildReviewRows(draft: WizardDraft): { label: string; value: str
     { label: 'Daily rate', value: `${daily}/day` },
     { label: 'Market value', value: mv },
     {
-      label: 'Photos',
-      value: `Verification ${draft.verificationPhoto?.remoteUrl ? '✓' : '—'} · Item ${
-        draft.itemPhotos.filter((p) => p.remoteUrl).length
-      } · Serial ${draft.serialPhotos.filter((p) => p.remoteUrl).length}`,
+      label: 'Supporting photos',
+      value: `Item ${draft.itemPhotos.filter((p) => p.remoteUrl).length} · Serial ${
+        draft.serialPhotos.filter((p) => p.remoteUrl).length
+      }`,
+    },
+    {
+      label: 'Live possession check',
+      value: draft.verificationPhoto?.remoteUrl ? 'Captured ✓' : '—',
     },
   ];
 }
@@ -1510,6 +1554,20 @@ const styles = StyleSheet.create({
   verifyTitleRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
   verifyTitle: { fontSize: 15, fontWeight: '700', color: ui.textPrimary },
   verifyDesc: { fontSize: 12, color: ui.textSecondary, marginTop: 4, lineHeight: 17 },
+  verifyHandoffNote: {
+    fontSize: 13,
+    color: ui.textSecondary,
+    lineHeight: 19,
+    marginTop: 10,
+    marginBottom: 4,
+    paddingHorizontal: 2,
+  },
+  verifyCaptureHint: {
+    fontSize: 11,
+    color: ui.textMuted,
+    marginTop: 8,
+    lineHeight: 16,
+  },
   badgeReq: {
     backgroundColor: 'rgba(124, 58, 237, 0.15)',
     paddingHorizontal: 6,
@@ -1532,7 +1590,12 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     backgroundColor: ui.background,
   },
+  uploadTileLive: {
+    borderColor: 'rgba(124, 58, 237, 0.5)',
+    backgroundColor: 'rgba(124, 58, 237, 0.06)',
+  },
   uploadTileText: { fontSize: 10, fontWeight: '700', color: ui.primary, marginTop: 2 },
+  uploadTileLiveText: { color: '#5B21B6' },
   uploadCountTight: {
     fontSize: 10,
     fontWeight: '700',
@@ -1637,6 +1700,17 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#FFFFFF',
   },
+  verifQuickTips: {
+    marginTop: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(124, 58, 237, 0.12)',
+    backgroundColor: 'rgba(124, 58, 237, 0.03)',
+  },
+  verifQuickTipsTitle: { fontSize: 12, fontWeight: '700', color: '#6D5FD6', marginBottom: 6 },
+  verifQuickTipLine: { fontSize: 12, color: ui.textSecondary, lineHeight: 17, marginTop: 2 },
   exampleExplain: {
     marginTop: 12,
     borderWidth: 1,

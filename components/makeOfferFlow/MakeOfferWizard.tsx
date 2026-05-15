@@ -24,12 +24,13 @@ import {
   DailyRateStepContent,
   DeliveryStepContent,
   MarketValueStepContent,
+  OfferLiveVerificationStepContent,
+  OfferSupportingPhotosStepContent,
   ReviewStepContent,
-  VerificationStepContent,
 } from './stepsContent';
 import { emptyWizardDraft, type WizardDraft } from './types';
 
-type ScreenStep = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+type ScreenStep = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 
 function firstParam(v: string | string[] | undefined): string | undefined {
   if (v == null) return undefined;
@@ -129,11 +130,13 @@ export function MakeOfferWizard({ requestIdStr }: { requestIdStr: string | undef
         const n = parseMoneyToNumber(sanitizeMoneyDigits(draft.marketValue));
         return n != null && n > 0;
       }
-      case 7: {
+      case 7:
+        return true;
+      case 8: {
         const v = draft.verificationPhoto;
         return !!(v?.remoteUrl && !v.uploading);
       }
-      case 8:
+      case 9:
         return true;
       default:
         return false;
@@ -144,7 +147,7 @@ export function MakeOfferWizard({ requestIdStr }: { requestIdStr: string | undef
     if (step === 1 && effectiveBrandLine && !draft.brandModelDisplay.trim()) {
       updateDraft({ brandModelDisplay: draft.brandModelQuery.trim() });
     }
-    if (step < 8) {
+    if (step < 9) {
       setStep((s) => (s + 1) as ScreenStep);
     }
   }, [step, effectiveBrandLine, draft.brandModelDisplay, draft.brandModelQuery, updateDraft]);
@@ -188,7 +191,7 @@ export function MakeOfferWizard({ requestIdStr }: { requestIdStr: string | undef
 
   const onFooterPress = useCallback(() => {
     if (!canContinue || submitting) return;
-    if (step < 8) {
+    if (step < 9) {
       goNext();
       return;
     }
@@ -207,13 +210,13 @@ export function MakeOfferWizard({ requestIdStr }: { requestIdStr: string | undef
   );
 
   const onEditFromReview = useCallback((targetStep: number) => {
-    if (targetStep >= 1 && targetStep <= 7) {
+    if (targetStep >= 1 && targetStep <= 8) {
       setStep(targetStep as ScreenStep);
     }
   }, []);
 
   const footerLabel =
-    step === 8 ? (submitting ? 'Sending…' : 'Send offer') : step === 7 ? 'Review offer' : 'Continue';
+    step === 9 ? (submitting ? 'Sending…' : 'Send offer') : step === 8 ? 'Review offer' : 'Continue';
 
   const body = useMemo(() => {
     switch (step) {
@@ -230,8 +233,10 @@ export function MakeOfferWizard({ requestIdStr }: { requestIdStr: string | undef
       case 6:
         return <MarketValueStepContent {...stepProps} />;
       case 7:
-        return <VerificationStepContent {...stepProps} />;
+        return <OfferSupportingPhotosStepContent {...stepProps} />;
       case 8:
+        return <OfferLiveVerificationStepContent {...stepProps} />;
+      case 9:
         return <ReviewStepContent {...stepProps} onEditStep={onEditFromReview} />;
       default:
         return null;
@@ -243,9 +248,9 @@ export function MakeOfferWizard({ requestIdStr }: { requestIdStr: string | undef
       <ScreenEntrance style={{ flex: 1 }}>
         <WizardChrome
           subtitle={subtitle}
-          stepIndex={step <= 7 ? step : TOTAL_WIZARD_STEPS}
+          stepIndex={step <= 8 ? step : TOTAL_WIZARD_STEPS}
           totalSteps={TOTAL_WIZARD_STEPS}
-          reviewMode={step === 8}
+          reviewMode={step === 9}
           scrollViewRef={mainScrollRef}
           onBack={goBack}
           footerLabel={footerLabel}

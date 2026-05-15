@@ -55,6 +55,7 @@ import { logRentalLifecycle } from '@/lib/rentalLifecycleDebug';
 import { updateRentalRequestStatus } from '@/lib/updateRentalRequestStatus';
 import { ownerSetListingOfferStatus } from '@/lib/listingOfferLifecycleActions';
 import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
+import { hydrateListingAvailability } from '@/store/listingAvailabilityStore';
 import { useListingOffersActivityStore } from '@/store/listingOffersActivityStore';
 import { useMessageUnreadStore, useUnreadMessagesTotal } from '@/store/messageUnreadStore';
 import type { AppNotification } from '@/store/notificationsStore';
@@ -515,6 +516,8 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
   const onApproveListingRental = useCallback(
     async (id: string) => {
       setBusyRentalRequestId(id);
+      const listingIdForCalendar =
+        pendingListingRentals.find((r) => r.id === id)?.listing_id?.trim() ?? '';
       const res = await updateRentalRequestStatus(id, 'approved');
       if (!res.ok) {
         alert(res.error ?? 'Could not approve');
@@ -525,6 +528,7 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
       await refreshActivityScreenFromSupabase();
       await refreshListingRentalRequests();
       await refreshUnifiedRentals();
+      if (listingIdForCalendar) void hydrateListingAvailability(listingIdForCalendar);
       if (__DEV__) {
         logRentalLifecycle('unified_rentals_after_approve_refresh', {
           rentalRequestId: id,
@@ -533,7 +537,12 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
       }
       setBusyRentalRequestId(null);
     },
-    [refreshActivityScreenFromSupabase, refreshListingRentalRequests, refreshUnifiedRentals]
+    [
+      pendingListingRentals,
+      refreshActivityScreenFromSupabase,
+      refreshListingRentalRequests,
+      refreshUnifiedRentals,
+    ]
   );
 
   const onDeclineListingRental = useCallback(
@@ -868,13 +877,12 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
     setBusyListingOfferId(offerId);
     const r = await ownerSetListingOfferStatus(offerId, 'declined');
     if (!r.ok) showFeedbackToast(r.message ?? 'Could not decline.');
-    else showFeedbackToast('Declined');
+    else
+      showFeedbackToast(
+        r.negotiationClosed ? 'Negotiation closed — no more offers on this thread.' : 'Offer declined. They can send another offer.'
+      );
     void hydrateListingOffersFromSupabase();
     setBusyListingOfferId(null);
-  }, []);
-
-  const onCounterListingOfferStub = useCallback(() => {
-    showFeedbackToast('Counter offers will be available soon.');
   }, []);
 
   const rentalsTotalCount = unifiedRentals.length;
@@ -1637,7 +1645,7 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
                           onPress={() => openListingOfferDetail(row.id)}
                           onAccept={() => void onAcceptListingOfferOnActivity(row.id)}
                           onDecline={() => void onDeclineListingOfferOnActivity(row.id)}
-                          onCounter={onCounterListingOfferStub}
+                          onCounter={(id) => router.push({ pathname: '/listing-counter-offer', params: { offerId: id } })}
                           busy={busyListingOfferId === row.id}
                         />
                       ))

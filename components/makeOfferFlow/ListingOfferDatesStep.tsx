@@ -36,6 +36,7 @@ export function ListingOfferDatesStep({ listingId, rows, draft, onChangeDates, i
         endDate={draft.rentalEndIso}
         onChange={onChangeDates}
         ignoreOfferId={ignoreOfferId}
+        dense
       />
       {draft.rentalStartIso && draft.rentalEndIso ? (
         <View style={styles.summary}>

@@ -67,7 +67,7 @@ function shortPickupSummary(input: PrimaryResolveInput): string {
   if (foot) return foot.split('.')[0] + (foot.includes('.') ? '.' : '');
   return input.viewerRole === 'owner'
     ? 'Finish photos and checklist, then confirm when ready.'
-    : 'Review evidence and confirm receipt when ready.';
+    : 'Review the host’s photos and confirm receipt when ready.';
 }
 
 function issueAction(input: PrimaryResolveInput): RentalWorkspaceSecondaryAction {
@@ -242,7 +242,8 @@ export function resolveRentalWorkspacePrimaryStageModel(
     if (input.viewerRole === 'owner' && input.returnReady && !input.returnCompleted) {
       return {
         stageLabel: 'RETURN',
-        summaryLine: guide || 'When drop-off looks right, confirm so both sides get a clean close.',
+        summaryLine:
+          guide || 'The renter’s return looks complete — confirm condition to close out the rental.',
         primaryLabel: 'Confirm return',
         primaryDisabled: false,
         onPrimary: input.onConfirmReturn,
@@ -251,13 +252,23 @@ export function resolveRentalWorkspacePrimaryStageModel(
         secondaryAction: input.returnCompleted ? null : issueAction(input),
       };
     }
+    const ownerReturnOpen =
+      input.viewerRole === 'owner'
+        ? guide ||
+          (input.returnCompleted
+            ? 'Return is recorded — photos and checklist below are read-only.'
+            : 'Review return photos and the checklist, then confirm when the item matches what you expect.')
+        : null;
+    const renterReturnOpen =
+      input.viewerRole === 'renter'
+        ? guide ||
+          (input.returnCompleted
+            ? 'Return is recorded — your photos and checklist below are read-only.'
+            : 'Upload return photos, finish your checklist, then confirm when drop-off is done.')
+        : null;
     return {
       stageLabel: 'RETURN',
-      summaryLine:
-        guide ||
-        (input.returnCompleted
-          ? 'Return is recorded — evidence below is read-only.'
-          : 'Work through return photos, checklist, and notes, then confirm when you’re satisfied.'),
+      summaryLine: input.viewerRole === 'owner' ? ownerReturnOpen! : renterReturnOpen!,
       primaryLabel: input.returnCompleted ? 'Open messages' : 'Open return',
       primaryDisabled: !input.returnWorkflowEnabled || input.returnCompleted,
       onPrimary: input.returnCompleted ? input.onOpenChat : input.onFocusReturnSection,

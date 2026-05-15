@@ -38,11 +38,44 @@ export async function submitInitialListingOffer(args: {
   }
 
   const listingId = args.listingId.trim();
+  const sb = getSupabase();
+  const existingOfferIdTrim = args.existingOfferId?.trim() ?? '';
+
+  let messageKind: 'initial' | 'renter_update' = 'initial';
+  let posterCounterCount: number | undefined;
+
+  if (existingOfferIdTrim) {
+    const { data: ex, error: exErr } = await sb
+      .from('offers')
+      .select('id, listing_id, user_id, negotiation_locked, status, poster_counter_count')
+      .eq('id', existingOfferIdTrim)
+      .maybeSingle();
+    if (exErr || !ex || typeof ex !== 'object') {
+      return { ok: false, message: 'Could not load your existing offer.' };
+    }
+    const exListing = typeof (ex as { listing_id?: unknown }).listing_id === 'string' ? (ex as { listing_id: string }).listing_id.trim() : '';
+    const exUser = typeof (ex as { user_id?: unknown }).user_id === 'string' ? (ex as { user_id: string }).user_id.trim() : '';
+    if (exListing !== listingId || exUser !== renterId) {
+      return { ok: false, message: 'Offer no longer matches this listing.' };
+    }
+    if ((ex as { negotiation_locked?: unknown }).negotiation_locked === true) {
+      return { ok: false, message: 'Negotiation on this thread is closed.' };
+    }
+    const st = typeof (ex as { status?: unknown }).status === 'string' ? (ex as { status: string }).status.trim() : '';
+    if (st !== 'pending') {
+      return { ok: false, message: 'You can only update an open negotiation.' };
+    }
+    const pc = (ex as { poster_counter_count?: unknown }).poster_counter_count;
+    posterCounterCount =
+      typeof pc === 'number' && Number.isFinite(pc) ? Math.max(0, Math.floor(pc)) : undefined;
+    messageKind = 'renter_update';
+  }
+
   const avail = await fetchListingAvailability(listingId);
   if (!avail.ok) {
     return { ok: false, message: avail.message ?? 'Could not verify availability.' };
   }
-  const ignore = args.existingOfferId?.trim() ?? '';
+  const ignore = existingOfferIdTrim || '';
   if (
     !isDateRangeAvailable(args.payload.rentalStartDate, args.payload.rentalEndDate, avail.rows, {
       ignoreOfferId: ignore || undefined,
@@ -60,7 +93,7 @@ export async function submitInitialListingOffer(args: {
     lastUpdatedBy: renterId,
     status: 'pending',
     message: args.payload.message,
-    messageKind: 'initial',
+    messageKind,
     offer_images: args.payload.offer_images,
     offer_evidence: args.payload.offer_evidence,
     toolDescription: args.payload.toolDescription,
@@ -69,6 +102,7 @@ export async function submitInitialListingOffer(args: {
     negotiationDelivery: args.payload.negotiationDelivery,
     rentalStartDate: args.payload.rentalStartDate,
     rentalEndDate: args.payload.rentalEndDate,
+    ...(posterCounterCount !== undefined ? { posterCounterCount } : {}),
   });
 
   if (!row?.id) {
@@ -83,7 +117,6 @@ export async function submitInitialListingOffer(args: {
   });
   if (!hold.ok) {
     if (row.wasInsert) {
-      const sb = getSupabase();
       await sb.from('offers').delete().eq('id', row.id);
     }
     return { ok: false, message: hold.message ?? 'Could not reserve those dates.' };
@@ -92,9 +125,12 @@ export async function submitInitialListingOffer(args: {
   insertServerNotificationToRecipient({
     actorId: renterId,
     recipientUserId: owner,
-    type: 'offer_created',
-    title: 'New offer on your listing',
-    body: `${args.snapshot.title} · ${formatUsd(args.payload.price)} estimated total.`,
+    type: messageKind === 'renter_update' ? 'offer_updated' : 'offer_created',
+    title: messageKind === 'renter_update' ? 'Listing offer updated' : 'New offer on your listing',
+    body:
+      messageKind === 'renter_update'
+        ? `${args.snapshot.title} · updated to ${formatUsd(args.payload.price)} estimated total.`
+        : `${args.snapshot.title} · ${formatUsd(args.payload.price)} estimated total.`,
     requestId: null,
     offerId: row.id,
     listingId,

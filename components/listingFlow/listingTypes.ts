@@ -30,8 +30,10 @@ export type ListingWizardDraft = {
   serviceArea: string;
   dailyRate: string;
   marketValue: string;
+  /** Live possession proof: full item + handwritten @username + current date (camera capture). */
+  verificationPossession: ListingPhotoSlot | null;
+  /** Optional: serial/model plate for disputes, recovery, extra trust. */
   verificationSerial: ListingPhotoSlot | null;
-  verificationCondition: ListingPhotoSlot | null;
   verificationReceipt: ListingPhotoSlot | null;
 };
 
@@ -53,8 +55,8 @@ export function emptyListingWizardDraft(): ListingWizardDraft {
     serviceArea: '',
     dailyRate: '',
     marketValue: '',
+    verificationPossession: null,
     verificationSerial: null,
-    verificationCondition: null,
     verificationReceipt: null,
   };
 }

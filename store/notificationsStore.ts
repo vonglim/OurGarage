@@ -12,6 +12,8 @@ const STORAGE_KEY = '@ourgarage/notifications_v1';
 export type AppNotificationType =
   | 'new_offer'
   | 'counter_offer'
+  | 'offer_created'
+  | 'offer_updated'
   | 'agreement_pending'
   | 'offer_accepted'
   | 'accepted'

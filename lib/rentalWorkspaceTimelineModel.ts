@@ -23,6 +23,8 @@ function isoOrNull(v: string | null | undefined): string | null {
   return Number.isFinite(t) ? String(v) : null;
 }
 
+export type RentalWorkspaceTimelineViewerRole = 'owner' | 'renter';
+
 /** Lightweight operational timeline derived from existing rental + agreement flags (no new APIs). */
 export function buildRentalWorkspaceTimelineModel(input: {
   rentalStatus: string;
@@ -34,7 +36,9 @@ export function buildRentalWorkspaceTimelineModel(input: {
   signedAt: string | null | undefined;
   pickupIso: string | null | undefined;
   returnIso: string | null | undefined;
+  viewerRole?: RentalWorkspaceTimelineViewerRole;
 }): RentalWorkspaceTimelineEvent[] {
+  const role = input.viewerRole ?? 'renter';
   const events: RentalWorkspaceTimelineEvent[] = [];
   const st = String(input.rentalStatus ?? '').trim().toLowerCase();
 
@@ -96,10 +100,14 @@ export function buildRentalWorkspaceTimelineModel(input: {
       tone: 'done',
     });
   } else if (input.meetingCompleted) {
+    const handoffSubtitle =
+      role === 'owner'
+        ? 'Document the item, then wait for renter receipt confirmation.'
+        : 'Review host photos and confirm you received the item.';
     events.push({
       id: 'handoff',
       title: 'Pickup / handoff',
-      subtitle: 'Photos, checklists, and confirmations for both sides.',
+      subtitle: handoffSubtitle,
       tone: input.lifecyclePhase === 'pickup' ? 'current' : 'upcoming',
     });
   } else {
@@ -120,10 +128,18 @@ export function buildRentalWorkspaceTimelineModel(input: {
     });
   } else if (input.handoffCompleted) {
     const returnCurrent = input.lifecyclePhase === 'return' || st === 'return_pending';
+    const returnSubtitle =
+      role === 'owner'
+        ? returnCurrent
+          ? 'Review renter return photos and confirm condition.'
+          : 'Opens when the renter starts the return window.'
+        : returnCurrent
+          ? 'Your photos, checklist, and final confirmation.'
+          : 'Plan return photos and drop-off before the window.';
     events.push({
       id: 'return',
       title: 'Return & drop-off',
-      subtitle: 'Photos, checklist, and final confirmations.',
+      subtitle: returnSubtitle,
       tone: returnCurrent ? 'current' : input.lifecyclePhase === 'active' ? 'upcoming' : 'upcoming',
     });
   }

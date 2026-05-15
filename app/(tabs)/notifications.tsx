@@ -122,6 +122,15 @@ function formatWhen(ts: number): string {
   }
 }
 
+/** True when the server tied this notification to `requests.id` (browse requests), not listing-only offers. */
+function notificationHasRequestRowId(n: AppNotification): boolean {
+  const r = n.requestId;
+  if (r == null) return false;
+  if (typeof r === 'string') return r.trim() !== '';
+  if (typeof r === 'number') return Number.isFinite(r) && r > 0;
+  return false;
+}
+
 function NotificationMessage({ text }: { text: string }) {
   const lines = text.split('\n').map((s) => s.trim()).filter(Boolean);
   if (lines.length >= 2) {
@@ -234,51 +243,68 @@ export default function NotificationsScreen() {
         return;
       }
     }
+
+    const trimmedOfferId =
+      n.offerId != null && String(n.offerId).trim() !== '' ? String(n.offerId).trim() : null;
+    const isOfferThreadType =
+      n.type === 'new_offer' ||
+      n.type === 'counter_offer' ||
+      n.type === 'offer_updated' ||
+      n.type === 'agreement_pending' ||
+      n.type === 'declined' ||
+      n.type === 'offer_accepted' ||
+      n.type === 'accepted';
+
+    // Listing-linked offers (`offers.listing_id`, no `requests` row): `offer-detail` cannot resolve them.
+    if (trimmedOfferId && !notificationHasRequestRowId(n) && isOfferThreadType) {
+      if (__DEV__) {
+        console.log('[notifications] navigate -> listing-offer-detail', { offerId: trimmedOfferId });
+      }
+      router.push({
+        pathname: '/listing-offer-detail',
+        params: { offerId: trimmedOfferId },
+      });
+      return;
+    }
+
     if (
       (n.type === 'new_offer' ||
         n.type === 'counter_offer' ||
         n.type === 'agreement_pending' ||
         n.type === 'declined') &&
-      n.offerId != null &&
-      String(n.offerId).trim() !== ''
+      trimmedOfferId
     ) {
-      const offerId = String(n.offerId).trim();
       const requestId =
         n.requestId != null && String(n.requestId).trim() !== ''
           ? String(n.requestId).trim()
           : undefined;
       if (__DEV__) {
-        console.log('[notifications] navigate -> offer-detail', { requestId, offerId });
+        console.log('[notifications] navigate -> offer-detail', { requestId, offerId: trimmedOfferId });
       }
       router.push({
         pathname: '/offer-detail',
         params: {
-          offerId,
+          offerId: trimmedOfferId,
           ...(requestId ? { requestId } : {}),
         },
       });
       return;
     }
-    if (
-      (n.type === 'offer_accepted' || n.type === 'accepted') &&
-      n.offerId != null &&
-      String(n.offerId).trim() !== ''
-    ) {
-      const offerId = String(n.offerId).trim();
+    if ((n.type === 'offer_accepted' || n.type === 'accepted') && trimmedOfferId) {
       const requestId =
         n.requestId != null && String(n.requestId).trim() !== ''
           ? String(n.requestId).trim()
           : undefined;
       if (__DEV__) {
-        console.log('[notifications] navigate -> offer-detail (legacy, no rental id)', {
+        console.log('[notifications] navigate -> offer-detail (request-scoped offer)', {
           requestId,
-          offerId,
+          offerId: trimmedOfferId,
         });
       }
       router.push({
         pathname: '/offer-detail',
         params: {
-          offerId,
+          offerId: trimmedOfferId,
           ...(requestId ? { requestId } : {}),
         },
       });

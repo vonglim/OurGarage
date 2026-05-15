@@ -1,36 +1,12 @@
 import { getAuthUserIdSync } from '@/lib/authUser';
 import type { NegotiationDeliveryMethod } from '@/lib/negotiationDelivery';
 import type { NegotiationOfferStatus } from '@/lib/negotiationOfferTypes';
-import type { ListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
+import { parseListingIntentSnapshot, type ListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
 import { PROFILE_NAME_FALLBACK } from '@/lib/profileConstants';
 import { fetchAndMergeProfileNames, getRemoteDisplayNameForUserId } from '@/lib/remoteProfileCache';
 import { getSupabase } from '@/lib/supabase';
 import type { ListingOfferActivityRow } from '@/store/listingOffersActivityStore';
 import { useListingOffersActivityStore } from '@/store/listingOffersActivityStore';
-
-function parseSnapshot(raw: unknown): ListingIntentSnapshot | null {
-  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const o = raw as Record<string, unknown>;
-  const listing_id = typeof o.listing_id === 'string' ? o.listing_id.trim() : '';
-  if (!listing_id) return null;
-  const titleRaw = typeof o.title === 'string' ? o.title.trim() : '';
-  const title = titleRaw.length > 0 ? titleRaw : 'Listing';
-  return {
-    listing_id,
-    title,
-    hero_image_url: typeof o.hero_image_url === 'string' ? o.hero_image_url : null,
-    daily_price: typeof o.daily_price === 'number' && Number.isFinite(o.daily_price) ? o.daily_price : 0,
-    price_unit: typeof o.price_unit === 'string' ? o.price_unit : null,
-    condition_label: typeof o.condition_label === 'string' ? o.condition_label : null,
-    delivery_available: typeof o.delivery_available === 'boolean' ? o.delivery_available : null,
-    handoff_summary: typeof o.handoff_summary === 'string' ? o.handoff_summary : null,
-    service_area: typeof o.service_area === 'string' ? o.service_area : null,
-    replacement_value:
-      typeof o.replacement_value === 'number' && Number.isFinite(o.replacement_value)
-        ? o.replacement_value
-        : null,
-  };
-}
 
 function parseStatus(raw: unknown): NegotiationOfferStatus {
   if (raw === 'accepted' || raw === 'declined' || raw === 'closed' || raw === 'pending' || raw === 'pending_confirmation') {
@@ -114,12 +90,24 @@ export async function hydrateListingOffersFromSupabase(): Promise<void> {
     const method: NegotiationDeliveryMethod | null =
       ndm === 'pickup' || ndm === 'owner_delivery' ? ndm : null;
     const ndf = r.negotiation_delivery_fee;
-    const fee =
-      typeof ndf === 'number' && Number.isFinite(ndf) ? Math.max(0, ndf) : ndf == null ? null : null;
+    const fee = typeof ndf === 'number' && Number.isFinite(ndf) ? Math.max(0, ndf) : null;
 
     const pc = r.poster_counter_count;
     const posterCounterCount =
       typeof pc === 'number' && Number.isFinite(pc) ? Math.max(0, Math.floor(pc)) : 0;
+
+    const ndt = r.negotiation_decline_total ?? r.negotiationDeclineTotal;
+    const negotiationDeclineTotal =
+      typeof ndt === 'number' && Number.isFinite(ndt) ? Math.max(0, Math.floor(ndt)) : 0;
+
+    const nl = r.negotiation_locked ?? r.negotiationLocked;
+    const negotiationLocked = nl === true || nl === 't';
+
+    const lub = r.last_updated_by ?? r.lastUpdatedBy;
+    const lastUpdatedBy = typeof lub === 'string' ? lub.trim() : '';
+
+    const lnk = r.last_negotiation_event_kind ?? r.lastNegotiationEventKind;
+    const lastNegotiationEventKind = typeof lnk === 'string' && lnk.trim() !== '' ? lnk.trim() : null;
 
     out.push({
       id,
@@ -132,7 +120,11 @@ export async function hydrateListingOffersFromSupabase(): Promise<void> {
       negotiationDeliveryMethod: method,
       negotiationDeliveryFee: fee,
       posterCounterCount,
-      snapshot: parseSnapshot(r.listing_snapshot),
+      negotiationDeclineTotal,
+      negotiationLocked,
+      lastUpdatedBy,
+      lastNegotiationEventKind,
+      snapshot: parseListingIntentSnapshot(r.listing_snapshot),
       renterDisplayName: getRemoteDisplayNameForUserId(renterUserId)?.trim() || PROFILE_NAME_FALLBACK,
     });
   }

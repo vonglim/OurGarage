@@ -1,8 +1,10 @@
 import { getAuthUserIdSync } from '@/lib/authUser';
 import {
   convertPendingToBooked,
-  removePendingAvailabilityHold,
 } from '@/lib/listingAvailability';
+import { hydrateListingOffersFromSupabase } from '@/lib/hydrateListingOffersFromSupabase';
+import { ownerDeclineListingOfferProposal } from '@/lib/listingOfferNegotiationActions';
+import { mergeRecentNotificationsFromServer } from '@/lib/notificationsServerSync';
 import { getSupabase } from '@/lib/supabase';
 import { hydrateListingAvailability } from '@/store/listingAvailabilityStore';
 
@@ -31,10 +33,36 @@ export async function fetchListingOfferDetail(offerId: string): Promise<{
   return { row: rec, messages: (msgs ?? []) as Record<string, unknown>[] };
 }
 
+function parseAcceptListingOfferRpcResult(data: unknown): {
+  ok: boolean;
+  rental_id?: string;
+  error?: string;
+} {
+  if (data == null) return { ok: false, error: 'Empty response' };
+  let o: Record<string, unknown>;
+  if (typeof data === 'string') {
+    try {
+      o = JSON.parse(data) as Record<string, unknown>;
+    } catch {
+      return { ok: false, error: 'Invalid response' };
+    }
+  } else if (typeof data === 'object' && !Array.isArray(data)) {
+    o = data as Record<string, unknown>;
+  } else {
+    return { ok: false, error: 'Invalid response' };
+  }
+  if (o.ok === true) {
+    const rid = typeof o.rental_id === 'string' ? o.rental_id.trim() : '';
+    return { ok: true, rental_id: rid };
+  }
+  const err = typeof o.error === 'string' && o.error.trim() !== '' ? o.error.trim() : 'Accept failed';
+  return { ok: false, error: err };
+}
+
 export async function ownerSetListingOfferStatus(
   offerId: string,
-  nextStatus: 'accepted' | 'declined' | 'pending'
-): Promise<{ ok: boolean; message?: string }> {
+  nextStatus: 'accepted' | 'declined'
+): Promise<{ ok: boolean; message?: string; rentalId?: string; negotiationClosed?: boolean }> {
   const me = getAuthUserIdSync().trim();
   if (!me) return { ok: false, message: 'Sign in to continue.' };
   const id = offerId.trim();
@@ -55,58 +83,57 @@ export async function ownerSetListingOfferStatus(
     return { ok: false, message: 'Only the listing host can update this offer.' };
   }
 
-  const status =
-    nextStatus === 'accepted'
-      ? 'pending_confirmation'
-      : nextStatus === 'declined'
-        ? 'declined'
-        : 'pending';
-
-  const { error } = await supabase
-    .from('offers')
-    .update({
-      status,
-      last_updated_by: me,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', id);
-
-  if (error) {
-    return { ok: false, message: error.message || 'Could not update offer.' };
-  }
-
   if (nextStatus === 'accepted') {
-    void convertPendingToBooked(id);
-  } else if (nextStatus === 'declined') {
-    void removePendingAvailabilityHold(id);
-  }
-  void hydrateListingAvailability(listingId);
+    const current = typeof row.status === 'string' ? row.status.trim() : '';
+    if (current === 'accepted') {
+      mergeRecentNotificationsFromServer();
+      void hydrateListingOffersFromSupabase();
+      return { ok: true };
+    }
+    if (current !== 'pending' && current !== 'pending_confirmation') {
+      return { ok: false, message: 'Only a pending offer can be accepted.' };
+    }
 
-  const renter = typeof row.user_id === 'string' ? row.user_id.trim() : '';
-  const priceRaw = row.current_price ?? row.price;
-  const price =
-    typeof priceRaw === 'number' && Number.isFinite(priceRaw)
-      ? priceRaw
-      : typeof priceRaw === 'string' && priceRaw.trim() !== ''
-        ? Number(priceRaw)
-        : null;
-  if (renter && me !== renter) {
-    const body =
-      nextStatus === 'accepted'
-        ? 'The host accepted your listing offer.'
-        : nextStatus === 'declined'
-          ? 'The host declined your listing offer.'
-          : 'Offer updated.';
-    await supabase.from('offer_messages').insert({
-      request_id: null,
-      offer_id: id,
-      author_id: me,
-      receiver_id: renter,
-      body,
-      price: price != null && Number.isFinite(price) ? price : null,
-      kind: 'note',
+    const { data: rpcData, error: rpcErr } = await supabase.rpc('accept_listing_offer_create_rental', {
+      p_offer_id: id,
     });
+    if (rpcErr) {
+      return { ok: false, message: rpcErr.message || 'Could not accept offer.' };
+    }
+    const parsed = parseAcceptListingOfferRpcResult(rpcData);
+    if (!parsed.ok) {
+      return { ok: false, message: parsed.error ?? 'Could not accept offer.' };
+    }
+
+    void convertPendingToBooked(id);
+    void hydrateListingAvailability(listingId);
+
+    const renter = typeof row.user_id === 'string' ? row.user_id.trim() : '';
+    const priceRaw = row.current_price ?? row.price;
+    const price =
+      typeof priceRaw === 'number' && Number.isFinite(priceRaw)
+        ? priceRaw
+        : typeof priceRaw === 'string' && priceRaw.trim() !== ''
+          ? Number(priceRaw)
+          : null;
+    if (renter && me !== renter) {
+      await supabase.from('offer_messages').insert({
+        request_id: null,
+        offer_id: id,
+        author_id: me,
+        receiver_id: renter,
+        body: 'The host accepted your listing offer.',
+        price: price != null && Number.isFinite(price) ? price : null,
+        kind: 'note',
+      });
+    }
+
+    mergeRecentNotificationsFromServer();
+    void hydrateListingOffersFromSupabase();
+
+    const rid = parsed.rental_id?.trim();
+    return { ok: true, ...(rid ? { rentalId: rid } : {}) };
   }
 
-  return { ok: true };
+  return ownerDeclineListingOfferProposal(id, {});
 }

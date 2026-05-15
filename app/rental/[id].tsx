@@ -67,13 +67,26 @@ import {
   useDevPageAutofill,
 } from '@/lib/devTools';
 import { fetchLatestOfferThreadMessagePreview, type OfferThreadMessagePreview } from '@/lib/fetchLatestOfferThreadMessage';
-import {
-  deriveLifecyclePhaseFromRentalStatus,
-  deriveRentalWorkspaceStage,
-  formatRentalWorkspaceDisplayCode,
-} from '@/lib/rentalLifecyclePhase';
+import { deriveLifecyclePhaseFromRentalStatus, deriveRentalWorkspaceStage } from '@/lib/rentalLifecyclePhase';
+import { parseListingIntentSnapshot, type ListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
+import { normalizeListingImages } from '@/lib/normalizeListingImages';
+import { fetchAndMergeProfileNames } from '@/lib/remoteProfileCache';
+import { buildRentalWorkspaceHeroModel } from '@/lib/rentalWorkspaceHeroModel';
 import { resolveRentalWorkspacePrimaryStageModel } from '@/lib/rentalWorkspacePrimaryStageModel';
 import { buildRentalWorkspaceTimelineModel } from '@/lib/rentalWorkspaceTimelineModel';
+import {
+  activePrepareCardTitle,
+  activePrepareReminderLines,
+  activePrepareRemindersHead,
+  activeRentalHelpCallout,
+  activeReturnCountdownFragment,
+  buildActiveWorkbenchContextLine,
+  formatReturnWorkbenchContextLine,
+  returnPhotosSectionHelper,
+  returnResponsibilitiesSectionTitle,
+  returnSectionCollapsedMeta,
+  workspaceReturnGuidanceLine,
+} from '@/lib/rentalWorkspaceRoleCopy';
 import { deriveRentalWorkspaceUxPhase, rentalWorkspaceUxPhaseBadgeLabel } from '@/lib/rentalWorkspaceUxPhase';
 import { insertRentalAgreementSnapshot } from '@/lib/rentalAgreement';
 import {
@@ -139,13 +152,21 @@ import { getSupabase } from '@/lib/supabase';
 import { useMessageUnreadStore } from '@/store/messageUnreadStore';
 import { useDevToolsStore } from '@/store/devToolsStore';
 import { getOfferById, useOffersStore } from '@/store/offersStore';
+import { getListingById } from '@/store/listingsStore';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
 import { primarySolidPressed, shadowCard, shadowKey, ui } from '@/constants/appUi';
 
+type RentalHeroSupplement = {
+  listingSnapshot: ListingIntentSnapshot | null;
+  listingTitle: string | null;
+  listingImages: string[];
+};
+
 type RentalRow = {
   id: string;
   request_id: string;
+  listing_id?: string | null;
   offer_id: string;
   renter_user_id: string;
   owner_user_id: string;
@@ -287,19 +308,19 @@ function formatAgreementMeetingPickupReturn(
 const OWNER_PICKUP_ITEMS = [
   {
     id: 'op-upload-condition',
-    label: 'Upload condition photos',
+    label: 'Capture condition photos',
     required: true as const,
     control: 'auto' as const,
   },
   {
     id: 'op-upload-serial',
-    label: 'Upload serial/model photo',
+    label: 'Capture serial/model photo',
     required: true as const,
     control: 'auto' as const,
   },
   {
     id: 'op-upload-verification',
-    label: 'Upload verification photo',
+    label: 'Live possession photo',
     required: true as const,
     control: 'auto' as const,
   },
@@ -323,7 +344,7 @@ const RENTER_PICKUP_ITEMS = [
   { id: 'rp-accessories', label: 'Confirm accessories are included', required: true as const, control: 'manual' as const },
   {
     id: 'rp-verify-note',
-    label: 'Verify username and date on verification photo',
+    label: 'Confirm @username + date on the live possession photo',
     required: true as const,
     control: 'auto' as const,
   },
@@ -384,11 +405,12 @@ function buildRenterPickupDoneEffective(
 
 function pickupAutoRowHelper(itemId: string, role: 'owner' | 'renter'): string | undefined {
   if (role === 'owner') {
-    if (itemId === 'op-upload-verification') return "Include your username and today's date.";
+    if (itemId === 'op-upload-verification')
+      return "A fresh verification photo for this handoff (listing gallery may be older). Include @username + today's date.";
     return 'Completed automatically when requirements are met.';
   }
   if (itemId === 'rp-review-photos') return 'Automatically checked when you view owner photos';
-  if (itemId === 'rp-verify-note') return 'Automatically checked when you open the verification photo';
+  if (itemId === 'rp-verify-note') return 'Automatically checked when you open the live possession photo';
   return undefined;
 }
 
@@ -449,7 +471,7 @@ function VerificationPhotoSectionHeader({ showTrustBadge }: { showTrustBadge: bo
       <View style={styles.handoffTimestampSectionTitleRow}>
         <View style={styles.handoffVerificationHeadingTitleCluster}>
           <Ionicons name="shield-checkmark" size={16} color="#166534" />
-          <Text style={styles.handoffEvidenceGroupLabelHeading}>Verification Photo</Text>
+          <Text style={styles.handoffEvidenceGroupLabelHeading}>Live possession check</Text>
         </View>
         {showTrustBadge ? (
           <View style={styles.handoffTimestampTrustPillWrap}>
@@ -460,6 +482,10 @@ function VerificationPhotoSectionHeader({ showTrustBadge }: { showTrustBadge: bo
           </View>
         ) : null}
       </View>
+      <Text style={styles.handoffVerificationSectionSub}>
+        Showcase photos can age; this fresh photo is for pickup so you and the renter share the same current-item view —
+        separate from the listing&apos;s original photo.
+      </Text>
     </View>
   );
 }
@@ -674,7 +700,7 @@ function AgreementModalSecurityHoldInner({ preauthAmount }: { preauthAmount: num
   );
 }
 
-const PICKUP_VERIFICATION_EXAMPLE = require('@/assets/images/pickup-verification-example.png');
+const PICKUP_VERIFICATION_EXAMPLE = require('@/assets/images/possession-verification-example.png');
 
 function normalizeRole(raw: unknown): PartyRole | undefined {
   const val = String(raw ?? '')
@@ -837,9 +863,11 @@ function VerificationPhotosSubsection({
   const slots = [0, 1, 2] as const;
   const extra = Math.max(0, photos.length - 3);
   return (
-    <View style={styles.verificationSubsection}>
-      <Text style={styles.verificationSubhead}>Photos</Text>
-      <Text style={styles.verificationSubtext}>Evidence for this handoff</Text>
+    <View style={[styles.verificationSubsection, styles.verificationSubsectionLive]}>
+      <Text style={styles.verificationSubhead}>Return photos</Text>
+      <Text style={styles.verificationSubtext}>
+        Current-item photos for this phase — keep the full item readable, lighting even, and backgrounds simple.
+      </Text>
       <View style={styles.photoTileRow}>
         {slots.map((i) => {
           const p = photos[i];
@@ -864,13 +892,14 @@ function VerificationPhotosSubsection({
           disabled={uploading}
           style={({ pressed }) => [
             styles.photoTileAdd,
+            styles.photoTileAddLive,
             (pressed || uploading) && { opacity: 0.85 },
             (uploading || addDisabled) && { opacity: 0.6 },
           ]}
           onPress={onAddPress}
         >
           <Text style={styles.photoTileAddText}>{uploading ? '…' : '+'}</Text>
-          <Text style={styles.photoTileAddLabel}>{uploading ? 'Upload' : 'Add'}</Text>
+          <Text style={styles.photoTileAddLabel}>{uploading ? 'Saving' : 'Capture'}</Text>
         </Pressable>
       </View>
       {extra > 0 ? (
@@ -1260,6 +1289,7 @@ export default function RentalScreen() {
     chatUnreadOfferId ? (s.unreadByOfferId[chatUnreadOfferId] ?? 0) : 0
   );
   const [request, setRequest] = useState<any>(null);
+  const [heroSupplement, setHeroSupplement] = useState<RentalHeroSupplement | null>(null);
   /** Section Y offsets inside scroll content (for lifecycle navigator). */
   const lifecycleSectionYRef = useRef<Partial<Record<string, number>>>({});
   const [signHandoffBusy, setSignHandoffBusy] = useState(false);
@@ -1366,14 +1396,6 @@ export default function RentalScreen() {
     return getOfferById(id) ?? offersFromStore.find((o) => o.id === id);
   }, [rental?.offer_id, offersFromStore]);
 
-  const heroThumbUri = useMemo(() => {
-    const o = offerForRental as { offer_images?: string[] } | undefined;
-    const imgs = o?.offer_images;
-    if (!Array.isArray(imgs)) return null;
-    const u = imgs.find((x) => typeof x === 'string' && x.trim() !== '');
-    return typeof u === 'string' ? u.trim() : null;
-  }, [offerForRental]);
-
   const requestPricingCtx = useMemo((): RequestPricingContext | null => {
     if (!request) return null;
     return {
@@ -1477,6 +1499,72 @@ export default function RentalScreen() {
       cancelled = true;
     };
   }, [rentalId, supabase]);
+
+  useEffect(() => {
+    if (!rental?.id) {
+      setHeroSupplement(null);
+      return;
+    }
+    let cancelled = false;
+    const listingId = typeof rental.listing_id === 'string' ? rental.listing_id.trim() : '';
+    const offerId = String(rental.offer_id ?? '').trim();
+    const ownerId = String(rental.owner_user_id ?? '').trim();
+    const renterId = String(rental.renter_user_id ?? '').trim();
+    const partyIds = [ownerId, renterId].filter((id) => id.length > 0);
+
+    void (async () => {
+      if (partyIds.length > 0) {
+        await fetchAndMergeProfileNames(supabase, partyIds);
+      }
+
+      const cachedListing = listingId ? getListingById(listingId) : undefined;
+      let listingTitle = cachedListing?.name?.trim() || null;
+      let listingImages = cachedListing?.images ?? [];
+      let listingSnapshot: ListingIntentSnapshot | null = null;
+
+      if (offerId) {
+        const { data: offerRow } = await supabase
+          .from('offers')
+          .select('listing_snapshot')
+          .eq('id', offerId)
+          .maybeSingle();
+        if (offerRow) {
+          listingSnapshot = parseListingIntentSnapshot(offerRow.listing_snapshot);
+        }
+      }
+
+      if (listingId && (!listingTitle || listingImages.length === 0)) {
+        const { data: listingRow } = await supabase
+          .from('listings')
+          .select('title, images')
+          .eq('id', listingId)
+          .maybeSingle();
+        if (listingRow) {
+          if (!listingTitle && typeof listingRow.title === 'string') {
+            listingTitle = listingRow.title.trim() || null;
+          }
+          if (listingImages.length === 0) {
+            listingImages = normalizeListingImages(listingRow.images);
+          }
+        }
+      }
+
+      if (!cancelled) {
+        setHeroSupplement({ listingSnapshot, listingTitle, listingImages });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    rental?.id,
+    rental?.listing_id,
+    rental?.offer_id,
+    rental?.owner_user_id,
+    rental?.renter_user_id,
+    supabase,
+  ]);
 
   useEffect(() => {
     if (!rental?.request_id) return;
@@ -1735,7 +1823,7 @@ export default function RentalScreen() {
         setCapturedPhotoUris([]);
         Alert.alert(
           'Category required',
-          'Open the camera from Item, Serial, Verification, or Additional so each photo is saved to the right group.'
+          'Open the camera from Item, Serial, Live possession check, or Additional so each photo is saved to the right group.'
         );
         return;
       }
@@ -1798,7 +1886,7 @@ export default function RentalScreen() {
             if (schemaMissing) {
               Alert.alert('Upload unavailable', PHOTO_UPLOAD_PICKUP_CATEGORY_SCHEMA_MESSAGE);
             } else if (allBucketMissing) {
-              Alert.alert('Rental evidence storage', RENTAL_EVIDENCE_BUCKET_MISSING_MESSAGE);
+              Alert.alert('Rental photo storage', RENTAL_EVIDENCE_BUCKET_MISSING_MESSAGE);
             } else {
               const lines = failures.map((f) => `• Photo ${f.index}: ${f.detail}`);
               const body = [...new Set(lines)].join('\n');
@@ -1838,7 +1926,7 @@ export default function RentalScreen() {
       const c = normalizePickupPhotoCategory(p?.pickupPhotoCategory ?? null);
       if (c === 'item') return 'Item';
       if (c === 'serial') return 'Serial';
-      if (c === 'timestamp_proof') return 'Verification Photo';
+      if (c === 'timestamp_proof') return 'Live possession check';
       if (c === 'additional') return 'Extra';
       return 'Photo';
     },
@@ -2239,7 +2327,20 @@ export default function RentalScreen() {
     rental.price != null || request?.accepted_price != null || request?.acceptedPrice != null;
   const viewerRole: 'owner' | 'renter' =
     me && me === rental.owner_user_id ? 'owner' : me && me === rental.renter_user_id ? 'renter' : 'renter';
-  const relationshipSubtitle = viewerRole === 'owner' ? "You're the owner" : "You're renting";
+  const listingIdForHero = typeof rental.listing_id === 'string' ? rental.listing_id.trim() : '';
+  const cachedListingForHero = listingIdForHero ? getListingById(listingIdForHero) : undefined;
+  const rentalWorkspaceHero = buildRentalWorkspaceHeroModel({
+    rentalId: rental.id,
+    viewerRole,
+    ownerUserId: rental.owner_user_id,
+    renterUserId: rental.renter_user_id,
+    requestTitle: typeof request?.title === 'string' ? request.title : null,
+    requestToolName: typeof request?.toolName === 'string' ? request.toolName : null,
+    listingSnapshot: heroSupplement?.listingSnapshot ?? null,
+    listingTitle: heroSupplement?.listingTitle ?? cachedListingForHero?.name ?? null,
+    listingImages: heroSupplement?.listingImages ?? cachedListingForHero?.images ?? null,
+    offerImages: offerForRental?.offer_images ?? null,
+  });
   const proposalActorId = String(rental.last_proposed_by ?? '').trim();
   const hasPendingProposal = agreementStatus === 'pending' && proposalActorId.length > 0;
   const iProposedLast = Boolean(me && proposalActorId === me);
@@ -2473,12 +2574,12 @@ export default function RentalScreen() {
   const canUploadReturn = viewerRole === 'renter' && returnWorkflowEnabled && !returnCompleted && returnWindow.allowed;
   const returnPhotoUploadBlockedExplanation: string | null = canUploadReturn
     ? null
-    : viewerRole !== 'renter'
-      ? 'Only the renter adds return verification photos.'
+      : viewerRole !== 'renter'
+      ? 'Return photos are added by the renter in the Return section below.'
       : !returnWorkflowEnabled
         ? 'Return details unlock after handoff is confirmed.'
         : returnCompleted
-          ? 'Return is complete. Evidence is read-only.'
+          ? 'Return is complete. Photos are read-only.'
           : returnWindow.helperText ?? 'Return photo upload is not available yet.';
 
   const lifecycleTransactionComplete = lifecyclePhase === 'completed';
@@ -2536,9 +2637,9 @@ export default function RentalScreen() {
     'Return the item in the same condition received, excluding normal wear.',
     'Late fees may apply after the listed grace period.',
     'Damage, loss, missing parts, or non-return may result in charges up to the replacement value.',
-    'Verification photos and rental notes may be used during dispute review.',
+    'Pickup and return photos may help both parties stay aligned if details are unclear later.',
     'Non-returned items may result in additional recovery action.',
-    'Both parties agree that rental evidence and confirmations are part of the rental record.',
+    'Both parties agree that pickup and return photos plus confirmations are part of the rental record.',
   ].join('\n');
 
   const openPhotoViewer = (phase: VerificationPhase, index: number) => {
@@ -3055,7 +3156,7 @@ export default function RentalScreen() {
     if (Platform.OS === 'web') {
       Alert.alert(
         'Camera',
-        'Pickup and return verification photos must be taken live in the OurGarage mobile app.'
+        'Pickup and return photos are taken live in the OurGarage mobile app (not from your listing gallery).'
       );
       return;
     }
@@ -3096,7 +3197,7 @@ export default function RentalScreen() {
       ownerPickupChecklistRequiredDone && ownerPickupPhotoRequirementMet;
     pickupPrimaryFootnote = pickupPrimaryDisabled
       ? !ownerPickupPrepComplete
-        ? 'Upload condition, serial, and verification photos, finish your prep checklist, then wait for the renter to confirm receipt.'
+        ? 'Capture condition, serial, and your live possession check photo, finish your prep checklist, then wait for the renter to confirm receipt.'
         : !bilateralPickupReady
           ? 'Both you and the renter must finish the pickup checklists before you can confirm.'
           : handoffCompleted
@@ -3116,7 +3217,7 @@ export default function RentalScreen() {
     pickupPrimaryDisabled = !reqDone;
     pickupPrimaryOnPress = () => onConfirmPickup();
     pickupPrimaryFootnote = pickupPrimaryDisabled
-      ? 'Complete your checklist after reviewing the owner’s photos and any optional evidence note.'
+      ? 'Complete your checklist after reviewing the owner’s photos and any optional note they left.'
       : '';
   } else {
     pickupPrimaryLabel = 'Waiting for owner approval';
@@ -3133,7 +3234,7 @@ export default function RentalScreen() {
   const pickupRequirementsBannerText =
     viewerRole === 'renter'
       ? 'Skim the photos, then confirm pickup when everything looks right.'
-      : 'Upload condition, serial, and verification photos, finish your prep checklist, then wait for the renter to confirm receipt.';
+      : 'Capture condition, serial, and your live possession check photo, finish your prep checklist, then wait for the renter to confirm receipt.';
 
   let workspaceGuidanceLine: string | null = null;
   if (workspaceStage === 'agreement') {
@@ -3144,7 +3245,9 @@ export default function RentalScreen() {
         ? 'Review the proposed meetup and accept or suggest changes.'
         : hasPendingProposal && iProposedLast
           ? 'Waiting for the other party to respond to your meetup proposal.'
-          : 'Propose pickup, return, and meetup location so both parties can confirm.';
+          : viewerRole === 'owner'
+            ? 'Propose pickup, return, and meetup location so both parties can confirm.'
+            : 'Suggest pickup, return, and meetup location that work for you.';
     }
   } else if (workspaceStage === 'pickup_prep') {
     workspaceGuidanceLine =
@@ -3154,7 +3257,7 @@ export default function RentalScreen() {
   } else if (workspaceStage === 'active') {
     workspaceGuidanceLine = null;
   } else if (workspaceStage === 'return') {
-    workspaceGuidanceLine = 'Finish return photos and checklist, then confirm return when everything is settled.';
+    workspaceGuidanceLine = workspaceReturnGuidanceLine(viewerRole);
   }
 
   const workspaceUxPhase = deriveRentalWorkspaceUxPhase({ rentalStatus, workspaceStage });
@@ -3195,6 +3298,7 @@ export default function RentalScreen() {
     signedAt: rental.signed_at ?? null,
     pickupIso: meetingPickupForHero,
     returnIso: meetingReturnForHero,
+    viewerRole,
   });
 
   const currentWorkspaceEvents = workspaceTimelineEvents.filter((e) => e.tone === 'current');
@@ -3223,24 +3327,26 @@ export default function RentalScreen() {
           const days = Math.floor(ms / 86400000);
           const hours = Math.floor(ms / 3600000);
           if (ms < -36 * 3600000) {
-            parts.push('Return date has passed — finish coordination in Messages.');
+            parts.push(activeReturnCountdownFragment(viewerRole, 'passed'));
           } else if (ms < 0) {
-            parts.push('Return window is here — align drop-off in Messages.');
+            parts.push(activeReturnCountdownFragment(viewerRole, 'here'));
           } else if (hours < 36) {
-            parts.push(`Return in about ${Math.max(1, hours)} hour${hours === 1 ? '' : 's'}.`);
+            parts.push(activeReturnCountdownFragment(viewerRole, 'hours', Math.max(1, hours)));
           } else if (days <= 14) {
-            parts.push(`Return in ${days} day${days === 1 ? '' : 's'}.`);
+            parts.push(activeReturnCountdownFragment(viewerRole, 'days', days));
           }
         }
       }
       const loc = (rental.return_location || rental.meetup_location || '').trim();
-      if (loc) parts.push(`Drop-off: ${loc}`);
-      return parts.length > 0 ? parts.join(' · ') : null;
+      if (loc) {
+        parts.push(viewerRole === 'owner' ? `Drop-off location: ${loc}` : `Drop-off: ${loc}`);
+      }
+      return buildActiveWorkbenchContextLine(viewerRole, parts);
     }
     if (workspaceStage === 'return' && returnWorkflowEnabled) {
       const done = returnItems.filter((i) => Boolean(returnDoneForRole[i.id])).length;
       const photoCount = returnEvidenceDisplay.length;
-      return `Checklist ${done}/${returnItems.length} · ${photoCount} return photo${photoCount === 1 ? '' : 's'}`;
+      return formatReturnWorkbenchContextLine(viewerRole, done, returnItems.length, photoCount);
     }
     if (workspaceStage === 'pickup_prep') {
       return `Checklist ${pickupRequiredDoneCount}/${pickupRequiredEntries.length} required rows`;
@@ -3410,18 +3516,18 @@ export default function RentalScreen() {
                     <Text style={styles.handoffConfirmedMeta}>
                       {pickupConfirmedAt ? formatCompactDateTime(pickupConfirmedAt) : 'Recorded'}
                     </Text>
-                    <Text style={styles.handoffConfirmedLock}>Evidence and notes are locked.</Text>
+                    <Text style={styles.handoffConfirmedLock}>Pickup photos and notes are locked.</Text>
                   </View>
                 ) : viewerRole === 'owner' ? (
                   <>
                     <View style={styles.handoffSection}>
                       <View style={styles.handoffSectionTitleRow}>
                         <Ionicons name="shield-checkmark" size={18} color="#166534" />
-                        <Text style={styles.handoffSectionTitle}>Verification Photos</Text>
+                        <Text style={styles.handoffSectionTitle}>Pickup & handoff photos</Text>
                       </View>
                       <Text style={styles.handoffSectionHelper}>
-                        Each tile saves to a fixed category so nothing gets mixed up. Preview below matches what the
-                        renter sees.
+                        Listing photos can be older — these tiles are current-item photos for this rental. Each tile saves
+                        to a fixed spot so nothing gets mixed up; preview below matches what the renter sees.
                       </Text>
                       <View style={styles.handoffTileRow}>
                         <Pressable
@@ -3494,9 +3600,9 @@ export default function RentalScreen() {
                           {ownerTimestampPhotoComplete ? (
                             <Ionicons name="checkmark-circle" size={24} color="#16a34a" />
                           ) : (
-                            <Ionicons name="shield-checkmark" size={22} color="#166534" />
+                            <Ionicons name="videocam-outline" size={22} color="#166534" />
                           )}
-                          <Text style={styles.handoffTileLabel}>Verification Photo</Text>
+                          <Text style={styles.handoffTileLabel}>Live possession check</Text>
                           <Text
                             style={[
                               styles.handoffTileCount,
@@ -3531,13 +3637,13 @@ export default function RentalScreen() {
                       {showPickupEvidenceExamplePanel ? (
                         <View style={styles.handoffExamplePanel}>
                           <View style={styles.handoffExampleLeft}>
-                            <Text style={styles.handoffExampleTitle}>Verification photo required</Text>
+                            <Text style={styles.handoffExampleTitle}>How your fresh photo should look</Text>
                             <Text style={styles.handoffExampleBody}>
-                              Include a handwritten note showing your username and today&apos;s date next to the item.
+                              Hold a handwritten note with your @username and today&apos;s date next to the full item.
+                              Listing photos may be older — this helps everyone agree what&apos;s on hand before handoff.
                             </Text>
                             <Text style={styles.handoffExampleMuted}>
-                              This helps confirm the photo was taken for this rental and protects both parties in case of
-                              disputes.
+                              Small step that keeps rentals transparent and helps renters feel confident.
                             </Text>
                           </View>
                           <Pressable
@@ -3548,7 +3654,7 @@ export default function RentalScreen() {
                               pressed && styles.handoffExampleImageWrapPressed,
                             ]}
                             accessibilityRole="button"
-                            accessibilityLabel="View enlarged verification photo example"
+                            accessibilityLabel="View enlarged live possession check example"
                           >
                             <Image
                               source={PICKUP_VERIFICATION_EXAMPLE}
@@ -3568,7 +3674,7 @@ export default function RentalScreen() {
                       <Text style={styles.handoffOwnerPreviewHead}>Preview</Text>
                       <Text style={styles.handoffOwnerPreviewSub}>
                         Same sections and order as the renter&apos;s &quot;Owner Pickup Evidence&quot; — item,
-                        serial/model, verification photo, then any additional photos.
+                        serial/model, live possession check, then any additional photos.
                       </Text>
 
                       <Text style={styles.handoffEvidenceGroupLabel}>Item Photos</Text>
@@ -3639,10 +3745,10 @@ export default function RentalScreen() {
                         </ScrollView>
                       ) : (
                         <View style={styles.handoffEvidenceEmptyBlock}>
-                          <Text style={styles.handoffEvidenceEmptyTitle}>No verification photo yet</Text>
+                          <Text style={styles.handoffEvidenceEmptyTitle}>No live possession check yet</Text>
                           <Text style={styles.handoffEvidenceEmptyBody}>
-                            Use the Verification Photo tile (required). It stays in this section regardless of when you
-                            uploaded it.
+                            Use the Live possession check tile (required). It stays in this section — a fresh photo with
+                            @username + date, separate from listing gallery shots.
                           </Text>
                         </View>
                       )}
@@ -3856,7 +3962,7 @@ export default function RentalScreen() {
                         >
                           <Text style={styles.pickupChecklistCompleteTitle}>✅ Pickup prep complete</Text>
                           <Text style={styles.pickupChecklistCompleteSub}>
-                            Your evidence and checklist are ready for renter confirmation.
+                            Your photos and checklist are ready for renter confirmation.
                           </Text>
                         </Pressable>
                       ) : (
@@ -3935,7 +4041,7 @@ export default function RentalScreen() {
                         <Text style={styles.handoffSectionTitle}>Owner Pickup Evidence</Text>
                       </View>
                       <Text style={styles.handoffSectionHelper}>
-                        Quick review — confirm pickup when you&apos;re satisfied with the evidence.
+                        Quick review — confirm pickup when you&apos;re satisfied with the photos.
                       </Text>
 
                       {showPickupEvidenceExamplePanel ? (
@@ -3944,9 +4050,10 @@ export default function RentalScreen() {
                             <Ionicons name="shield-checkmark" size={22} color="#166534" />
                           </View>
                           <View style={styles.handoffExampleRenterCompactTextCol}>
-                            <Text style={styles.handoffExampleRenterCompactTitle}>Verification photo included</Text>
-                            <Text style={styles.handoffExampleRenterCompactBody} numberOfLines={2}>
-                              Verify the username and date match this rental before confirming receipt.
+                            <Text style={styles.handoffExampleRenterCompactTitle}>Live possession check</Text>
+                            <Text style={styles.handoffExampleRenterCompactBody} numberOfLines={3}>
+                              Listing photos can be older; this should be a fresh current-item photo. Double-check @username
+                              and today&apos;s date match this rental before you confirm receipt.
                             </Text>
                           </View>
                           <Pressable
@@ -3957,7 +4064,7 @@ export default function RentalScreen() {
                               pressed && styles.handoffExampleRenterCompactThumbPressed,
                             ]}
                             accessibilityRole="button"
-                            accessibilityLabel="View enlarged verification photo example"
+                            accessibilityLabel="View enlarged live possession check example"
                           >
                             <Image
                               source={PICKUP_VERIFICATION_EXAMPLE}
@@ -3992,10 +4099,10 @@ export default function RentalScreen() {
                         </ScrollView>
                       ) : (
                         <View style={styles.handoffEvidenceEmptyBlock}>
-                          <Text style={styles.handoffEvidenceEmptyTitle}>Waiting for verification photo</Text>
+                          <Text style={styles.handoffEvidenceEmptyTitle}>Waiting for live possession check</Text>
                           <Text style={styles.handoffEvidenceEmptyBody}>
-                            The owner must upload a verification photo (username and date visible) before pickup can be
-                            confirmed.
+                            The owner needs a fresh current-item photo with @username and today&apos;s date visible before
+                            pickup can be confirmed — listing photos alone aren&apos;t enough for this step.
                           </Text>
                         </View>
                       )}
@@ -4010,10 +4117,10 @@ export default function RentalScreen() {
                         />
                       ) : (
                         <View style={styles.handoffEvidenceEmptyBlock}>
-                          <Text style={styles.handoffEvidenceEmptyTitle}>Waiting for owner uploads</Text>
+                          <Text style={styles.handoffEvidenceEmptyTitle}>Waiting for owner photos</Text>
                           <Text style={styles.handoffEvidenceEmptyBody}>
-                            The owner must upload condition, serial, and verification photos before pickup can be
-                            confirmed.
+                            The owner still needs condition, serial, and their live possession check photo before pickup can
+                            be confirmed.
                           </Text>
                         </View>
                       )}
@@ -4100,9 +4207,9 @@ export default function RentalScreen() {
                           accessibilityRole="button"
                           accessibilityState={{ expanded: false }}
                         >
-                          <Text style={styles.pickupChecklistCompleteTitle}>✅ Pickup verification complete</Text>
+                          <Text style={styles.pickupChecklistCompleteTitle}>✅ Pickup checklist complete</Text>
                           <Text style={styles.pickupChecklistCompleteSub}>
-                            You reviewed the owner&apos;s evidence and confirmed the item.
+                            You reviewed the owner&apos;s photos and confirmed the item.
                           </Text>
                         </Pressable>
                       ) : (
@@ -4219,9 +4326,7 @@ export default function RentalScreen() {
               ) : !returnExpanded ? (
                 <>
                   <Text style={styles.verificationCollapsedMeta}>
-                    {returnCompletedForCard
-                      ? 'Return workflow complete with verification evidence recorded.'
-                      : 'Track return checklist, photos, and final confirmation.'}
+                    {returnSectionCollapsedMeta(viewerRole, returnCompletedForCard)}
                   </Text>
                   {!returnCompleted && !returnWindow.allowed && returnWindow.helperText ? (
                     <View style={[styles.handoffInfoBanner, styles.handoffInfoBannerRenter]}>
@@ -4241,12 +4346,9 @@ export default function RentalScreen() {
                   <View style={styles.handoffSection}>
                     <View style={styles.handoffSectionTitleRow}>
                       <Ionicons name="images-outline" size={18} color={ui.primary} />
-                      <Text style={styles.handoffSectionTitle}>Return evidence</Text>
+                      <Text style={styles.handoffSectionTitle}>Return photos</Text>
                     </View>
-                    <Text style={styles.handoffSectionHelper}>
-                      Upload clear return photos. They stay visible only to you and the other party until the rental is
-                      complete.
-                    </Text>
+                    <Text style={styles.handoffSectionHelper}>{returnPhotosSectionHelper(viewerRole)}</Text>
                   <VerificationPhotosSubsection
                     photos={returnEvidenceDisplay}
                     uploading={uploadingEvidence}
@@ -4262,15 +4364,17 @@ export default function RentalScreen() {
                   />
                   <Text style={styles.photoWindowHelper}>
                     {returnCompleted
-                      ? 'Return evidence is locked after return confirmation is completed.'
-                      : 'Return evidence remains editable until return confirmation is completed.'}
+                      ? 'Return photos are locked after return confirmation is completed.'
+                      : 'Return photos stay editable until return confirmation is completed.'}
                   </Text>
                   </View>
                   <View style={styles.handoffSection}>
                     <View style={styles.handoffRespHeader}>
                       <View style={styles.handoffRespTitleRow}>
                         <Ionicons name="list-outline" size={18} color={ui.textSecondary} />
-                        <Text style={styles.handoffSectionTitle}>Your responsibilities</Text>
+                        <Text style={styles.handoffSectionTitle}>
+                          {returnResponsibilitiesSectionTitle(viewerRole)}
+                        </Text>
                       </View>
                     </View>
                   <View style={styles.verificationSubheadRow}>
@@ -4367,19 +4471,26 @@ export default function RentalScreen() {
                     ))
                   )}
                   </View>
-                  <View style={styles.notesGroup}>
-                    <Text style={styles.notesGroupTitle}>Renter Notes</Text>
-                    <NoteList notes={renterNotes} />
-                    <AddNoteInput
-                      value={renterNoteDraft}
-                      onChangeText={setRenterNoteDraft}
-                      onAdd={onAddRenterNote}
-                      disabled={renterInputDisabled}
-                      disabledLabel="Renter Notes Locked 🔒"
-                      loading={addingRenterNote}
-                      placeholder="Add renter note during active rental…"
-                    />
-                  </View>
+                  {viewerRole === 'renter' ? (
+                    <View style={styles.notesGroup}>
+                      <Text style={styles.notesGroupTitle}>Your notes</Text>
+                      <NoteList notes={renterNotes} />
+                      <AddNoteInput
+                        value={renterNoteDraft}
+                        onChangeText={setRenterNoteDraft}
+                        onAdd={onAddRenterNote}
+                        disabled={renterInputDisabled}
+                        disabledLabel="Notes locked 🔒"
+                        loading={addingRenterNote}
+                        placeholder="Add a note about the return or item condition…"
+                      />
+                    </View>
+                  ) : renterNotes.length > 0 ? (
+                    <View style={styles.notesGroup}>
+                      <Text style={styles.notesGroupTitle}>Renter notes</Text>
+                      <NoteList notes={renterNotes} />
+                    </View>
+                  ) : null}
                 </>
               )}
             </Pressable>
@@ -4404,8 +4515,7 @@ export default function RentalScreen() {
         >
           <View style={styles.contentWrap}>
             <BackHeader
-              title={request?.title || 'Rental Details'}
-              subtitle={relationshipSubtitle}
+              title={rentalWorkspaceHero.title}
               onBack={() => router.back()}
               rightAccessory={
                 <View style={styles.topChatIconSlot}>
@@ -4432,9 +4542,10 @@ export default function RentalScreen() {
             />
 
             <RentalWorkspaceHero
-              thumbUri={heroThumbUri}
-              title={String(request?.title ?? 'Rental')}
-              displayCode={`Rental ${formatRentalWorkspaceDisplayCode(rental.id)}`}
+              thumbUri={rentalWorkspaceHero.thumbUri}
+              title={rentalWorkspaceHero.title}
+              rentalCodeLabel={rentalWorkspaceHero.rentalCodeLabel}
+              relationshipLine={rentalWorkspaceHero.relationshipLine}
               uxPhase={workspaceUxPhase}
               chipLabel={workspaceHeroChipLabel}
               dateRangeLine={heroDateRangeLine}
@@ -4448,7 +4559,7 @@ export default function RentalScreen() {
               </View>
             ) : null}
 
-            <RentalWorkspaceStageWorkbench model={primaryWorkspaceStageModel} />
+            <RentalWorkspaceStageWorkbench model={primaryWorkspaceStageModel} viewerRole={viewerRole} />
 
             <RentalWorkspaceUpdatesSection
               activityLine={workspaceUpdatesActivityLine}
@@ -4795,7 +4906,7 @@ export default function RentalScreen() {
             {agreementStatus === 'confirmed' && lifecyclePhase === 'active' ? (
               <View onLayout={onLifecycleSectionLayout('active')}>
               <View style={[styles.prepareForReturnCard, !isTabletMargins && styles.cardPadPhone]}>
-                <Text style={styles.prepareForReturnTitle}>Prepare for Return</Text>
+                <Text style={styles.prepareForReturnTitle}>{activePrepareCardTitle(viewerRole)}</Text>
                 <View style={styles.prepareForReturnRow}>
                   <Text style={styles.metaLabel}>Return time</Text>
                   <Text style={styles.prepareForReturnValue}>
@@ -4808,17 +4919,18 @@ export default function RentalScreen() {
                     {rental.return_location || rental.meetup_location || 'Not set'}
                   </Text>
                 </View>
-                <Text style={styles.prepareForReturnRemindersHead}>Before return</Text>
-                <Text style={styles.prepareReminderLine}>· Recharge battery if needed</Text>
-                <Text style={styles.prepareReminderLine}>· Clean the item if your agreement expects it</Text>
-                <Text style={styles.prepareReminderLine}>· Include all accessories</Text>
-                <Text style={styles.prepareReminderLine}>· Plan return photos for the verification step</Text>
+                <Text style={styles.prepareForReturnRemindersHead}>
+                  {activePrepareRemindersHead(viewerRole)}
+                </Text>
+                {activePrepareReminderLines(viewerRole).map((line) => (
+                  <Text key={line} style={styles.prepareReminderLine}>
+                    · {line}
+                  </Text>
+                ))}
               </View>
               <View style={styles.rentalActiveHelpCallout}>
                 <Ionicons name="information-circle-outline" size={18} color="rgba(37, 99, 235, 0.8)" />
-                <Text style={styles.rentalActiveHelpCalloutText}>
-                  Need help? Open Messages—meetup notes, photos, and chat stay together for this rental.
-                </Text>
+                <Text style={styles.rentalActiveHelpCalloutText}>{activeRentalHelpCallout(viewerRole)}</Text>
               </View>
               </View>
             ) : null}
@@ -4852,7 +4964,7 @@ export default function RentalScreen() {
           <RentalDetailsCard
             ref={proposalEditorRef}
             rental={proposalEditorRental}
-            itemName={request?.title || 'Rental'}
+            itemName={rentalWorkspaceHero.title}
             durationLabel={computedDurationLabel}
             agreementBaselineDurationHours={agreementBaselineDurationHoursForProposals}
             isRenter={viewerRole === 'renter'}
@@ -4934,8 +5046,8 @@ export default function RentalScreen() {
               />
               <Text style={styles.exampleModalCaption}>
                 {viewerRole === 'owner'
-                  ? "Include a handwritten note showing your username and today's date next to the item. Save it as your Verification Photo. This helps confirm the photo was taken for this rental and protects both parties in case of disputes."
-                  : 'Confirm the username and date look reasonable and match what you expect from this rental before you sign off.'}
+                  ? "Take a fresh verification photo: the full item with your handwritten @username and today's date visible beside it. Listing photos can be older — this one confirms the gear is with you now for this handoff."
+                  : 'Confirm the @username and date look handwritten, current, and match what you expect before you sign off.'}
               </Text>
             </View>
           </View>
@@ -5894,6 +6006,13 @@ const styles = StyleSheet.create({
     marginTop: 10,
     marginBottom: 4,
   },
+  verificationSubsectionLive: {
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(124, 58, 237, 0.22)',
+    backgroundColor: 'rgba(124, 58, 237, 0.04)',
+  },
   verificationSubhead: {
     fontSize: 11,
     fontWeight: '700',
@@ -5919,10 +6038,10 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   verificationSubtext: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '500',
-    color: ui.textMuted,
-    lineHeight: 14,
+    color: ui.textSecondary,
+    lineHeight: 15,
     marginBottom: 8,
   },
   photoTileRow: {
@@ -5984,6 +6103,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  photoTileAddLive: {
+    borderColor: 'rgba(124, 58, 237, 0.45)',
+    backgroundColor: 'rgba(124, 58, 237, 0.07)',
   },
   photoTileAddText: {
     fontSize: 22,
@@ -7001,6 +7124,13 @@ const styles = StyleSheet.create({
   handoffTimestampSectionHeading: {
     marginTop: 9,
     marginBottom: 5,
+  },
+  handoffVerificationSectionSub: {
+    fontSize: 12,
+    color: ui.textSecondary,
+    lineHeight: 17,
+    marginTop: 6,
+    marginBottom: 4,
   },
   handoffTimestampSectionTitleRow: {
     flexDirection: 'row',

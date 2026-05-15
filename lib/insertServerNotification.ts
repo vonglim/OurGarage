@@ -11,7 +11,8 @@ export type ServerNotificationType =
   | 'offer_accepted'
   | 'message'
   | 'new_offer' /* legacy */
-  | 'new_message' /* legacy */;
+  | 'new_message' /* legacy */
+  | 'rental_confirmed';
 
 function dataPayload(
   requestId: string | null,

@@ -30,6 +30,7 @@ export default function MakeOfferListingScreen() {
   const currentUserId = useAuthUserId();
   const [ownerUserId, setOwnerUserId] = useState('');
   const [existingListingOfferId, setExistingListingOfferId] = useState<string | null>(null);
+  const [listingOfferClosedMessage, setListingOfferClosedMessage] = useState<string | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -66,21 +67,44 @@ export default function MakeOfferListingScreen() {
   useEffect(() => {
     if (!listingId || !currentUserId.trim() || !isSupabaseConfigured()) {
       setExistingListingOfferId(null);
+      setListingOfferClosedMessage(null);
       return;
     }
     let cancelled = false;
     const sb = getSupabase();
     void sb
       .from('offers')
-      .select('id')
+      .select('id, negotiation_locked, status')
       .eq('listing_id', listingId)
       .eq('user_id', currentUserId.trim())
       .maybeSingle()
       .then(({ data }) => {
         if (cancelled) return;
-        const raw = data as { id?: unknown } | null;
+        const raw = data as {
+          id?: unknown;
+          negotiation_locked?: unknown;
+          status?: unknown;
+        } | null;
         const id = raw && typeof raw.id === 'string' ? raw.id.trim() : '';
         setExistingListingOfferId(id !== '' ? id : null);
+        if (id === '') {
+          setListingOfferClosedMessage(null);
+          return;
+        }
+        const locked =
+          raw?.negotiation_locked === true ||
+          raw?.negotiation_locked === 't' ||
+          (raw as { negotiationLocked?: unknown }).negotiationLocked === true;
+        const st = typeof raw?.status === 'string' ? raw.status.trim().toLowerCase() : '';
+        if (locked || st === 'declined' || st === 'closed' || st === 'accepted' || st === 'pending_confirmation') {
+          setListingOfferClosedMessage(
+            st === 'accepted'
+              ? 'This offer was already accepted. Open your rental from Activity.'
+              : 'Negotiation on this listing offer has closed.'
+          );
+        } else {
+          setListingOfferClosedMessage(null);
+        }
       });
     return () => {
       cancelled = true;
@@ -133,6 +157,18 @@ export default function MakeOfferListingScreen() {
       <ScreenWrapper style={{ backgroundColor: ui.background, flex: 1 }}>
         <ScreenEntrance style={{ flex: 1, justifyContent: 'center', padding: 24 }}>
           <Text style={{ color: ui.textSecondary, textAlign: 'center' }}>Resolving host…</Text>
+        </ScreenEntrance>
+      </ScreenWrapper>
+    );
+  }
+
+  if (listingOfferClosedMessage) {
+    return (
+      <ScreenWrapper style={{ backgroundColor: ui.background, flex: 1 }}>
+        <ScreenEntrance style={{ flex: 1, justifyContent: 'center', padding: 24 }}>
+          <Text style={{ color: ui.textSecondary, textAlign: 'center', fontSize: 16, lineHeight: 22 }}>
+            {listingOfferClosedMessage}
+          </Text>
         </ScreenEntrance>
       </ScreenWrapper>
     );

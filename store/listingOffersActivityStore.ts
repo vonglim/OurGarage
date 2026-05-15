@@ -15,6 +15,10 @@ export type ListingOfferActivityRow = {
   negotiationDeliveryMethod: NegotiationDeliveryMethod | null;
   negotiationDeliveryFee: number | null;
   posterCounterCount: number;
+  negotiationDeclineTotal: number;
+  negotiationLocked: boolean;
+  lastUpdatedBy: string;
+  lastNegotiationEventKind: string | null;
   snapshot: ListingIntentSnapshot | null;
   renterDisplayName: string;
 };

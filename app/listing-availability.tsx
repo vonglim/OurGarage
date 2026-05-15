@@ -116,12 +116,9 @@ export default function ListingAvailabilityScreen() {
         <Text style={styles.lead}>
           Tap a day to block or unblock. Booked and pending stays are read-only.
         </Text>
-        <View style={styles.legend}>
-          <LegendDot color="rgba(15, 118, 110, 0.45)" label="Available" />
-          <LegendDot color="rgba(107, 114, 128, 0.75)" label="Blocked" />
-          <LegendDot color="#F59E0B" label="Pending" />
-          <LegendDot color="rgba(55, 65, 81, 0.85)" label="Booked" />
-        </View>
+        <Text style={styles.legendHint}>
+          Open days are plain. Soft pill = pending hold · red strikethrough = booked · gray strikethrough = blackout.
+        </Text>
         <View style={styles.calWrap}>
           {busy ? (
             <View style={styles.busy}>
@@ -134,15 +131,6 @@ export default function ListingAvailabilityScreen() {
         <View style={{ height: insets.bottom + 8 }} />
       </ScreenEntrance>
     </ScreenWrapper>
-  );
-}
-
-function LegendDot({ color, label }: { color: string; label: string }) {
-  return (
-    <View style={styles.legendItem}>
-      <View style={[styles.legendDot, { backgroundColor: color }]} />
-      <Text style={styles.legendLabel}>{label}</Text>
-    </View>
   );
 }
 
@@ -172,26 +160,13 @@ const styles = StyleSheet.create({
     marginBottom: ui.spaceSm,
     paddingHorizontal: 4,
   },
-  legend: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    marginBottom: ui.spaceSm,
-  },
-  legendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  legendDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  legendLabel: {
+  legendHint: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '500',
     color: ui.textSecondary,
+    lineHeight: 19,
+    marginBottom: ui.spaceSm,
+    paddingHorizontal: 2,
   },
   calWrap: {
     flex: 1,

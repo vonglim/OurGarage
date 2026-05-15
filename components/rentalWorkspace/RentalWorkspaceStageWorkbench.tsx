@@ -8,9 +8,14 @@ import type {
   RentalWorkspaceBenchTone,
   RentalWorkspacePrimaryStageModel,
 } from '@/lib/rentalWorkspacePrimaryStageModel';
+import {
+  rentalWorkbenchFocusHeadline,
+  type RentalWorkspaceViewerRole,
+} from '@/lib/rentalWorkspaceRoleCopy';
 
 export type RentalWorkspaceStageWorkbenchProps = {
   model: RentalWorkspacePrimaryStageModel;
+  viewerRole?: RentalWorkspaceViewerRole;
   children?: React.ReactNode;
   onLayout?: (e: LayoutChangeEvent) => void;
 };
@@ -80,29 +85,13 @@ function toneIcon(tone: RentalWorkspaceBenchTone): keyof typeof Ionicons.glyphMa
   }
 }
 
-function nextStepTitle(tone: RentalWorkspaceBenchTone): string {
-  switch (tone) {
-    case 'coordination':
-      return 'Your next step';
-    case 'pickup':
-      return 'Handoff checklist';
-    case 'active':
-      return 'While it’s out';
-    case 'return':
-      return 'Close out return';
-    case 'closure':
-      return 'Summary';
-    default:
-      return 'Details';
-  }
-}
-
 /**
  * Dominant “rental workspace” surface: one evolving stage card + optional embedded workflow body.
  * Business logic stays in the parent; this component is layout + hierarchy only.
  */
 export function RentalWorkspaceStageWorkbench({
   model,
+  viewerRole = 'renter',
   children,
   onLayout,
 }: RentalWorkspaceStageWorkbenchProps) {
@@ -110,6 +99,7 @@ export function RentalWorkspaceStageWorkbench({
   const tone = model.benchTone;
   const shell = TONE_SHELL[tone] ?? TONE_SHELL.neutral;
   const flatInner = tone === 'active' || tone === 'pickup' || tone === 'return';
+  const focusHeadline = rentalWorkbenchFocusHeadline(tone, viewerRole);
 
   return (
     <View
@@ -138,12 +128,14 @@ export function RentalWorkspaceStageWorkbench({
       ) : null}
       {model.benchTone === 'active' ? (
         <Text style={styles.extensionHint} numberOfLines={2}>
-          Need more time? Extensions aren’t automatic — agree any new dates in Messages.
+          {viewerRole === 'owner'
+            ? 'Need more time? Any extension must be agreed in Messages with the renter.'
+            : 'Need more time? Extensions aren’t automatic — agree any new dates in Messages.'}
         </Text>
       ) : null}
       {hasBody ? (
         <View style={[styles.nextStepBox, flatInner && styles.nextStepBoxFlat]}>
-          <Text style={styles.nextStepKicker}>{nextStepTitle(tone)}</Text>
+          <Text style={styles.nextStepKicker}>{focusHeadline}</Text>
           <View style={styles.body}>{children}</View>
         </View>
       ) : null}

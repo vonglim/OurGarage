@@ -9,7 +9,8 @@ import type { RentalWorkspaceUxPhase } from '@/lib/rentalWorkspaceUxPhase';
 export type RentalWorkspaceHeroProps = {
   thumbUri: string | null;
   title: string;
-  displayCode: string;
+  rentalCodeLabel: string;
+  relationshipLine: string;
   uxPhase: RentalWorkspaceUxPhase;
   chipLabel: string;
   dateRangeLine: string;
@@ -39,12 +40,14 @@ function badgePalette(phase: RentalWorkspaceUxPhase) {
 export function RentalWorkspaceHero({
   thumbUri,
   title,
-  displayCode,
+  rentalCodeLabel,
+  relationshipLine,
   uxPhase,
   chipLabel,
   dateRangeLine,
 }: RentalWorkspaceHeroProps) {
   const chip = badgePalette(uxPhase);
+  const displayTitle = title.trim() || 'Rental item';
 
   return (
     <View style={styles.card}>
@@ -53,25 +56,28 @@ export function RentalWorkspaceHero({
           <Image source={{ uri: thumbUri }} style={styles.thumb} contentFit="cover" accessibilityIgnoresInvertColors />
         ) : (
           <View style={styles.thumbPh} accessibilityElementsHidden>
-            <Ionicons name="cube-outline" size={18} color={ui.textSecondary} />
+            <Ionicons name="cube-outline" size={20} color={ui.textSecondary} />
           </View>
         )}
         <View style={styles.textCol}>
-          <View style={styles.titleRow}>
-            <Text style={styles.title} numberOfLines={2}>
-              {title.trim() || 'Rental'}
-            </Text>
+          <Text style={styles.title} numberOfLines={2}>
+            {displayTitle}
+          </Text>
+          <Text style={styles.dates} numberOfLines={1}>
+            {dateRangeLine}
+          </Text>
+          <View style={styles.chipRow}>
             <View style={[styles.badge, { backgroundColor: chip.bg, borderColor: chip.border }]}>
               <Text style={[styles.badgeText, { color: chip.fg }]} numberOfLines={1}>
                 {chipLabel}
               </Text>
             </View>
           </View>
-          <Text style={styles.code} numberOfLines={1}>
-            {displayCode}
+          <Text style={styles.relationship} numberOfLines={1}>
+            {relationshipLine}
           </Text>
-          <Text style={styles.dates} numberOfLines={1}>
-            {dateRangeLine}
+          <Text style={styles.code} numberOfLines={1}>
+            {rentalCodeLabel}
           </Text>
         </View>
       </View>
@@ -84,49 +90,55 @@ const styles = StyleSheet.create({
     width: '100%',
     backgroundColor: '#FFFFFF',
     borderRadius: ui.radiusCard,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     marginBottom: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(15, 23, 42, 0.08)',
     ...shadowCard,
   },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  thumb: { width: 44, height: 44, borderRadius: 10, backgroundColor: ui.surfaceInput },
+  row: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  thumb: { width: 52, height: 52, borderRadius: 12, backgroundColor: ui.surfaceInput },
   thumbPh: {
-    width: 44,
-    height: 44,
-    borderRadius: 10,
+    width: 52,
+    height: 52,
+    borderRadius: 12,
     backgroundColor: ui.surfaceInput,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: ui.border,
   },
-  textCol: { flex: 1, minWidth: 0 },
-  titleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  textCol: { flex: 1, minWidth: 0, gap: 2 },
   title: {
-    flex: 1,
-    fontSize: 15,
+    fontSize: 17,
     fontWeight: '800',
     color: ui.textPrimary,
-    letterSpacing: -0.2,
-    lineHeight: 19,
+    letterSpacing: -0.3,
+    lineHeight: 21,
   },
+  dates: { fontSize: 12, fontWeight: '700', color: ui.textPrimary, marginTop: 1 },
+  chipRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
   badge: {
     paddingVertical: 3,
     paddingHorizontal: 8,
     borderRadius: 999,
     borderWidth: StyleSheet.hairlineWidth,
-    maxWidth: '38%',
+    alignSelf: 'flex-start',
   },
   badgeText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.15, textAlign: 'center' },
-  code: {
-    marginTop: 2,
-    fontSize: 11,
+  relationship: {
+    marginTop: 4,
+    fontSize: 12,
     fontWeight: '600',
     color: ui.textSecondary,
-    letterSpacing: 0.2,
+    letterSpacing: -0.1,
   },
-  dates: { marginTop: 2, fontSize: 12, fontWeight: '700', color: ui.textPrimary },
+  code: {
+    marginTop: 1,
+    fontSize: 10,
+    fontWeight: '600',
+    color: 'rgba(100, 116, 139, 0.9)',
+    letterSpacing: 0.15,
+  },
 });

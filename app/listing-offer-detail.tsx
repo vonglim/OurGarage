@@ -14,6 +14,8 @@ import { hydrateListingOffersFromSupabase } from '@/lib/hydrateListingOffersFrom
 import { fetchListingOfferDetail, ownerSetListingOfferStatus } from '@/lib/listingOfferLifecycleActions';
 import { formatUsd } from '@/lib/money';
 import { formatIsoDateMedium } from '@/lib/listingAvailabilityDates';
+import { NEGOTIATION_MAX_DECLINES_BEFORE_LOCK } from '@/lib/negotiationLifecycleConstants';
+import { MAX_POSTER_COUNTER_OFFERS } from '@/lib/negotiationOfferConstants';
 import { getSupabase } from '@/lib/supabase';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 
@@ -93,6 +95,43 @@ export default function ListingOfferDetailScreen() {
   const rentalEnd =
     row && typeof row.rental_end_date === 'string' ? row.rental_end_date.slice(0, 10) : '';
 
+  const listingIdForNav = row && typeof row.listing_id === 'string' ? row.listing_id.trim() : '';
+  const lastUpdatedBy =
+    row && typeof row.last_updated_by === 'string' ? row.last_updated_by.trim() : '';
+  const renterUserId = row && typeof row.user_id === 'string' ? row.user_id.trim() : '';
+  const negotiationLocked =
+    row?.negotiation_locked === true ||
+    row?.negotiation_locked === 't' ||
+    row?.negotiationLocked === true;
+  const posterCounterCount = useMemo(() => {
+    const pc = row?.poster_counter_count ?? row?.posterCounterCount;
+    if (typeof pc === 'number' && Number.isFinite(pc)) return Math.max(0, Math.floor(pc));
+    return 0;
+  }, [row]);
+  const negotiationDeclineTotal = useMemo(() => {
+    const d = row?.negotiation_decline_total ?? row?.negotiationDeclineTotal;
+    if (typeof d === 'number' && Number.isFinite(d)) return Math.max(0, Math.floor(d));
+    return 0;
+  }, [row]);
+
+  const ownerCanRespond =
+    isOwner &&
+    status === 'pending' &&
+    !negotiationLocked &&
+    lastUpdatedBy !== '' &&
+    lastUpdatedBy === renterUserId;
+
+  const countersLeft = Math.max(0, MAX_POSTER_COUNTER_OFFERS - posterCounterCount);
+  const declinesLeft = Math.max(0, NEGOTIATION_MAX_DECLINES_BEFORE_LOCK - negotiationDeclineTotal);
+
+  const renterShouldRevise =
+    isRenter &&
+    status === 'pending' &&
+    !negotiationLocked &&
+    ownerId !== '' &&
+    lastUpdatedBy === ownerId &&
+    listingIdForNav !== '';
+
   const onAccept = useCallback(async () => {
     setBusy(true);
     const r = await ownerSetListingOfferStatus(offerId, 'accepted');
@@ -113,13 +152,18 @@ export default function ListingOfferDetailScreen() {
       showFeedbackToast(r.message ?? 'Could not decline.');
       return;
     }
-    showFeedbackToast('Offer declined');
+    showFeedbackToast(
+      r.negotiationClosed
+        ? 'Negotiation closed — no more offers on this thread.'
+        : 'Offer declined. They can send another offer.'
+    );
     void load();
   }, [offerId, load]);
 
   const onCounter = useCallback(() => {
-    showFeedbackToast('Counter offers will be available soon.');
-  }, []);
+    if (!ownerCanRespond || countersLeft <= 0) return;
+    router.push({ pathname: '/listing-counter-offer', params: { offerId } });
+  }, [ownerCanRespond, countersLeft, router, offerId]);
 
   if (!offerId) {
     return (
@@ -144,7 +188,15 @@ export default function ListingOfferDetailScreen() {
             contentContainerStyle={{ paddingBottom: 32 + insets.bottom }}
             keyboardShouldPersistTaps="handled"
           >
-            <Text style={styles.statusPill}>{status || 'pending'}</Text>
+            <Text style={styles.statusPill}>
+              {negotiationLocked || status === 'declined' || status === 'closed'
+                ? 'Negotiation closed'
+                : status === 'pending' && row?.last_negotiation_event_kind === 'proposal_declined'
+                  ? 'Offer declined'
+                  : status === 'pending' && row?.last_negotiation_event_kind === 'poster_counter'
+                    ? 'Counter sent'
+                    : status || 'pending'}
+            </Text>
             <Text style={styles.price}>{formatUsd(price)}</Text>
             {rentalStart && rentalEnd ? (
               <Text style={styles.datesLine}>
@@ -152,6 +204,19 @@ export default function ListingOfferDetailScreen() {
               </Text>
             ) : null}
             <Text style={styles.hint}>Negotiation thread</Text>
+            {status === 'pending' && !negotiationLocked ? (
+              <Text style={styles.turnHint}>
+                {isOwner && ownerCanRespond
+                  ? `Waiting on you · ${countersLeft} counter${countersLeft === 1 ? '' : 's'} left · ${declinesLeft} decline${
+                      declinesLeft === 1 ? '' : 's'
+                    } left before this thread closes`
+                  : isOwner
+                    ? 'Waiting on the renter to update their offer.'
+                    : lastUpdatedBy === ownerId
+                      ? 'The host countered — you can send a revised offer.'
+                      : 'Waiting on the host.'}
+              </Text>
+            ) : null}
             {messages.length === 0 ? (
               <Text style={styles.muted}>No messages yet.</Text>
             ) : (
@@ -169,7 +234,7 @@ export default function ListingOfferDetailScreen() {
                 );
               })
             )}
-            {isOwner && status === 'pending' ? (
+            {ownerCanRespond ? (
               <View style={styles.ownerRow}>
                 <Pressable
                   onPress={() => void onAccept()}
@@ -179,22 +244,41 @@ export default function ListingOfferDetailScreen() {
                   <Text style={styles.primaryBtnText}>Accept</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => void onDecline()}
-                  disabled={busy}
-                  style={({ pressed }) => [styles.secondaryBtn, pressed && { opacity: 0.9 }, busy && { opacity: 0.6 }]}
-                >
-                  <Text style={styles.secondaryBtnText}>Decline</Text>
-                </Pressable>
-                <Pressable
                   onPress={onCounter}
-                  style={({ pressed }) => [styles.secondaryBtn, pressed && { opacity: 0.9 }]}
+                  disabled={busy || countersLeft <= 0}
+                  style={({ pressed }) => [
+                    styles.secondaryBtn,
+                    pressed && { opacity: 0.9 },
+                    (busy || countersLeft <= 0) && { opacity: 0.45 },
+                  ]}
                 >
                   <Text style={styles.secondaryBtnText}>Counter</Text>
                 </Pressable>
+                <Pressable
+                  onPress={() => void onDecline()}
+                  disabled={busy}
+                  style={({ pressed }) => [styles.declineBtn, pressed && { opacity: 0.85 }, busy && { opacity: 0.5 }]}
+                >
+                  <Text style={styles.declineBtnText}>Decline</Text>
+                </Pressable>
               </View>
             ) : null}
-            {isRenter ? (
-              <Text style={styles.renterHint}>You’ll see updates here when the host responds.</Text>
+            {renterShouldRevise ? (
+              <Pressable
+                onPress={() =>
+                  router.push({ pathname: '/make-offer-listing', params: { listingId: listingIdForNav } })
+                }
+                style={({ pressed }) => [styles.primaryBtn, pressed && { opacity: 0.92 }]}
+              >
+                <Text style={styles.primaryBtnText}>Update your offer</Text>
+              </Pressable>
+            ) : null}
+            {isRenter && !renterShouldRevise ? (
+              <Text style={styles.renterHint}>
+                {negotiationLocked
+                  ? 'Negotiation on this thread has ended.'
+                  : 'You’ll see updates here when the host responds.'}
+              </Text>
             ) : null}
           </ScrollView>
         )}
@@ -245,6 +329,12 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 14,
     color: ui.textSecondary,
+    marginBottom: 6,
+  },
+  turnHint: {
+    fontSize: 14,
+    color: ui.textSecondary,
+    lineHeight: 20,
     marginBottom: ui.spaceMd,
   },
   msgBubble: {
@@ -297,6 +387,15 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: ui.primary,
+  },
+  declineBtn: {
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  declineBtnText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: ui.textMuted,
   },
   renterHint: {
     marginTop: ui.spaceMd,

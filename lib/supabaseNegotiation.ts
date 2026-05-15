@@ -326,10 +326,12 @@ export async function upsertNegotiationListingOfferToSupabase(input: {
     price: input.currentPrice,
     last_updated_by: input.lastUpdatedBy,
     status,
-    poster_counter_count: input.posterCounterCount ?? 0,
     updated_at: new Date().toISOString(),
     last_negotiation_event_kind: input.messageKind,
   };
+  if (input.posterCounterCount !== undefined) {
+    baseFields.poster_counter_count = input.posterCounterCount;
+  }
   if (msg) baseFields.message = msg;
   if (input.offer_images !== undefined) {
     baseFields.offer_images =
@@ -408,6 +410,9 @@ export async function upsertNegotiationListingOfferToSupabase(input: {
     }
   } else {
     wasInsert = true;
+    if (!('poster_counter_count' in baseFields)) {
+      baseFields.poster_counter_count = input.posterCounterCount ?? 0;
+    }
     let insertRow: Record<string, unknown> = {
       ...baseFields,
       request_id: null,
