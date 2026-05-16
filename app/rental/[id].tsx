@@ -37,8 +37,9 @@ import {
 } from '@/components/RentalDetailsCard';
 import { AppKeyboardAwareScrollView } from '@/components/AppKeyboardAwareScrollView';
 import { BackHeader } from '@/components/AppHeaders';
-import { RentalLifecycleNavigator } from '@/components/RentalLifecycleNavigator';
 import { RentalExtensionRequestModal } from '@/components/rentalWorkspace/RentalExtensionRequestModal';
+import { RentalCommandCenter } from '@/components/rentalWorkspace/RentalCommandCenter';
+import { RentalMeetupMissedSheet } from '@/components/rentalWorkspace/RentalMeetupMissedSheet';
 import { RentalWorkspaceHero } from '@/components/rentalWorkspace/RentalWorkspaceHero';
 import { RentalWorkspaceStageWorkbench } from '@/components/rentalWorkspace/RentalWorkspaceStageWorkbench';
 import { RentalWorkspaceUpdatesSection } from '@/components/rentalWorkspace/RentalWorkspaceUpdatesSection';
@@ -72,7 +73,22 @@ import { deriveLifecyclePhaseFromRentalStatus, deriveRentalWorkspaceStage } from
 import { parseListingIntentSnapshot, type ListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
 import { normalizeListingImages } from '@/lib/normalizeListingImages';
 import { fetchAndMergeProfileNames } from '@/lib/remoteProfileCache';
+import {
+  buildRentalCommandCenterModel,
+  commandCenterBottomPadding,
+  type CommandCenterStepKey,
+} from '@/lib/rentalCommandCenterModel';
 import { buildRentalWorkspaceHeroModel } from '@/lib/rentalWorkspaceHeroModel';
+import {
+  insertOperationalReport,
+  isPickupHandoffBilaterallyComplete,
+  isRentalPastPickupPhase,
+  isReturnBilaterallyComplete,
+  setRentalOperationalState,
+  shouldFlagPickupMissedConfirmation,
+  shouldFlagReturnMissedConfirmation,
+  type RentalOperationalState,
+} from '@/lib/rentalOperationalAttention';
 import {
   isReturnExtensionProposal,
   resolveRentalPickupIso,
@@ -232,6 +248,8 @@ type RentalRow = {
   replacement_value?: number | null;
   agreed_pickup_datetime?: string | null;
   agreed_return_datetime?: string | null;
+  pickup_operational_state?: RentalOperationalState | string | null;
+  return_operational_state?: RentalOperationalState | string | null;
 };
 
 function firstParam(v: string | string[] | undefined): string | undefined {
@@ -414,10 +432,9 @@ function buildOwnerPickupDoneEffective(
 function buildRenterPickupDoneEffective(
   storedManual: Record<string, boolean>,
   viewFlags: { reviewedOwnerPhotos: boolean; viewedTimestampProof: boolean },
-  pickupRenterConfirmed: boolean,
-  handoffCompleted: boolean
+  pickupRenterConfirmed: boolean
 ): Record<string, boolean> {
-  const freezeAuto = handoffCompleted || pickupRenterConfirmed;
+  const freezeAuto = pickupRenterConfirmed;
   return {
     'rp-review-photos': freezeAuto || viewFlags.reviewedOwnerPhotos,
     'rp-serial-matches': Boolean(storedManual['rp-serial-matches']),
@@ -1340,6 +1357,18 @@ export default function RentalScreen() {
   const [meetingExpanded, setMeetingExpanded] = useState(true);
   const [pickupExpanded, setPickupExpanded] = useState(true);
   const [returnExpanded, setReturnExpanded] = useState(false);
+  const [missedMeetupSheet, setMissedMeetupSheet] = useState<{
+    visible: boolean;
+    phase: 'pickup' | 'return';
+  }>({ visible: false, phase: 'pickup' });
+  const [missedMeetupBusy, setMissedMeetupBusy] = useState(false);
+  const [commandCenterExpanded, setCommandCenterExpanded] = useState(false);
+  const [commandCenterScrollCompact, setCommandCenterScrollCompact] = useState(false);
+  const commandCenterLastScrollY = useRef(0);
+  const missedMeetupDismissedRef = useRef<{ pickup: boolean; return: boolean }>({
+    pickup: false,
+    return: false,
+  });
   const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
   const [photoViewerPhase, setPhotoViewerPhase] = useState<VerificationPhase>('pickup');
   const [photoViewerIndex, setPhotoViewerIndex] = useState(0);
@@ -1477,11 +1506,13 @@ export default function RentalScreen() {
     return () => clearTimeout(t);
   }, [ownerInstructionsAddedVisible]);
 
-  const handoffCompletedEarly = useMemo(() => {
+  const pickupHandoffCompleteEarly = useMemo(() => {
     if (!rental) return false;
-    const s = String(rental.status ?? 'pending').trim().toLowerCase();
-    return ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(s);
-  }, [rental]);
+    return isPickupHandoffBilaterallyComplete({
+      pickupAck,
+      signedAt: rental.signed_at ?? null,
+    });
+  }, [rental, pickupAck]);
 
   const pickupHydrateAsRenter = useMemo(() => {
     if (!me || !rental) return false;
@@ -1497,7 +1528,7 @@ export default function RentalScreen() {
 
   useEffect(() => {
     if (!rentalId || !me || !pickupHydrateAsRenter) return;
-    if (handoffCompletedEarly) return;
+    if (pickupHandoffCompleteEarly) return;
     let cancelled = false;
     void hydrateRenterPickupViewerFlagsFromEvidence(rentalId, me, ownerPickupEvidenceRevision).then((flags) => {
       if (!cancelled) setRenterPickupViewFlags(flags);
@@ -1505,7 +1536,7 @@ export default function RentalScreen() {
     return () => {
       cancelled = true;
     };
-  }, [rentalId, me, pickupHydrateAsRenter, ownerPickupEvidenceRevision, handoffCompletedEarly]);
+  }, [rentalId, me, pickupHydrateAsRenter, ownerPickupEvidenceRevision, pickupHandoffCompleteEarly]);
 
   useEffect(() => {
     if (!rentalId) return;
@@ -2238,7 +2269,7 @@ export default function RentalScreen() {
     if (!photoViewerVisible || photoViewerPhase !== 'pickup') return;
     if (viewerRoleForHooks !== 'renter') return;
     if (!rentalId || !me) return;
-    if (handoffCompletedEarly) return;
+    if (pickupHandoffCompleteEarly) return;
     const photo = pickupEvidenceDisplay[photoViewerIndex];
     if (!photo || normalizeRole(photo.role) !== 'owner') return;
     setRenterPickupViewFlags((f) => {
@@ -2258,16 +2289,16 @@ export default function RentalScreen() {
     viewerRoleForHooks,
     rentalId,
     me,
-    handoffCompletedEarly,
+    pickupHandoffCompleteEarly,
     ownerPickupEvidenceRevision,
   ]);
 
   const pickupChecklistCollapseModel = useMemo(() => {
     if (!rentalId || !rental) return null;
-    const rentalStatus = String(rental.status ?? 'pending').trim().toLowerCase();
-    const handoffCompleted = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
-      rentalStatus
-    );
+    const pickupHandoffComplete = isPickupHandoffBilaterallyComplete({
+      pickupAck,
+      signedAt: rental.signed_at ?? null,
+    });
     const viewerRoleForCollapse: 'owner' | 'renter' =
       me && me === rental.owner_user_id
         ? 'owner'
@@ -2281,8 +2312,7 @@ export default function RentalScreen() {
     const renterPickupDoneEffective = buildRenterPickupDoneEffective(
       pickupChecklist.renter,
       renterPickupViewFlags,
-      pickupAck.renter,
-      handoffCompleted
+      pickupAck.renter
     );
     const ownerPickupChecklistRequiredDone = allRequiredPickupItemsDone(
       OWNER_PICKUP_ITEMS as readonly ChecklistItemDef[],
@@ -2294,12 +2324,13 @@ export default function RentalScreen() {
     );
     const ownerPickupPhotoRequirementMet = ownerPickupPhotoTargetsMet(ownerPickupPhotos);
     const myRow = verificationRows.find((r) => r.phase === 'pickup' && r.role === viewerRoleForCollapse);
-    const pickupConfirmedForViewer = Boolean(myRow?.confirmed) || handoffCompleted;
+    const pickupConfirmedForViewer = Boolean(myRow?.confirmed);
+    const pickupCollapsedComplete = pickupHandoffComplete || pickupConfirmedForViewer;
     const pickupPrepOrVerificationComplete =
       viewerRoleForCollapse === 'owner'
         ? ownerPickupChecklistRequiredDone && ownerPickupPhotoRequirementMet
         : renterPickupChecklistRequiredDone;
-    return { pickupConfirmedForViewer, pickupPrepOrVerificationComplete };
+    return { pickupConfirmedForViewer, pickupCollapsedComplete, pickupPrepOrVerificationComplete };
   }, [
     rentalId,
     rental,
@@ -2307,14 +2338,14 @@ export default function RentalScreen() {
     pickupChecklist,
     pickupEvidenceDisplay,
     verificationRows,
-    pickupAck.renter,
+    pickupAck,
     renterPickupViewFlags,
   ]);
 
   useEffect(() => {
     if (!pickupChecklistCollapseModel) return;
-    const { pickupConfirmedForViewer, pickupPrepOrVerificationComplete: satisfied } = pickupChecklistCollapseModel;
-    if (pickupConfirmedForViewer) {
+    const { pickupCollapsedComplete, pickupPrepOrVerificationComplete: satisfied } = pickupChecklistCollapseModel;
+    if (pickupCollapsedComplete) {
       prevPickupPanelSatisfiedRef.current = false;
       return;
     }
@@ -2352,6 +2383,104 @@ export default function RentalScreen() {
       clearTimeout(t2);
     };
   }, [editingOwnerInstructionId, ownerHandoffNotesExpanded]);
+
+  useEffect(() => {
+    if (!rentalId || !rental || !me) return;
+    const lifecyclePhaseNow = deriveLifecyclePhaseFromRentalStatus(String(rental.status ?? 'pending'));
+    const pickupHandoffNow = isPickupHandoffBilaterallyComplete({
+      pickupAck,
+      signedAt: rental.signed_at ?? null,
+    });
+    const returnHandoffNow = isReturnBilaterallyComplete(returnAck);
+    const ownerConfirmedNow =
+      typeof rental.owner_confirmed === 'boolean'
+        ? rental.owner_confirmed
+        : Boolean(rental.confirmed_by_owner);
+    const renterConfirmedNow =
+      typeof rental.renter_confirmed === 'boolean'
+        ? rental.renter_confirmed
+        : Boolean(rental.confirmed_by_renter);
+    const agreementNow: 'pending' | 'confirmed' =
+      rental.agreement_status === 'confirmed'
+        ? 'confirmed'
+        : rental.agreement_status === 'pending'
+          ? 'pending'
+          : ownerConfirmedNow && renterConfirmedNow
+            ? 'confirmed'
+            : 'pending';
+    const hasPendingNow =
+      agreementNow === 'pending' && String(rental.last_proposed_by ?? '').trim().length > 0;
+    const meetingCompletedNow = agreementNow === 'confirmed' && !hasPendingNow;
+    const pickupIso =
+      rental.agreed_pickup_datetime ?? rental.pickup_datetime ?? rental.meetup_time ?? null;
+    const returnIso =
+      rental.agreed_return_datetime ?? rental.return_datetime ?? rental.return_time ?? null;
+    const pickupOp = (rental.pickup_operational_state ?? null) as RentalOperationalState | null;
+    const returnOp = (rental.return_operational_state ?? null) as RentalOperationalState | null;
+
+    const flagPickup = shouldFlagPickupMissedConfirmation({
+      meetingCompleted: meetingCompletedNow,
+      lifecyclePhase: lifecyclePhaseNow,
+      pickupHandoffComplete: pickupHandoffNow,
+      pickupIso,
+      pickupOperationalState: pickupOp,
+    });
+    if (flagPickup && pickupOp == null) {
+      void setRentalOperationalState(supabase, rentalId, 'pickup', 'missed_confirmation').then((r) => {
+        if (r.ok) {
+          setRental((prev) =>
+            prev ? { ...prev, pickup_operational_state: 'missed_confirmation' } : prev
+          );
+        }
+      });
+    }
+
+    const flagReturn = shouldFlagReturnMissedConfirmation({
+      handoffComplete: pickupHandoffNow || isRentalPastPickupPhase(rental.status),
+      lifecyclePhase: lifecyclePhaseNow,
+      returnHandoffComplete: returnHandoffNow,
+      returnIso,
+      returnOperationalState: returnOp,
+    });
+    if (flagReturn && returnOp == null) {
+      void setRentalOperationalState(supabase, rentalId, 'return', 'missed_confirmation').then((r) => {
+        if (r.ok) {
+          setRental((prev) =>
+            prev ? { ...prev, return_operational_state: 'missed_confirmation' } : prev
+          );
+        }
+      });
+    }
+
+    if (
+      pickupOp === 'missed_confirmation' &&
+      lifecyclePhaseNow === 'pickup' &&
+      meetingCompletedNow &&
+      !missedMeetupDismissedRef.current.pickup
+    ) {
+      setMissedMeetupSheet({ visible: true, phase: 'pickup' });
+    } else if (
+      returnOp === 'missed_confirmation' &&
+      (lifecyclePhaseNow === 'active' || lifecyclePhaseNow === 'return') &&
+      !missedMeetupDismissedRef.current.return
+    ) {
+      setMissedMeetupSheet({ visible: true, phase: 'return' });
+    }
+  }, [rentalId, rental, me, pickupAck, returnAck, supabase]);
+
+  const onCommandCenterScroll = useCallback(
+    (e: { nativeEvent: { contentOffset: { y: number } } }) => {
+      const y = e.nativeEvent.contentOffset.y;
+      const prev = commandCenterLastScrollY.current;
+      if (y > prev + 10 && y > 48) {
+        setCommandCenterScrollCompact(true);
+      } else if (y < prev - 10 || y < 24) {
+        setCommandCenterScrollCompact(false);
+      }
+      commandCenterLastScrollY.current = y;
+    },
+    []
+  );
 
   if (!rentalId) {
     return (
@@ -2551,7 +2680,14 @@ export default function RentalScreen() {
   const handoffCompleted = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
     rentalStatus
   );
-  const returnWorkflowEnabled = handoffCompleted;
+  const pickupHandoffComplete = isPickupHandoffBilaterallyComplete({
+    pickupAck,
+    signedAt: rental.signed_at ?? null,
+  });
+  const returnHandoffComplete = isReturnBilaterallyComplete(returnAck);
+  const returnWorkflowEnabled = pickupHandoffComplete || handoffCompleted;
+  const pickupOperationalState = (rental.pickup_operational_state ?? null) as RentalOperationalState | null;
+  const returnOperationalState = (rental.return_operational_state ?? null) as RentalOperationalState | null;
 
   const returnCompleted = ['returned', 'completed', 'cancelled'].includes(rentalStatus);
   const ownerNotesLocked = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
@@ -2564,7 +2700,8 @@ export default function RentalScreen() {
   const myPickupVerificationRow = verificationRows.find(
     (r) => r.phase === 'pickup' && r.role === viewerRole
   );
-  const pickupConfirmedForViewer = Boolean(myPickupVerificationRow?.confirmed) || handoffCompleted;
+  const pickupConfirmedForViewer = Boolean(myPickupVerificationRow?.confirmed);
+  const pickupCollapsedComplete = pickupHandoffComplete || pickupConfirmedForViewer;
   const ownerHandoffComposerLocked = ownerInputDisabled;
   const ownerInstructionDirty =
     !editingOwnerInstructionId ||
@@ -2605,8 +2742,7 @@ export default function RentalScreen() {
   const renterPickupDoneEffective = buildRenterPickupDoneEffective(
     pickupChecklist.renter,
     renterPickupViewFlags,
-    pickupAck.renter,
-    handoffCompleted
+    pickupAck.renter
   );
   const pickupDoneEffectiveForViewer =
     viewerRole === 'owner' ? ownerPickupDoneEffective : renterPickupDoneEffective;
@@ -2697,6 +2833,16 @@ export default function RentalScreen() {
 
   const onFocusReturnSection = () => {
     scrollToLifecycleStep(4);
+  };
+
+  const onFocusActiveSection = () => {
+    scrollToLifecycleStep(3);
+  };
+
+  const onCommandCenterStepNavigate = (step: CommandCenterStepKey) => {
+    if (step === 'pickup') onFocusPickupSection();
+    else if (step === 'active') onFocusActiveSection();
+    else onFocusReturnSection();
   };
 
   const replacementValue = Number(rental.replacement_value ?? Math.max(finalPrice * 3, 150));
@@ -3537,39 +3683,27 @@ export default function RentalScreen() {
       ? formatCompactDateTime(chatPreview.createdAt)
       : undefined;
 
-  const minimalLifecycleSteps = [
-    { key: 'matched', label: 'Matched' },
-    { key: 'pickup', label: 'Pickup' },
-    { key: 'active', label: 'Active' },
-    { key: 'return', label: 'Return' },
-  ] as const;
-  const minimalStepDone = [
-    true,
-    handoffCompleted,
-    rentalStatus === 'return_pending' || ['returned', 'completed', 'cancelled'].includes(rentalStatus),
-    returnCompleted,
-  ];
-  let minimalNavigatorCurrentIndex = 0;
-  if (!minimalStepDone[1]) minimalNavigatorCurrentIndex = 1;
-  else if (!minimalStepDone[2]) minimalNavigatorCurrentIndex = 2;
-  else if (!minimalStepDone[3]) minimalNavigatorCurrentIndex = 3;
-  else minimalNavigatorCurrentIndex = 3;
-
-  let minimalAttentionIndex: number | null = null;
-  if (!handoffCompleted && (!termsCompleted || !meetingCompleted)) {
-    minimalAttentionIndex = 1;
-  } else if (!handoffCompleted && (lifecycleAttentionIndex === 2 || bilateralPickupReady)) {
-    minimalAttentionIndex = 1;
-  } else if (returnWorkflowEnabled && !returnCompleted && lifecyclePhase === 'return') {
-    minimalAttentionIndex = 3;
-  }
-
-  const onMinimalNavigatorStepPress = (i: number) => {
-    if (i === 0) scrollToLifecycleStep(0);
-    else if (i === 1) scrollToLifecycleStep(!meetingCompleted ? 2 : 3);
-    else if (i === 2) scrollToLifecycleStep(3);
-    else scrollToLifecycleStep(4);
-  };
+  const commandCenterModel = buildRentalCommandCenterModel({
+    viewerRole,
+    lifecyclePhase,
+    rentalStatus,
+    meetingCompleted,
+    pickupHandoffComplete,
+    returnHandoffComplete,
+    pickupOperationalState,
+    returnOperationalState,
+    pickupIso: meetingPickupForHero,
+    returnIso: meetingReturnForHero,
+    returnLocation: rental.return_location || rental.meetup_location || null,
+    hasPendingExtension: hasPendingExtensionProposal,
+    renterReturnPhotoCount: renterReturnPhotos.length,
+    primaryStage: primaryWorkspaceStageModel,
+  });
+  const commandCenterScrollPadding = commandCenterBottomPadding(
+    insets.bottom,
+    commandCenterExpanded,
+    commandCenterScrollCompact
+  );
 
   const meetingHasRichMeetupContent =
     hasPendingProposal || meetingCompleted || meetupLocationTrimmed.length > 0;
@@ -3594,6 +3728,81 @@ export default function RentalScreen() {
     </>
   );
 
+  const dismissMissedMeetupSheet = (phase: 'pickup' | 'return') => {
+    missedMeetupDismissedRef.current[phase] = true;
+    setMissedMeetupSheet((s) => ({ ...s, visible: false }));
+  };
+
+  const onMissedMeetupCompleted = () => {
+    const phase = missedMeetupSheet.phase;
+    dismissMissedMeetupSheet(phase);
+    scrollToLifecycleStep(phase === 'pickup' ? 3 : 4);
+  };
+
+  const onMissedMeetupRunningLate = async () => {
+    if (!rentalId) return;
+    setMissedMeetupBusy(true);
+    const phase = missedMeetupSheet.phase;
+    const result = await setRentalOperationalState(supabase, rentalId, phase, 'running_late');
+    setMissedMeetupBusy(false);
+    if (result.ok) {
+      setRental((prev) =>
+        prev
+          ? {
+              ...prev,
+              ...(phase === 'pickup'
+                ? { pickup_operational_state: 'running_late' }
+                : { return_operational_state: 'running_late' }),
+            }
+          : prev
+      );
+      dismissMissedMeetupSheet(phase);
+      showFeedbackToast('Marked as running late — keep each other posted in Messages.');
+    } else {
+      Alert.alert('Could not update', result.message ?? 'Try again.');
+    }
+  };
+
+  const onMissedMeetupReschedule = () => {
+    const phase = missedMeetupSheet.phase;
+    dismissMissedMeetupSheet(phase);
+    openMeetingProposalEditor();
+    scrollToLifecycleStep(phase === 'pickup' ? 2 : 2);
+  };
+
+  const onMissedMeetupNoShow = async () => {
+    if (!rental || !me) return;
+    setMissedMeetupBusy(true);
+    const phase = missedMeetupSheet.phase;
+    const report = await insertOperationalReport({
+      rentalId: rental.id,
+      reporterId: me,
+      targetUserId: counterpartyUserId,
+      reportType: phase === 'pickup' ? 'pickup_no_show' : 'return_no_show',
+    });
+    const stateResult = await setRentalOperationalState(supabase, rental.id, phase, 'no_show_reported');
+    setMissedMeetupBusy(false);
+    if (!report.ok || !stateResult.ok) {
+      Alert.alert(
+        'Could not submit report',
+        report.message ?? stateResult.message ?? 'Try again or use Report Issue.'
+      );
+      return;
+    }
+    setRental((prev) =>
+      prev
+        ? {
+            ...prev,
+            ...(phase === 'pickup'
+              ? { pickup_operational_state: 'no_show_reported' }
+              : { return_operational_state: 'no_show_reported' }),
+          }
+        : prev
+    );
+    dismissMissedMeetupSheet(phase);
+    showFeedbackToast('Report recorded. Our team may follow up if needed.');
+  };
+
   const renderPickupDetails = () => (
               <View
                 style={[
@@ -3612,7 +3821,7 @@ export default function RentalScreen() {
                 </Pressable>
                 {!pickupExpanded ? (
                   <>
-                    {pickupConfirmedForViewer ? (
+                    {pickupCollapsedComplete ? (
                       <>
                         <Text style={styles.verificationCollapsedLine}>✅ Pickup confirmed</Text>
                         <Text style={styles.verificationCollapsedMeta}>
@@ -4483,14 +4692,9 @@ export default function RentalScreen() {
                     </View>
                   ) : null}
 
-                  <View style={styles.handoffSection}>
-                    <View style={styles.handoffSectionTitleRow}>
-                      <Ionicons name="shield-checkmark" size={18} color="#166534" />
-                      <Text style={styles.handoffSectionTitle}>Return & drop-off photos</Text>
-                    </View>
-                    <Text style={styles.handoffSectionHelper}>{returnPhotosSectionHelper(viewerRole)}</Text>
-
-                    {viewerRole === 'renter' ? (
+                  {viewerRole === 'renter' ? (
+                    <View style={[styles.handoffSection, { marginBottom: 10 }]}>
+                      <Text style={styles.handoffSectionHelper}>{returnPhotosSectionHelper(viewerRole)}</Text>
                       <View style={styles.handoffTileRow}>
                         <Pressable
                           pressOpacityFeedback={false}
@@ -4560,139 +4764,25 @@ export default function RentalScreen() {
                           </Text>
                         </Pressable>
                       </View>
-                    ) : null}
-
-                    <View
-                      style={[
-                        styles.handoffExamplePanel,
-                        viewerRole === 'renter' && styles.handoffExamplePanelRenter,
-                      ]}
-                    >
-                      <View style={styles.handoffExampleLeft}>
-                        <Text style={styles.handoffExampleTitle}>{returnGuidanceTitle(viewerRole)}</Text>
-                        {returnGuidanceBullets(viewerRole).map((line) => (
-                          <Text key={line} style={styles.handoffExampleBody}>
-                            • {line}
-                          </Text>
-                        ))}
-                        <Text style={styles.handoffExampleMuted}>{returnGuidanceMuted(viewerRole)}</Text>
-                      </View>
                     </View>
+                  ) : null}
 
-                    <Text style={styles.handoffOwnerPreviewHead}>Preview</Text>
-                    <Text style={styles.handoffOwnerPreviewSub}>
-                      {viewerRole === 'owner'
-                        ? 'Renter return photos grouped the same way they captured them.'
-                        : 'Your return photos — the owner sees this same layout when reviewing drop-off.'}
-                    </Text>
-
-                    <Text style={styles.handoffEvidenceGroupLabel}>Return item photos</Text>
-                    {renterReturnBuckets.item.length > 0 ? (
-                      <PickupHandoffItemPhotoRow
-                        photos={renterReturnBuckets.item}
-                        openPickupPhotoById={openReturnPhotoById}
-                        canDeletePhoto={canDeletePhoto}
-                        confirmDeletePhoto={confirmDeletePhoto}
-                      />
-                    ) : (
-                      <View style={styles.handoffEvidenceEmptyBlock}>
-                        <Text style={styles.handoffEvidenceEmptyTitle}>
-                          {viewerRole === 'owner' ? 'Waiting for return photos' : 'No return item photos yet'}
+                  <View
+                    style={[
+                      styles.handoffExamplePanel,
+                      viewerRole === 'renter' && styles.handoffExamplePanelRenter,
+                      { marginBottom: 12 },
+                    ]}
+                  >
+                    <View style={styles.handoffExampleLeft}>
+                      <Text style={styles.handoffExampleTitle}>{returnGuidanceTitle(viewerRole)}</Text>
+                      {returnGuidanceBullets(viewerRole).map((line) => (
+                        <Text key={line} style={styles.handoffExampleBody}>
+                          • {line}
                         </Text>
-                        <Text style={styles.handoffEvidenceEmptyBody}>
-                          {viewerRole === 'owner'
-                            ? 'The renter uploads return item photos before drop-off. They appear here for your review.'
-                            : 'Use the Return item photos tile above — add at least three clear shots of the full item.'}
-                        </Text>
-                      </View>
-                    )}
-
-                    {renterReturnBuckets.damage.length > 0 ? (
-                      <>
-                        <Text style={styles.handoffEvidenceGroupLabel}>Damage / issues (optional)</Text>
-                        <ScrollView
-                          horizontal
-                          showsHorizontalScrollIndicator={false}
-                          contentContainerStyle={styles.handoffEvidenceGallery}
-                        >
-                          {renterReturnBuckets.damage.map((p) => (
-                            <RentalEvidenceThumbnail
-                              key={p.id}
-                              uri={p.signedUrl}
-                              size="handoffSquare"
-                              category="return"
-                              canDelete={canDeletePhoto(p)}
-                              onPress={() => openReturnPhotoById(p.id)}
-                              onDelete={() => confirmDeletePhoto(p)}
-                            />
-                          ))}
-                        </ScrollView>
-                      </>
-                    ) : null}
-
-                    {renterReturnBuckets.additional.length > 0 ? (
-                      <>
-                        <Text style={styles.handoffEvidenceGroupLabel}>Additional photos</Text>
-                        <ScrollView
-                          horizontal
-                          showsHorizontalScrollIndicator={false}
-                          contentContainerStyle={styles.handoffEvidenceGallery}
-                        >
-                          {renterReturnBuckets.additional.map((p) => (
-                            <RentalEvidenceThumbnail
-                              key={p.id}
-                              uri={p.signedUrl}
-                              size="handoffSquare"
-                              category="additional"
-                              canDelete={canDeletePhoto(p)}
-                              onPress={() => openReturnPhotoById(p.id)}
-                              onDelete={() => confirmDeletePhoto(p)}
-                            />
-                          ))}
-                        </ScrollView>
-                      </>
-                    ) : null}
-
-                    <Text style={styles.handoffPrivacyHint}>Photos are only visible to participants in this rental.</Text>
-                    {!returnCompleted && returnWindow.helperText && returnWindow.allowed ? (
-                      <Text style={styles.photoWindowHelper}>{returnWindow.helperText}</Text>
-                    ) : null}
-                    <Text style={styles.photoWindowHelper}>
-                      {returnCompleted
-                        ? 'Return photos are locked after return confirmation is completed.'
-                        : 'Return photos stay editable until return confirmation is completed.'}
-                    </Text>
-                  </View>
-
-                  <View style={styles.handoffSection}>
-                    <HandoffOwnerNotesAccordion
-                      expanded={returnNotesExpanded}
-                      onToggle={() => setReturnNotesExpanded((v) => !v)}
-                      mode={viewerRole}
-                      title={returnNotesAccordionTitle(viewerRole)}
-                      helperCollapsed={returnNotesAccordionHelper(viewerRole)}
-                      childrenExpanded={
-                        viewerRole === 'renter' ? (
-                          <>
-                            <NoteList notes={renterNotes} />
-                            <AddNoteInput
-                              value={renterNoteDraft}
-                              onChangeText={setRenterNoteDraft}
-                              onAdd={onAddRenterNote}
-                              disabled={renterInputDisabled}
-                              disabledLabel="Notes locked 🔒"
-                              loading={addingRenterNote}
-                              placeholder="Wear, accessories, or anything the owner should know…"
-                            />
-                          </>
-                        ) : (
-                          <NoteList
-                            notes={renterNotes}
-                            emptyText="No return notes from the renter yet."
-                          />
-                        )
-                      }
-                    />
+                      ))}
+                      <Text style={styles.handoffExampleMuted}>{returnGuidanceMuted(viewerRole)}</Text>
+                    </View>
                   </View>
 
                   <View style={styles.handoffSection}>
@@ -4781,6 +4871,110 @@ export default function RentalScreen() {
                   {returnPrimaryFootnoteText ? (
                     <Text style={styles.handoffPrimaryFootnote}>{returnPrimaryFootnoteText}</Text>
                   ) : null}
+
+                  <View style={[styles.handoffSection, { marginTop: 12 }]}>
+                    <HandoffOwnerNotesAccordion
+                      expanded={returnNotesExpanded}
+                      onToggle={() => setReturnNotesExpanded((v) => !v)}
+                      mode={viewerRole}
+                      title={returnNotesAccordionTitle(viewerRole)}
+                      helperCollapsed={returnNotesAccordionHelper(viewerRole)}
+                      childrenExpanded={
+                        viewerRole === 'renter' ? (
+                          <>
+                            <NoteList notes={renterNotes} />
+                            <AddNoteInput
+                              value={renterNoteDraft}
+                              onChangeText={setRenterNoteDraft}
+                              onAdd={onAddRenterNote}
+                              disabled={renterInputDisabled}
+                              disabledLabel="Notes locked 🔒"
+                              loading={addingRenterNote}
+                              placeholder="Wear, accessories, or anything the owner should know…"
+                            />
+                          </>
+                        ) : (
+                          <NoteList
+                            notes={renterNotes}
+                            emptyText="No return notes from the renter yet."
+                          />
+                        )
+                      }
+                    />
+                  </View>
+
+                  {renterReturnPhotos.length > 0 ? (
+                    <View style={[styles.handoffSection, { marginTop: 8 }]}>
+                      <Text style={styles.handoffOwnerPreviewHead}>Preview</Text>
+                      <Text style={styles.handoffOwnerPreviewSub}>
+                        {viewerRole === 'owner'
+                          ? 'Renter return photos grouped the same way they captured them.'
+                          : 'Your return photos — the owner sees this same layout when reviewing drop-off.'}
+                      </Text>
+                      {renterReturnBuckets.item.length > 0 ? (
+                        <>
+                          <Text style={styles.handoffEvidenceGroupLabel}>Return item photos</Text>
+                          <PickupHandoffItemPhotoRow
+                            photos={renterReturnBuckets.item}
+                            openPickupPhotoById={openReturnPhotoById}
+                            canDeletePhoto={canDeletePhoto}
+                            confirmDeletePhoto={confirmDeletePhoto}
+                          />
+                        </>
+                      ) : null}
+                      {renterReturnBuckets.damage.length > 0 ? (
+                        <>
+                          <Text style={styles.handoffEvidenceGroupLabel}>Damage / issues (optional)</Text>
+                          <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={styles.handoffEvidenceGallery}
+                          >
+                            {renterReturnBuckets.damage.map((p) => (
+                              <RentalEvidenceThumbnail
+                                key={p.id}
+                                uri={p.signedUrl}
+                                size="handoffSquare"
+                                category="return"
+                                canDelete={canDeletePhoto(p)}
+                                onPress={() => openReturnPhotoById(p.id)}
+                                onDelete={() => confirmDeletePhoto(p)}
+                              />
+                            ))}
+                          </ScrollView>
+                        </>
+                      ) : null}
+                      {renterReturnBuckets.additional.length > 0 ? (
+                        <>
+                          <Text style={styles.handoffEvidenceGroupLabel}>Additional photos</Text>
+                          <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={styles.handoffEvidenceGallery}
+                          >
+                            {renterReturnBuckets.additional.map((p) => (
+                              <RentalEvidenceThumbnail
+                                key={p.id}
+                                uri={p.signedUrl}
+                                size="handoffSquare"
+                                category="additional"
+                                canDelete={canDeletePhoto(p)}
+                                onPress={() => openReturnPhotoById(p.id)}
+                                onDelete={() => confirmDeletePhoto(p)}
+                              />
+                            ))}
+                          </ScrollView>
+                        </>
+                      ) : null}
+                      <Text style={styles.handoffPrivacyHint}>
+                        Photos are only visible to participants in this rental.
+                      </Text>
+                    </View>
+                  ) : viewerRole === 'owner' ? (
+                    <Text style={[styles.verificationCollapsedMeta, { marginTop: 10 }]}>
+                      Waiting for the renter&apos;s return photos before drop-off.
+                    </Text>
+                  ) : null}
                 </>
               )}
             </Pressable>
@@ -4795,13 +4989,19 @@ export default function RentalScreen() {
           style={styles.container}
           contentContainerStyle={[
             styles.scrollContent,
-            { paddingHorizontal: scrollPadH, paddingTop: insets.top + 12, paddingBottom: insets.bottom + 28 },
+            {
+              paddingHorizontal: scrollPadH,
+              paddingTop: insets.top + 12,
+              paddingBottom: commandCenterScrollPadding,
+            },
           ]}
           bottomOffset={insets.bottom + 24}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           bounces
           alwaysBounceVertical
+          onScroll={onCommandCenterScroll}
+          scrollEventThrottle={32}
         >
           <View style={styles.contentWrap}>
             <BackHeader
@@ -5247,24 +5447,35 @@ export default function RentalScreen() {
             </View>
             ) : null}
 
-            <View style={[styles.lifecycleNavigatorWrap, styles.lifecycleNavigatorWrapCompact]}>
-              <RentalLifecycleNavigator
-                steps={minimalLifecycleSteps}
-                stepDone={[...minimalStepDone]}
-                currentIndex={minimalNavigatorCurrentIndex}
-                attentionIndex={minimalAttentionIndex}
-                transactionComplete={lifecycleTransactionComplete}
-                onStepPress={onMinimalNavigatorStepPress}
-                density="micro"
-              />
-            </View>
-
             <View style={[styles.actionsCard, styles.actionsCardQuiet, !isTabletMargins && styles.cardPadPhone]}>
               {actionFooter}
             </View>
             
           </View>
         </AppKeyboardAwareScrollView>
+
+        {agreementStatus === 'confirmed' ? (
+          <RentalCommandCenter
+            model={commandCenterModel}
+            bottomInset={insets.bottom}
+            scrollCompact={commandCenterScrollCompact}
+            onExpandedChange={setCommandCenterExpanded}
+            onStepNavigate={onCommandCenterStepNavigate}
+            onPrimaryPress={primaryWorkspaceStageModel.onPrimary}
+            onSecondaryPress={openRentalChat}
+          />
+        ) : null}
+
+        <RentalMeetupMissedSheet
+          visible={missedMeetupSheet.visible}
+          phase={missedMeetupSheet.phase}
+          busy={missedMeetupBusy}
+          onClose={() => dismissMissedMeetupSheet(missedMeetupSheet.phase)}
+          onCompleted={onMissedMeetupCompleted}
+          onRunningLate={() => void onMissedMeetupRunningLate()}
+          onReschedule={onMissedMeetupReschedule}
+          onNoShow={() => void onMissedMeetupNoShow()}
+        />
 
         <View style={styles.proposalEditorHidden} pointerEvents="box-none" collapsable={false}>
           <RentalDetailsCard
