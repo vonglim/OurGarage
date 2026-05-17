@@ -3,6 +3,7 @@ import type { NegotiationDeliveryMethod } from '@/lib/negotiationDelivery';
 import type { NegotiationOfferStatus } from '@/lib/negotiationOfferTypes';
 import { parseListingIntentSnapshot, type ListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
 import { PROFILE_NAME_FALLBACK } from '@/lib/profileConstants';
+import { getPublicProfileForView } from '@/lib/publicProfiles';
 import { fetchAndMergeProfileNames, getRemoteDisplayNameForUserId } from '@/lib/remoteProfileCache';
 import { getSupabase } from '@/lib/supabase';
 import type { ListingOfferActivityRow } from '@/store/listingOffersActivityStore';
@@ -109,6 +110,17 @@ export async function hydrateListingOffersFromSupabase(): Promise<void> {
     const lnk = r.last_negotiation_event_kind ?? r.lastNegotiationEventKind;
     const lastNegotiationEventKind = typeof lnk === 'string' && lnk.trim() !== '' ? lnk.trim() : null;
 
+    const rv = r.replacement_value;
+    const replacementValue =
+      typeof rv === 'number' && Number.isFinite(rv) ? rv : null;
+    const rs = r.rental_start_date;
+    const re = r.rental_end_date;
+    const rentalStartDate = typeof rs === 'string' && rs.trim() !== '' ? rs.trim() : null;
+    const rentalEndDate = typeof re === 'string' && re.trim() !== '' ? re.trim() : null;
+    const td = r.tool_description;
+    const toolDescription = typeof td === 'string' && td.trim() !== '' ? td.trim() : null;
+    const renterRating = getPublicProfileForView(renterUserId).ratingNumber;
+
     out.push({
       id,
       listingId,
@@ -126,6 +138,11 @@ export async function hydrateListingOffersFromSupabase(): Promise<void> {
       lastNegotiationEventKind,
       snapshot: parseListingIntentSnapshot(r.listing_snapshot),
       renterDisplayName: getRemoteDisplayNameForUserId(renterUserId)?.trim() || PROFILE_NAME_FALLBACK,
+      rentalStartDate,
+      rentalEndDate,
+      replacementValue,
+      toolDescription,
+      renterRating,
     });
   }
   out.sort((a, b) => b.updatedAtMs - a.updatedAtMs);

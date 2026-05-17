@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { getEffectiveNowMs } from '@/lib/rentalSimulation/simulationClock';
 import { getSupabase } from '@/lib/supabase';
 
 export type RentalOperationalState = 'missed_confirmation' | 'running_late' | 'no_show_reported';
@@ -14,7 +15,7 @@ export function parseScheduleMs(iso: string | null | undefined): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
-export function isSchedulePastWithGrace(iso: string | null | undefined, nowMs = Date.now()): boolean {
+export function isSchedulePastWithGrace(iso: string | null | undefined, nowMs = getEffectiveNowMs()): boolean {
   const t = parseScheduleMs(iso);
   if (t == null) return false;
   return nowMs > t + MEETUP_GRACE_MS;

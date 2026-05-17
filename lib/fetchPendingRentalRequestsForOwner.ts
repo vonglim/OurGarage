@@ -1,3 +1,5 @@
+import { parseListingIntentSnapshot, type ListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
+import { fetchAndMergeProfileNames } from '@/lib/remoteProfileCache';
 import { getSupabase } from '@/lib/supabase';
 
 export type PendingListingRentalRow = {
@@ -9,6 +11,11 @@ export type PendingListingRentalRow = {
   price: number;
   status: string;
   created_at: string;
+  listing_snapshot: ListingIntentSnapshot | null;
+  requested_start_date: string | null;
+  requested_end_date: string | null;
+  handoff_preference: string | null;
+  renter_message: string | null;
   listings: { title?: string | null } | null;
 };
 
@@ -20,7 +27,7 @@ export async function fetchPendingRentalRequestsForOwner(
 
   const supabase = getSupabase();
   const select =
-    'id, listing_id, renter_user_id, owner_user_id, duration_type, price, status, created_at, listings ( title )';
+    'id, listing_id, renter_user_id, owner_user_id, duration_type, price, status, created_at, listing_snapshot, requested_start_date, requested_end_date, handoff_preference, renter_message, listings ( title )';
 
   const { data: byOwnerColumn, error } = await supabase
     .from('rental_requests')
@@ -35,7 +42,7 @@ export async function fetchPendingRentalRequestsForOwner(
 
   const byId = new Map<string, PendingListingRentalRow>();
   for (const row of (byOwnerColumn ?? []) as PendingListingRentalRow[]) {
-    byId.set(row.id, row);
+    byId.set(row.id, normalizePendingRow(row));
   }
 
   const { data: ownedListings, error: el } = await supabase.from('listings').select('id').eq('user_id', uid);
@@ -61,11 +68,25 @@ export async function fetchPendingRentalRequestsForOwner(
       continue;
     }
     for (const row of (byListing ?? []) as PendingListingRentalRow[]) {
-      byId.set(row.id, row);
+      byId.set(row.id, normalizePendingRow(row));
     }
   }
 
-  return [...byId.values()].sort(
+  const rows = [...byId.values()].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   );
+
+  const renterIds = [...new Set(rows.map((r) => r.renter_user_id.trim()).filter(Boolean))];
+  if (renterIds.length > 0) {
+    await fetchAndMergeProfileNames(supabase, renterIds);
+  }
+
+  return rows;
+}
+
+function normalizePendingRow(row: PendingListingRentalRow & { listing_snapshot?: unknown }): PendingListingRentalRow {
+  return {
+    ...row,
+    listing_snapshot: parseListingIntentSnapshot(row.listing_snapshot),
+  };
 }

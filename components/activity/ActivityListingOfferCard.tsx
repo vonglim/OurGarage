@@ -2,15 +2,21 @@ import { Image } from 'expo-image';
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import {
+  BookingDetailRow,
+  ExpandableBookingCardShell,
+  ProtectionBadge,
+} from '@/components/activity/ExpandableBookingCardShell';
 import { Pressable } from '@/components/Pressable';
 import { ui } from '@/constants/appUi';
-import { formatUsd } from '@/lib/money';
-import type { NegotiationDeliveryMethod } from '@/lib/negotiationDelivery';
+import { formatIsoDateMedium } from '@/lib/listingAvailabilityDates';
 import {
   listingOfferOwnerCanRespond,
   listingOfferRemainingDeclinesBeforeLock,
   listingOfferRemainingOwnerCounters,
 } from '@/lib/listingOfferNegotiationUi';
+import { formatUsd } from '@/lib/money';
+import type { NegotiationDeliveryMethod } from '@/lib/negotiationDelivery';
 import type { ListingOfferActivityRow } from '@/store/listingOffersActivityStore';
 
 function formatStatusBadge(row: ListingOfferActivityRow): string {
@@ -35,6 +41,14 @@ function deliverySummary(method: NegotiationDeliveryMethod | null, fee: number |
   return '—';
 }
 
+function dateRangeLabel(row: ListingOfferActivityRow): string {
+  const s = row.rentalStartDate;
+  const e = row.rentalEndDate;
+  if (s && e) return `${formatIsoDateMedium(s)} – ${formatIsoDateMedium(e)}`;
+  if (s) return formatIsoDateMedium(s);
+  return 'Dates in offer detail';
+}
+
 type Props = {
   row: ListingOfferActivityRow;
   role: 'owner' | 'renter';
@@ -43,6 +57,7 @@ type Props = {
   onAccept?: () => void;
   onDecline?: () => void;
   onCounter?: (offerId: string) => void;
+  onMessage?: () => void;
   busy?: boolean;
 };
 
@@ -54,6 +69,7 @@ export function ActivityListingOfferCard({
   onAccept,
   onDecline,
   onCounter,
+  onMessage,
   busy,
 }: Props) {
   const title = row.snapshot?.title ?? 'Listing';
@@ -66,10 +82,39 @@ export function ActivityListingOfferCard({
     onCounter;
   const countersLeft = listingOfferRemainingOwnerCounters(row);
   const declinesLeft = listingOfferRemainingDeclinesBeforeLock(row);
+  const replacement = row.replacementValue ?? row.snapshot?.replacement_value ?? null;
+  const earningsEst = Number.isFinite(row.currentPrice) ? formatUsd(row.currentPrice * 0.85) : '—';
 
   return (
-    <View style={styles.card}>
-      <Pressable onPress={onPress} style={({ pressed }) => [styles.cardTap, pressed && styles.cardPressed]}>
+    <ExpandableBookingCardShell
+      expandedContent={
+        <>
+          <BookingDetailRow label="Area" value={row.snapshot?.service_area?.trim() || '—'} />
+          <BookingDetailRow label="Item" value={row.toolDescription?.trim() || '—'} />
+          <BookingDetailRow
+            label="Delivery budget"
+            value={
+              row.negotiationDeliveryMethod === 'owner_delivery' && row.negotiationDeliveryFee != null
+                ? formatUsd(row.negotiationDeliveryFee)
+                : '—'
+            }
+          />
+          <BookingDetailRow
+            label="Protection / replacement"
+            value={replacement != null && Number.isFinite(replacement) ? formatUsd(replacement) : '—'}
+          />
+          <BookingDetailRow label="Handoff" value={row.snapshot?.handoff_summary?.trim() || '—'} />
+          <BookingDetailRow label="Owner earnings (est.)" value={`~${earningsEst} after fees`} />
+          {ownerCanAct ? (
+            <Text style={styles.negotiationMeta}>
+              {countersLeft} counter{countersLeft === 1 ? '' : 's'} left · after{' '}
+              {declinesLeft === 1 ? '1 more decline' : `${declinesLeft} more declines`} this thread closes
+            </Text>
+          ) : null}
+        </>
+      }
+    >
+      <Pressable onPress={onPress} style={({ pressed }) => [styles.body, pressed && styles.bodyPressed]}>
         <View style={styles.topRow}>
           {hero ? (
             <Image source={{ uri: hero }} style={styles.thumb} contentFit="cover" accessibilityLabel="Listing" />
@@ -81,18 +126,22 @@ export function ActivityListingOfferCard({
               {title}
             </Text>
             <Text style={styles.meta} numberOfLines={1}>
-              {role === 'owner' ? row.renterDisplayName : 'Your offer'} · {timeAgo}
+              {role === 'owner' ? row.renterDisplayName : 'Your offer'}
+              {row.renterRating > 0 ? ` · ★ ${row.renterRating.toFixed(1)}` : ''} · {timeAgo}
             </Text>
+            <Text style={styles.dates}>{dateRangeLabel(row)}</Text>
           </View>
           <View style={styles.badge}>
             <Text style={styles.badgeText}>{formatStatusBadge(row)}</Text>
           </View>
         </View>
-        <Text style={styles.amount}>{formatUsd(row.currentPrice)}</Text>
-        <Text style={styles.sub}>
-          {deliverySummary(row.negotiationDeliveryMethod, row.negotiationDeliveryFee)}
-        </Text>
+        <View style={styles.summaryRow}>
+          <Text style={styles.amount}>{formatUsd(row.currentPrice)}</Text>
+          <Text style={styles.sub}>{deliverySummary(row.negotiationDeliveryMethod, row.negotiationDeliveryFee)}</Text>
+          {replacement != null && replacement > 0 ? <ProtectionBadge /> : null}
+        </View>
       </Pressable>
+
       {ownerCanAct ? (
         <View style={styles.actions}>
           <Pressable
@@ -102,76 +151,47 @@ export function ActivityListingOfferCard({
           >
             <Text style={styles.btnPrimaryText}>Accept</Text>
           </Pressable>
-          <View style={styles.secondaryRow}>
-            <Pressable
-              onPress={() => onCounter?.(row.id)}
-              disabled={busy || countersLeft <= 0}
-              style={({ pressed }) => [
-                styles.btnSecondary,
-                pressed && { opacity: 0.9 },
-                (busy || countersLeft <= 0) && { opacity: 0.45 },
-              ]}
-            >
-              <Text style={styles.btnSecondaryText}>Counter</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => onDecline?.()}
-              disabled={busy}
-              style={({ pressed }) => [styles.btnDecline, pressed && { opacity: 0.85 }, busy && { opacity: 0.5 }]}
-            >
-              <Text style={styles.btnDeclineText}>Decline</Text>
-            </Pressable>
-          </View>
-          <Text style={styles.negotiationMeta}>
-            {countersLeft} counter{countersLeft === 1 ? '' : 's'} left · after{' '}
-            {declinesLeft === 1 ? '1 more decline' : `${declinesLeft} more declines`} this thread closes
-          </Text>
+          <Pressable
+            onPress={() => onMessage?.()}
+            disabled={busy}
+            style={({ pressed }) => [styles.btnMessage, pressed && { opacity: 0.9 }, busy && { opacity: 0.5 }]}
+          >
+            <Text style={styles.btnMessageText}>Message</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => onDecline?.()}
+            disabled={busy}
+            style={({ pressed }) => [styles.btnDecline, pressed && { opacity: 0.85 }, busy && { opacity: 0.5 }]}
+          >
+            <Text style={styles.btnDeclineText}>Decline</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => onCounter?.(row.id)}
+            disabled={busy || countersLeft <= 0}
+            style={({ pressed }) => [
+              styles.btnCounter,
+              pressed && { opacity: 0.9 },
+              (busy || countersLeft <= 0) && { opacity: 0.45 },
+            ]}
+          >
+            <Text style={styles.btnCounterText}>Counter</Text>
+          </Pressable>
         </View>
       ) : null}
-    </View>
+    </ExpandableBookingCardShell>
   );
 }
 
 const styles = StyleSheet.create({
-  card: {
-    borderRadius: ui.radiusInput,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: ui.border,
-    backgroundColor: ui.background,
-    marginBottom: ui.spaceSm,
-  },
-  cardTap: {
-    padding: ui.spaceMd,
-  },
-  cardPressed: {
-    opacity: 0.96,
-  },
-  topRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-  },
-  thumb: {
-    width: 52,
-    height: 52,
-    borderRadius: 8,
-    backgroundColor: ui.surfaceNeutral,
-  },
+  body: { padding: 12 },
+  bodyPressed: { opacity: 0.96 },
+  topRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  thumb: { width: 56, height: 56, borderRadius: 10, backgroundColor: ui.surfaceNeutral },
   thumbPh: {},
-  topText: {
-    flex: 1,
-    minWidth: 0,
-  },
-  title: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: ui.textPrimary,
-  },
-  meta: {
-    marginTop: 4,
-    fontSize: 13,
-    color: ui.textSecondary,
-  },
+  topText: { flex: 1, minWidth: 0 },
+  title: { fontSize: 16, fontWeight: '700', color: ui.textPrimary },
+  meta: { marginTop: 2, fontSize: 13, color: ui.textSecondary },
+  dates: { marginTop: 2, fontSize: 12, fontWeight: '600', color: ui.textPrimary },
   badge: {
     alignSelf: 'flex-start',
     paddingHorizontal: 8,
@@ -179,73 +199,43 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: ui.surfaceTintPrimary,
   },
-  badgeText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: ui.primary,
-  },
-  amount: {
-    marginTop: 10,
-    fontSize: 20,
-    fontWeight: '800',
-    color: ui.textPrimary,
-  },
-  sub: {
-    marginTop: 4,
-    fontSize: 14,
-    color: ui.textSecondary,
-  },
+  badgeText: { fontSize: 11, fontWeight: '700', color: ui.primary },
+  summaryRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 10 },
+  amount: { fontSize: 18, fontWeight: '800', color: ui.textPrimary },
+  sub: { fontSize: 13, color: ui.textSecondary },
   actions: {
-    paddingHorizontal: ui.spaceMd,
-    paddingBottom: ui.spaceMd,
-    gap: 10,
-  },
-  secondaryRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    alignItems: 'center',
-  },
-  negotiationMeta: {
-    fontSize: 12,
-    color: ui.textMuted,
-    lineHeight: 16,
+    paddingHorizontal: 12,
+    paddingBottom: 12,
   },
   btnPrimary: {
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: ui.radiusButton,
+    flex: 1,
+    minWidth: 88,
+    paddingVertical: 10,
+    borderRadius: 10,
     backgroundColor: ui.primary,
     alignItems: 'center',
   },
-  btnPrimaryText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: ui.primaryOn,
+  btnPrimaryText: { fontSize: 14, fontWeight: '700', color: ui.primaryOn },
+  btnMessage: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#F1F5F9',
   },
-  btnSecondary: {
-    flex: 1,
-    minWidth: 120,
-    paddingVertical: 11,
-    paddingHorizontal: 14,
-    borderRadius: ui.radiusButton,
+  btnMessageText: { fontSize: 14, fontWeight: '600', color: ui.textPrimary },
+  btnDecline: { paddingHorizontal: 12, paddingVertical: 10 },
+  btnDeclineText: { fontSize: 14, fontWeight: '600', color: '#B91C1C' },
+  btnCounter: {
+    width: '100%',
+    paddingVertical: 9,
+    borderRadius: 10,
     borderWidth: 2,
     borderColor: ui.primary,
-    backgroundColor: ui.background,
     alignItems: 'center',
   },
-  btnSecondaryText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: ui.primary,
-  },
-  btnDecline: {
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-  },
-  btnDeclineText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: ui.textMuted,
-  },
+  btnCounterText: { fontSize: 14, fontWeight: '700', color: ui.primary },
+  negotiationMeta: { fontSize: 12, color: ui.textMuted, lineHeight: 16 },
 });

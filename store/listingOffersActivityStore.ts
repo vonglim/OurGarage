@@ -21,6 +21,12 @@ export type ListingOfferActivityRow = {
   lastNegotiationEventKind: string | null;
   snapshot: ListingIntentSnapshot | null;
   renterDisplayName: string;
+  rentalStartDate: string | null;
+  rentalEndDate: string | null;
+  replacementValue: number | null;
+  toolDescription: string | null;
+  /** Reserved for future trust / ID badges */
+  renterRating: number;
 };
 
 type State = {

@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { RentalDevToolkitPanel } from '@/components/devtools/RentalDevToolkitPanel';
 import { Pressable as AppPressable } from '@/components/Pressable';
 import { DEV_TOOLS_ENABLED } from '@/lib/devTools/gates';
 import {
@@ -18,18 +19,9 @@ import {
   mockIssueReportBody,
 } from '@/lib/devTools/mockGenerators';
 import { resetLocalMessagingState } from '@/lib/resetLocalAppState';
-import type { RentalLifecyclePhase } from '@/lib/rentalLifecyclePhase';
 import { useDevToolsStore } from '@/store/devToolsStore';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import { ui } from '@/constants/appUi';
-
-const LIFECYCLE_OPTIONS: { label: string; value: RentalLifecyclePhase | 'clear' }[] = [
-  { label: 'Clear override (use DB)', value: 'clear' },
-  { label: 'Force: Pickup', value: 'pickup' },
-  { label: 'Force: Active', value: 'active' },
-  { label: 'Force: Return', value: 'return' },
-  { label: 'Force: Completed', value: 'completed' },
-];
 
 /**
  * Floating dev-only QA menu. Renders nothing when {@link DEV_TOOLS_ENABLED} is false.
@@ -37,19 +29,19 @@ const LIFECYCLE_OPTIONS: { label: string; value: RentalLifecyclePhase | 'clear' 
 export function DevToolsFab() {
   const insets = useSafeAreaInsets();
   const pathname = usePathname();
-  const [open, setOpen] = useState(false);
+  const [generalOpen, setGeneralOpen] = useState(false);
+  const [rentalToolkitOpen, setRentalToolkitOpen] = useState(false);
 
   const pageAutofill = useDevToolsStore((s) => s.pageAutofill);
   const pageLabel = useDevToolsStore((s) => s.pageLabel);
-  const rentalOverride = useDevToolsStore((s) => s.rentalLifecycleOverride);
-  const setRentalLifecycleOverride = useDevToolsStore((s) => s.setRentalLifecycleOverride);
-  const clearRentalLifecycleOverride = useDevToolsStore((s) => s.clearRentalLifecycleOverride);
 
   if (!DEV_TOOLS_ENABLED) return null;
 
-  /** Clears sticky CTA bar on offer detail (~10+48+10 content + safe inset + gap). */
   const fabBottomOffset =
     pathname.includes('offer-detail') ? 76 + insets.bottom : Math.max(insets.bottom, 12) + 8;
+
+  const isRentalContext =
+    pathname.includes('/rental/') || pathname.includes('/rental-wizard/');
 
   const runAutofill = () => {
     if (!pageAutofill) {
@@ -87,18 +79,18 @@ export function DevToolsFab() {
     showFeedbackToast('Local messaging cache cleared');
   };
 
-  const onLifecyclePick = (value: RentalLifecyclePhase | 'clear') => {
-    if (value === 'clear') clearRentalLifecycleOverride();
-    else setRentalLifecycleOverride(value);
-    showFeedbackToast(value === 'clear' ? 'Lifecycle override cleared' : `Lifecycle UI → ${value}`);
-  };
-
   return (
     <>
       <AppPressable
         pressOpacityFeedback={false}
         accessibilityLabel="Open developer tools"
-        onPress={() => setOpen(true)}
+        onPress={() => {
+          if (isRentalContext) setRentalToolkitOpen(true);
+          else setGeneralOpen(true);
+        }}
+        onLongPress={() => {
+          setRentalToolkitOpen(true);
+        }}
         style={[
           styles.fab,
           {
@@ -110,69 +102,51 @@ export function DevToolsFab() {
         <Text style={styles.fabText}>⚡ DEV</Text>
       </AppPressable>
 
-      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-        <Pressable style={styles.modalBackdrop} onPress={() => setOpen(false)}>
+      <RentalDevToolkitPanel
+        visible={rentalToolkitOpen}
+        onClose={() => setRentalToolkitOpen(false)}
+        pathname={pathname}
+      />
+
+      <Modal visible={generalOpen} transparent animationType="fade" onRequestClose={() => setGeneralOpen(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setGeneralOpen(false)}>
           <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
             <Text style={styles.sheetTitle}>Developer tools</Text>
             <Text style={styles.sheetMeta} numberOfLines={2}>
               {pathname}
               {pageLabel ? ` · ${pageLabel}` : ''}
             </Text>
-            {rentalOverride ? (
-              <Text style={styles.overrideBanner}>Rental lifecycle override: {rentalOverride}</Text>
-            ) : null}
 
             <ScrollView style={styles.sheetScroll} keyboardShouldPersistTaps="handled">
+              <SheetBtn
+                title="Open rental lifecycle toolkit"
+                subtitle="Jumps, simulation clock, wizard debug"
+                onPress={() => {
+                  setGeneralOpen(false);
+                  setRentalToolkitOpen(true);
+                }}
+              />
               <SheetBtn
                 title="Autofill current page"
                 subtitle={
                   pageAutofill ? 'Runs screen-registered fill only' : 'No autofill available for this screen yet.'
                 }
-                onPress={() => {
-                  runAutofill();
-                }}
+                onPress={runAutofill}
                 disabled={!pageAutofill}
               />
               <SheetBtn title="Log mock chat snippet" subtitle="Console + toast" onPress={onMockMessage} />
               <SheetBtn title="Log mock decline reason" subtitle="For offer/decline flows" onPress={onMockDecline} />
               <SheetBtn title="Log mock issue report" subtitle="Support-style body" onPress={onMockIssue} />
-
-              <Text style={styles.sectionLabel}>Rental screen — UI phase override (local only)</Text>
-              {LIFECYCLE_OPTIONS.map((opt) => (
-                <SheetBtn
-                  key={opt.label}
-                  title={opt.label}
-                  onPress={() => onLifecyclePick(opt.value)}
-                />
-              ))}
-
               <SheetBtn
                 title="Clear local messaging cache"
                 subtitle="Chats/notifications AsyncStorage (dev)"
                 onPress={() => void onClearLocal()}
               />
-              <SheetBtn
-                title="Seed demo rental data"
-                subtitle="Use Supabase SQL/seeds — no client seed yet"
-                onPress={() => {
-                  if (__DEV__) {
-                    console.log('[dev-tools] Add rental seed scripts in supabase/ or docs.');
-                  }
-                  showFeedbackToast('See supabase seeds / SQL (not in-app)');
-                }}
-              />
-              <SheetBtn
-                title="Toggle test role"
-                subtitle="Use two accounts or simulators — not mocked in-app"
-                onPress={() => {
-                  showFeedbackToast('Switch accounts in dev — role flip not mocked');
-                }}
-              />
             </ScrollView>
 
             <AppPressable
               pressOpacityFeedback={false}
-              onPress={() => setOpen(false)}
+              onPress={() => setGeneralOpen(false)}
               style={({ pressed }) => [styles.closeBtn, pressed && { opacity: 0.85 }]}
             >
               <Text style={styles.closeBtnText}>Close</Text>
@@ -257,27 +231,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: ui.textSecondary,
   },
-  overrideBanner: {
-    marginTop: 10,
-    padding: 10,
-    borderRadius: 10,
-    backgroundColor: '#FEF3C7',
-    color: '#92400E',
-    fontSize: 13,
-    fontWeight: '600',
-  },
   sheetScroll: {
     marginTop: 14,
     maxHeight: 420,
-  },
-  sectionLabel: {
-    marginTop: 16,
-    marginBottom: 8,
-    fontSize: 12,
-    fontWeight: '700',
-    color: ui.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
   },
   rowBtn: {
     paddingVertical: 12,

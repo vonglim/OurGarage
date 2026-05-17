@@ -67,6 +67,7 @@ import {
   mockOwnerPickupInstruction,
   mockRenterNoteParagraph,
   useDevPageAutofill,
+  useRegisterRentalDevContext,
 } from '@/lib/devTools';
 import { fetchLatestOfferThreadMessagePreview, type OfferThreadMessagePreview } from '@/lib/fetchLatestOfferThreadMessage';
 import { deriveLifecyclePhaseFromRentalStatus, deriveRentalWorkspaceStage } from '@/lib/rentalLifecyclePhase';
@@ -1745,6 +1746,8 @@ export default function RentalScreen() {
     refreshInFlightRef.current = task;
     return task;
   }, [me, rentalId, supabase, offerForRental]);
+
+  useRegisterRentalDevContext(rentalId, refreshVerificationState);
 
   useEffect(() => {
     if (!rental?.id || !me) return;
