@@ -1,43 +1,49 @@
 import { DEV_TOOLS_ENABLED } from '@/lib/devTools/gates';
-import { deriveLifecyclePhaseFromRentalStatus } from '@/lib/rentalLifecyclePhase';
 import { getEffectiveNowMs } from '@/lib/rentalSimulation/simulationClock';
+import { isRentalCancelled } from '@/lib/rentalCancellation';
+import { estimateActivityCtaFromRentalRow } from '@/lib/rentalLifecycle/resolveActivityPresentation';
+import { logRentalCancellation } from '@/lib/rentalCancellation/rentalCancellationDebug';
+import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
 import {
-  isPickupHandoffBilaterallyComplete,
-  isReturnBilaterallyComplete,
-} from '@/lib/rentalOperationalAttention';
+  canShowWizardActiveRental,
+  hasReturnSchedule,
+  isMeetupCoordinationComplete,
+  isPickupCoordinationComplete,
+  isWizardReturnPhase,
+} from '@/lib/rentalWizard/rentalWizardGates';
+import { logPickupCoordinationDiagnostic } from '@/lib/rentalWizard/pickupCoordinationDiagnostics';
 import { resolveWizardTransitionBefore } from '@/lib/rentalWizard/rentalWizardTransitionResolver';
 import type { RentalWizardContext, RentalWizardDestination, RentalWizardStep } from '@/lib/rentalWizard/types';
 import { WIZARD_STEP_META, wizardPathForStep } from '@/lib/rentalWizard/wizardStepMeta';
 import { getDevLocalWizardProgress, getDevWizardStepOverride } from '@/store/rentalSimulationStore';
+import {
+  isPickupHandoffBilaterallyComplete,
+  isReturnBilaterallyComplete,
+} from '@/lib/rentalOperationalAttention';
 
-function hasReturnSchedule(ctx: RentalWizardContext): boolean {
-  const r = ctx.rental;
-  return Boolean(
-    (r.agreed_return_datetime && String(r.agreed_return_datetime).trim()) ||
-      (r.return_datetime && String(r.return_datetime).trim()) ||
-      (r.return_time && String(r.return_time).trim())
-  );
-}
+/**
+ * Core wizard step from workflow gates — never treat booking approval or `rentals.status = active`
+ * as equivalent to an in-progress rental after handoff.
+ */
+const CANCELLED_SUMMARY_STEP: RentalWizardStep = 'cancelled';
 
-function hasPickupSchedule(ctx: RentalWizardContext): boolean {
-  const r = ctx.rental;
-  return Boolean(
-    (r.agreed_pickup_datetime && String(r.agreed_pickup_datetime).trim()) ||
-      (r.pickup_datetime && String(r.pickup_datetime).trim()) ||
-      (r.meetup_time && String(r.meetup_time).trim())
-  );
-}
-
-/** Core step from existing rental lifecycle (source of truth). */
 export function resolveLogicalWizardStep(ctx: RentalWizardContext): RentalWizardStep {
-  const st = String(ctx.rental.status ?? 'pending').trim().toLowerCase();
-  const phase = ctx.lifecyclePhase;
+  if (isRentalCancelled(ctx.rental)) {
+    logRentalCancellation('resolver redirected to cancelled_summary', {
+      rentalId: ctx.rentalId,
+      status: ctx.rental.status,
+      cancellation_status: ctx.rental.cancellation_status,
+    });
+    return CANCELLED_SUMMARY_STEP;
+  }
 
-  if (phase === 'completed' || st === 'returned' || st === 'completed') {
+  const st = String(ctx.rental.status ?? 'pending').trim().toLowerCase();
+
+  if (st === 'returned' || st === 'completed') {
     return 'leave_review';
   }
 
-  if (phase === 'return' || st === 'return_pending') {
+  if (isWizardReturnPhase(ctx)) {
     if (ctx.returnHandoffComplete) return 'leave_review';
     if (ctx.wizardProgress.renter_return_im_here_at) {
       if (ctx.returnAck.owner) return 'return_handoff';
@@ -46,13 +52,27 @@ export function resolveLogicalWizardStep(ctx: RentalWizardContext): RentalWizard
     return 'prepare_return';
   }
 
-  if (phase === 'active' || st === 'handed_off' || st === 'active') {
+  if (canShowWizardActiveRental(ctx)) {
     return 'active_rental';
   }
 
-  if (!ctx.meetingCompleted) {
-    if (hasPickupSchedule(ctx) && !hasReturnSchedule(ctx)) return 'coordinate_return';
+  if (!isPickupCoordinationComplete(ctx)) {
+    logPickupCoordinationDiagnostic(ctx, 'resolveLogicalWizardStep', {
+      resolvedStep: 'coordinate_pickup',
+    });
     return 'coordinate_pickup';
+  }
+
+  if (!isMeetupCoordinationComplete(ctx)) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[rental-wizard][resolveLogicalWizardStep] → coordinate_return', {
+        rentalId: ctx.rentalId,
+        hasReturnSchedule: hasReturnSchedule(ctx),
+        pickup_confirmed_seen: ctx.seenTransitions.has('pickup_confirmed_seen'),
+        return_ack: Boolean(ctx.wizardProgress.pickup_return_coordination_ack_at),
+      });
+    }
+    return 'coordinate_return';
   }
 
   if (!ctx.pickupHandoffComplete) {
@@ -77,7 +97,7 @@ export function resolveLogicalWizardStep(ctx: RentalWizardContext): RentalWizard
     return 'prepare_pickup';
   }
 
-  return 'active_rental';
+  return 'prepare_pickup';
 }
 
 function mergeDevWizardContext(ctx: RentalWizardContext): RentalWizardContext {
@@ -91,6 +111,21 @@ export function resolveRentalWizardDestination(
   ctx: RentalWizardContext,
   nowMs = getEffectiveNowMs()
 ): RentalWizardDestination {
+  if (isRentalCancelled(ctx.rental)) {
+    logRentalCancellation('resolver redirected to cancelled_summary', {
+      rentalId: ctx.rentalId,
+      status: ctx.rental.status,
+      cancellation_status: ctx.rental.cancellation_status,
+      overridesSkipped: true,
+    });
+    const meta = WIZARD_STEP_META[CANCELLED_SUMMARY_STEP];
+    return {
+      step: CANCELLED_SUMMARY_STEP,
+      ctaLabel: meta.ctaLabel,
+      path: wizardPathForStep(ctx.rentalId, CANCELLED_SUMMARY_STEP),
+    };
+  }
+
   const merged = mergeDevWizardContext(ctx);
   const stepOverride = DEV_TOOLS_ENABLED ? getDevWizardStepOverride() : null;
   if (stepOverride) {
@@ -104,6 +139,15 @@ export function resolveRentalWizardDestination(
   const logical = resolveLogicalWizardStep(merged);
   const transition = resolveWizardTransitionBefore(logical, merged, nowMs);
   const step = transition ?? logical;
+  logScenario('routing', {
+    event: 'wizard_destination_resolved',
+    rentalId: merged.rentalId,
+    source: 'resolveRentalWizardDestination',
+    logicalStep: logical,
+    transitionStep: transition,
+    step,
+    path: wizardPathForStep(ctx.rentalId, step),
+  });
   const meta = WIZARD_STEP_META[step];
   return {
     step,
@@ -112,55 +156,21 @@ export function resolveRentalWizardDestination(
   };
 }
 
-/** Lightweight label for activity list cards (no wizard_state fetch). */
+/** Lightweight label for activity list cards — delegates to canonical lifecycle estimate. */
 export function estimateWizardCtaLabelFromRentalRow(input: {
   status?: string | null;
+  cancellation_status?: string | null;
   agreement_status?: string | null;
   last_proposed_by?: string | null;
   agreed_pickup_datetime?: string | null;
   agreed_return_datetime?: string | null;
   signed_at?: string | null;
-}): string {
-  const st = String(input.status ?? 'pending').trim().toLowerCase();
-  const phase = deriveLifecyclePhaseFromRentalStatus(st);
-  const pending =
-    input.agreement_status === 'pending' && String(input.last_proposed_by ?? '').trim().length > 0;
-  const meetingDone = input.agreement_status === 'confirmed' && !pending;
-
-  if (phase === 'completed' || st === 'returned') return 'Leave review';
-  if (phase === 'return' || st === 'return_pending') return 'Prepare for return';
-  if (phase === 'active' || st === 'handed_off') {
-    if (input.signed_at) return 'Enjoy your rental';
-    return 'Meetup day';
-  }
-  if (!meetingDone) {
-    if (input.agreed_pickup_datetime && !input.agreed_return_datetime) return 'Coordinate return';
-    return 'Coordinate pickup';
-  }
-  return 'Prepare for pickup';
+  meetup_location?: string | null;
+  owner_confirmed?: boolean | null;
+  renter_confirmed?: boolean | null;
+}): string | null {
+  return estimateActivityCtaFromRentalRow(input);
 }
 
-export function buildRentalWizardContextFlags(rental: RentalWizardContext['rental']) {
-  const ownerConfirmed =
-    typeof rental.owner_confirmed === 'boolean'
-      ? rental.owner_confirmed
-      : Boolean(rental.confirmed_by_owner);
-  const renterConfirmed =
-    typeof rental.renter_confirmed === 'boolean'
-      ? rental.renter_confirmed
-      : Boolean(rental.confirmed_by_renter);
-  const agreementStatus =
-    rental.agreement_status === 'confirmed'
-      ? 'confirmed'
-      : rental.agreement_status === 'pending'
-        ? 'pending'
-        : ownerConfirmed && renterConfirmed
-          ? 'confirmed'
-          : 'pending';
-  const hasPendingProposal =
-    agreementStatus === 'pending' && String(rental.last_proposed_by ?? '').trim().length > 0;
-  const meetingCompleted = agreementStatus === 'confirmed' && !hasPendingProposal;
-  return { agreementStatus, hasPendingProposal, meetingCompleted };
-}
-
+export { buildRentalWizardContextFlags } from '@/lib/rentalWizard/rentalWizardContextFlags';
 export { isPickupHandoffBilaterallyComplete, isReturnBilaterallyComplete };

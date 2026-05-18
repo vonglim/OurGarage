@@ -1,6 +1,8 @@
 import type { UnifiedRentalRow } from '@/lib/fetchUnifiedRentalsForUser';
+import { isRentalCancelled } from '@/lib/rentalCancellation';
 
 function terminalRental(row: UnifiedRentalRow): boolean {
+  if (isRentalCancelled(row)) return true;
   const s = String(row.status ?? '').trim().toLowerCase();
   return s === 'returned' || s === 'completed' || s === 'cancelled' || s === 'canceled';
 }

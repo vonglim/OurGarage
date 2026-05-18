@@ -24,6 +24,15 @@ export type UnifiedRentalRow = {
   proposal_version?: number | null;
   proposal_updated_at?: string | null;
   latest_proposal_message_id?: string | null;
+  cancellation_status?: string | null;
+  cancellation_requested_by?: string | null;
+  cancellation_requested_at?: string | null;
+  cancellation_reason?: string | null;
+  cancellation_resolved_at?: string | null;
+  cancellation_resolved_by?: string | null;
+  signed_at?: string | null;
+  handoff_approved_by_owner?: boolean | null;
+  handoff_approved_by_renter?: boolean | null;
   /** Resolved in fetch — never a bare UUID. */
   displayTitle: string;
 };

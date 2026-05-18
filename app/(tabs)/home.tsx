@@ -379,16 +379,13 @@ export default function Home() {
                   haptic
                   pressOpacityFeedback={false}
                   onPress={() => {
-                    router.push({
-                      pathname: '/rental/[id]',
-                      params: { id: homeRentalCard.rentalId },
-                    });
+                    router.push(`/rental-wizard/${homeRentalCard.rentalId}`);
                   }}
                   style={({ pressed }) => [styles.activeRentalCta, pressed && styles.activeRentalCtaPressed]}
                   accessibilityRole="button"
-                  accessibilityLabel="Open Rental Workspace"
+                  accessibilityLabel="Continue rental"
                 >
-                  <Text style={styles.activeRentalCtaText}>Open Rental Workspace</Text>
+                  <Text style={styles.activeRentalCtaText}>Continue</Text>
                 </Pressable>
               </View>
             ) : null}

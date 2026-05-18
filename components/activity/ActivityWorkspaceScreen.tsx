@@ -34,7 +34,25 @@ import {
   fetchPendingRentalRequestsForOwner,
   type PendingListingRentalRow,
 } from '@/lib/fetchPendingRentalRequestsForOwner';
+import { RentalCancelRequestSheet } from '@/components/rentalCancellation/RentalCancelRequestSheet';
 import { unifiedRentalTitle, type UnifiedRentalRow } from '@/lib/fetchUnifiedRentalsForUser';
+import {
+  acceptRentalCancellation,
+  cancellationRequestedByOther,
+  declineRentalCancellation,
+  evaluateCancellationEligibility,
+  isRentalActiveForQueues,
+  isRentalCancelled,
+  isRentalCancelledHistory,
+  isRentalCompletedHistory,
+  requestRentalCancellation,
+} from '@/lib/rentalCancellation';
+import {
+  resolveRentalCardStatusBadge,
+  type RentalCardStatusBadge,
+} from '@/lib/rentalLifecycle';
+import { rentalWizardCancelledSummaryPath } from '@/lib/rentalNavigation';
+import type { RentalCancellationReasonKey } from '@/lib/rentalCancellation';
 import { pickRentalWorkspaceNudgeRow } from '@/lib/rentalWorkspaceNudge';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { buildRequestPricingContextFromRequest } from '@/lib/negotiationTermSnapshot';
@@ -106,8 +124,7 @@ function firstWorkspaceParam(v: string | string[] | undefined): string {
 }
 
 function isUnifiedRentalActiveRow(row: UnifiedRentalRow): boolean {
-  const st = String(row.status ?? '').trim().toLowerCase();
-  return !['returned', 'completed', 'cancelled', 'canceled'].includes(st);
+  return isRentalActiveForQueues(row);
 }
 
 function formatNextPickupHintForRows(rows: UnifiedRentalRow[]): string {
@@ -345,63 +362,32 @@ function outgoingOfferStatusLabel(s: OutgoingOfferStatus): string {
   }
 }
 
+function rentalStatusChipColors(tone: RentalCardStatusBadge['tone']): { bg: string; fg: string } {
+  switch (tone) {
+    case 'danger':
+      return { bg: '#FEE2E2', fg: '#B91C1C' };
+    case 'warning':
+      return { bg: '#FFF7ED', fg: '#9A3412' };
+    case 'muted':
+      return { bg: '#F1F5F9', fg: '#64748B' };
+    default:
+      return { bg: '#EAF2FF', fg: ui.primary };
+  }
+}
+
 function rentalStatusVisual(
   row: UnifiedRentalRow,
   role: RentalsSubView,
   viewerUserId: string
-): { label: string } {
-  const nowMs = Date.now();
-  const pickupMs = row.pickup_datetime ? new Date(row.pickup_datetime).getTime() : null;
-  const returnMs = row.return_datetime ? new Date(row.return_datetime).getTime() : null;
-  const status = String(row.status ?? '')
-    .trim()
-    .toLowerCase();
-  const agreementStatus = String(row.agreement_status ?? '')
-    .trim()
-    .toLowerCase();
-  const allConfirmed = row.owner_confirmed === true && row.renter_confirmed === true;
-  const me = viewerUserId.trim();
-  const lastProposer = String(row.last_proposed_by ?? '').trim();
+): RentalCardStatusBadge {
+  return resolveRentalCardStatusBadge(row, role, viewerUserId);
+}
 
-  if (status === 'completed' || status === 'returned') {
-    return { label: 'Completed' };
-  }
-  if (status === 'cancelled' || status === 'canceled') {
-    return { label: 'Awaiting confirmation' };
-  }
-  if (agreementStatus === 'pending' || !allConfirmed) {
-    if (me && lastProposer && lastProposer === me) {
-      return { label: 'Awaiting response' };
-    }
-    if (me && lastProposer && lastProposer !== me) {
-      return { label: 'Respond to proposal' };
-    }
-    return { label: 'Awaiting confirmation' };
-  }
-  if (status === 'active') {
-    if (returnMs != null) {
-      const dayMs = 24 * 60 * 60 * 1000;
-      const diff = returnMs - nowMs;
-      if (diff > 0 && diff <= dayMs) {
-        return { label: 'Return scheduled' };
-      }
-      if (diff <= 0) {
-        return { label: 'Awaiting return' };
-      }
-    }
-    return { label: 'Rental active' };
-  }
-  if (pickupMs != null) {
-    const withinMeetupWindow = Math.abs(pickupMs - nowMs) <= 6 * 60 * 60 * 1000;
-    if (withinMeetupWindow || nowMs > pickupMs) {
-      return { label: 'Meetup scheduled' };
-    }
-    return { label: 'Ready for pickup' };
-  }
-
-  return {
-    label: role === 'listing' ? 'Meetup scheduled' : 'Ready for pickup',
-  };
+function showReportIssueAlert(message?: string): void {
+  Alert.alert(
+    'Report issue',
+    message ?? 'In-app reporting is coming soon. For urgent issues, message your match from chat.'
+  );
 }
 
 export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode }) {
@@ -428,6 +414,8 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
   const [requestDeleteConfirmTs, setRequestDeleteConfirmTs] = useState<number | null>(null);
   const [requestDeleteBusy, setRequestDeleteBusy] = useState(false);
   const [busyListingOfferId, setBusyListingOfferId] = useState<string | null>(null);
+  const [cancelSheetRental, setCancelSheetRental] = useState<UnifiedRentalRow | null>(null);
+  const [cancellationBusyId, setCancellationBusyId] = useState<string | null>(null);
 
   const refreshListingRentalRequests = useCallback(async () => {
     const uid = me.trim();
@@ -660,8 +648,24 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
     () => approvedAsRenter.filter(isUnifiedRentalActiveRow),
     [approvedAsRenter]
   );
+  const rentingCompletedHistoryRows = useMemo(
+    () => approvedAsRenter.filter(isRentalCompletedHistory),
+    [approvedAsRenter]
+  );
+  const rentingCancelledHistoryRows = useMemo(
+    () => approvedAsRenter.filter(isRentalCancelledHistory),
+    [approvedAsRenter]
+  );
   const shopActiveRentalRows = useMemo(
     () => approvedAsOwner.filter(isUnifiedRentalActiveRow),
+    [approvedAsOwner]
+  );
+  const shopCompletedHistoryRows = useMemo(
+    () => approvedAsOwner.filter(isRentalCompletedHistory),
+    [approvedAsOwner]
+  );
+  const shopCancelledHistoryRows = useMemo(
+    () => approvedAsOwner.filter(isRentalCancelledHistory),
     [approvedAsOwner]
   );
 
@@ -1148,39 +1152,79 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
     );
   }
 
-  function renderRentalOperationalRow(row: UnifiedRentalRow, role: RentalsSubView) {
+  function renderRentalOperationalRow(
+    row: UnifiedRentalRow,
+    role: RentalsSubView,
+    options?: { historyVariant?: 'completed' | 'cancelled' }
+  ) {
     const title = unifiedRentalTitle(row);
     const messageUnread =
       typeof row.offer_id === 'string' && row.offer_id.trim() !== ''
         ? (unreadByOfferId[row.offer_id.trim()] ?? 0)
         : 0;
     const status = rentalStatusVisual(row, role, me);
-    const otherUserId = role === 'renting' ? row.owner_user_id : row.renter_user_id;
-    const counterpartyLine = rentalCounterpartyMetaLine(otherUserId, role);
+    const statusColors = rentalStatusChipColors(status.tone);
+    const counterpartyLine = rentalCounterpartyMetaLine(
+      role === 'renting' ? row.owner_user_id : row.renter_user_id,
+      role
+    );
+    const cancelled = isRentalCancelled(row);
+    const historyMuted = options?.historyVariant === 'cancelled';
+    const pendingCancelForMe = cancellationRequestedByOther(row, me);
+    const cancelEligibility = evaluateCancellationEligibility(row, { viewerUserId: me });
+    const canRequestCancel = cancelEligibility.allowed && !cancelled;
+    const showReportIssue =
+      !canRequestCancel && 'reportIssue' in cancelEligibility && cancelEligibility.reportIssue;
     const guidedFlowLabel =
-      role === 'renting'
+      role === 'renting' && !cancelled
         ? estimateWizardCtaLabelFromRentalRow({
             status: row.status,
+            cancellation_status: row.cancellation_status,
             agreement_status: row.agreement_status,
             last_proposed_by: row.last_proposed_by,
             agreed_pickup_datetime: row.agreed_pickup_datetime,
             agreed_return_datetime: row.agreed_return_datetime,
           })
         : null;
+    const rowBusy = cancellationBusyId === row.id;
+
+    const runCancellationAction = async (
+      label: string,
+      fn: () => Promise<{ ok: boolean; message?: string }>
+    ) => {
+      setCancellationBusyId(row.id);
+      try {
+        const res = await fn();
+        if (res.ok) {
+          showFeedbackToast(label);
+          await refreshUnifiedRentals();
+        } else {
+          Alert.alert('Could not update', res.message ?? 'Please try again.');
+        }
+      } finally {
+        setCancellationBusyId(null);
+      }
+    };
 
     return (
-      <View key={row.id} style={styles.rentalRowCard}>
+      <View
+        key={row.id}
+        style={[styles.rentalRowCard, historyMuted && styles.rentalRowCardHistoryCancelled]}
+      >
         <View style={styles.rentalRowMain}>
           <View style={styles.rentalRowTop}>
             <View style={styles.rentalRowTitleWrap}>
-              <Text style={styles.rentalRowTitle} numberOfLines={1}>
+              <Text
+                style={[styles.rentalRowTitle, historyMuted && styles.rentalRowTitleMuted]}
+                numberOfLines={1}
+              >
                 {title}
               </Text>
             </View>
             <View style={styles.rentalStatusRow}>
-              <View style={styles.rentalStatusChip}>
+              <View style={[styles.rentalStatusChip, { backgroundColor: statusColors.bg }]}>
                 <Text
-                  style={styles.rentalStatusChipText}
+                  style={[styles.rentalStatusChipText, { color: statusColors.fg }]}
                   numberOfLines={1}
                   ellipsizeMode="tail"
                 >
@@ -1190,31 +1234,75 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
             </View>
           </View>
 
+          {pendingCancelForMe ? (
+            <View style={styles.cancelBanner}>
+              <Text style={styles.cancelBannerText}>Cancellation requested — respond below</Text>
+              <View style={styles.cancelBannerActions}>
+                <Pressable
+                  haptic
+                  disabled={rowBusy}
+                  onPress={() =>
+                    void runCancellationAction('Cancellation accepted', () =>
+                      acceptRentalCancellation(getSupabase(), row.id, me, {
+                        rentalTitle: title,
+                      })
+                    )
+                  }
+                  style={({ pressed }) => [styles.cancelBannerBtn, pressed && { opacity: 0.9 }]}
+                >
+                  <Text style={styles.cancelBannerBtnText}>Accept</Text>
+                </Pressable>
+                <Pressable
+                  haptic
+                  disabled={rowBusy}
+                  onPress={() =>
+                    void runCancellationAction('Cancellation declined', () =>
+                      declineRentalCancellation(getSupabase(), row.id, me, {
+                        rentalTitle: title,
+                      })
+                    )
+                  }
+                  style={({ pressed }) => [
+                    styles.cancelBannerBtnOutline,
+                    pressed && { opacity: 0.9 },
+                  ]}
+                >
+                  <Text style={styles.cancelBannerBtnOutlineText}>Decline</Text>
+                </Pressable>
+                <Pressable
+                  haptic
+                  onPress={() =>
+                    router.push({
+                      pathname: '/chat/[id]',
+                      params: { id: row.id },
+                    })
+                  }
+                  style={({ pressed }) => [styles.cancelBannerBtnGhost, pressed && { opacity: 0.9 }]}
+                >
+                  <Text style={styles.cancelBannerBtnGhostText}>Message</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+
           <View style={styles.rentalRowBottom}>
             <Text style={styles.rentalCounterparty} numberOfLines={1}>
               {counterpartyLine}
             </Text>
-            <View style={styles.rentalRowActionsCol}>
-              <View style={styles.rentalRowActions}>
+            <View style={styles.rentalActionGrid}>
+              <View style={styles.rentalActionGridRow}>
                 <Pressable
                   pressOpacityFeedback={false}
                   haptic
                   onPress={() => {
-                    if (!row.id) {
-                      console.warn('Missing rental id');
-                      return;
-                    }
-                    router.push({
-                      pathname: '/chat/[id]',
-                      params: { id: row.id },
-                    });
+                    if (!row.id) return;
+                    router.push({ pathname: '/chat/[id]', params: { id: row.id } });
                   }}
-                  style={({ pressed }) => [styles.rentalIconBtn, pressed && styles.rentalIconBtnPressed]}
-                  accessibilityRole="button"
+                  style={({ pressed }) => [styles.rentalGridBtn, pressed && styles.rentalGridBtnPressed]}
                   accessibilityLabel="Chat"
                 >
-                  <Ionicons name="chatbubble-ellipses-outline" size={16} color={ui.primary} />
-                  <Text style={styles.rentalActionLabelInline}>Chat</Text>
+                  <Ionicons name="chatbubble-ellipses-outline" size={15} color={ui.primary} />
+                  <Text style={styles.rentalGridBtnLabel}>Chat</Text>
                   {messageUnread > 0 ? (
                     <View style={styles.rentalIconBadge}>
                       <Text style={styles.rentalIconBadgeText}>{formatSectionCount(messageUnread)}</Text>
@@ -1224,39 +1312,86 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
                 <Pressable
                   pressOpacityFeedback={false}
                   haptic
-                  onPress={() => {
-                    router.push({
-                      pathname: '/rental/[id]',
-                      params: { id: row.id },
-                    });
-                  }}
-                  style={({ pressed }) => [styles.rentalIconBtn, pressed && styles.rentalIconBtnPressed]}
-                  accessibilityRole="button"
+                  onPress={() =>
+                    router.push({ pathname: '/rental/[id]', params: { id: row.id } })
+                  }
+                  style={({ pressed }) => [styles.rentalGridBtn, pressed && styles.rentalGridBtnPressed]}
                   accessibilityLabel="Details"
                 >
-                  <Ionicons name="document-text-outline" size={16} color={ui.primary} />
-                  <Text style={styles.rentalActionLabelInline}>Details</Text>
+                  <Ionicons name="document-text-outline" size={15} color={ui.primary} />
+                  <Text style={styles.rentalGridBtnLabel}>Details</Text>
                 </Pressable>
               </View>
-              {guidedFlowLabel ? (
-                <Pressable
-                  pressOpacityFeedback={false}
-                  haptic
-                  onPress={() => {
-                    router.push(`/rental-wizard/${row.id}`);
-                  }}
-                  style={({ pressed }) => [
-                    styles.rentalContinueBtn,
-                    pressed && styles.rentalContinueBtnPressed,
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityLabel={guidedFlowLabel}
-                >
-                  <Ionicons name="arrow-forward-circle" size={16} color="#FFFFFF" />
-                  <Text style={styles.rentalContinueBtnText} numberOfLines={1}>
-                    {guidedFlowLabel}
-                  </Text>
-                </Pressable>
+              {guidedFlowLabel || !cancelled ? (
+                <View style={styles.rentalActionGridBottom}>
+                  {guidedFlowLabel ? (
+                    <Pressable
+                      pressOpacityFeedback={false}
+                      haptic
+                      onPress={() =>
+                        router.push(
+                          cancelled
+                            ? rentalWizardCancelledSummaryPath(row.id)
+                            : `/rental-wizard/${row.id}`
+                        )
+                      }
+                      style={({ pressed }) => [
+                        styles.rentalGridBtnPrimaryWide,
+                        pressed && styles.rentalGridBtnPressed,
+                      ]}
+                      accessibilityLabel={guidedFlowLabel}
+                    >
+                      <Ionicons name="arrow-forward-circle" size={17} color="#FFFFFF" />
+                      <Text style={styles.rentalGridBtnPrimaryWideLabel} numberOfLines={1}>
+                        Continue
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                  {!cancelled && (canRequestCancel || showReportIssue) ? (
+                    <Pressable
+                      pressOpacityFeedback={false}
+                      haptic
+                      disabled={
+                        !canRequestCancel &&
+                        !showReportIssue &&
+                        !('contactSupport' in cancelEligibility && cancelEligibility.contactSupport)
+                      }
+                      onPress={() => {
+                        if (showReportIssue) {
+                          showReportIssueAlert(cancelEligibility.message);
+                          return;
+                        }
+                        if (
+                          'contactSupport' in cancelEligibility &&
+                          cancelEligibility.contactSupport
+                        ) {
+                          Alert.alert('Contact support', cancelEligibility.message, [
+                            { text: 'OK' },
+                          ]);
+                          return;
+                        }
+                        if (canRequestCancel) setCancelSheetRental(row);
+                      }}
+                      style={({ pressed }) => [
+                        showReportIssue
+                          ? styles.rentalGridBtnReportCompact
+                          : styles.rentalGridBtnCancelCompact,
+                        pressed && { opacity: 0.9 },
+                      ]}
+                      accessibilityLabel={showReportIssue ? 'Report issue' : 'Request cancel'}
+                    >
+                      <Text
+                        style={
+                          showReportIssue
+                            ? styles.rentalGridBtnReportCompactLabel
+                            : styles.rentalGridBtnCancelCompactLabel
+                        }
+                      >
+                        {showReportIssue ? 'Report issue' : 'Request cancel'}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                </View>
               ) : null}
             </View>
           </View>
@@ -1335,7 +1470,7 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
                   }
                   onDismissNudge={onDismissRentalWorkspaceNudge}
                   onOpenRental={(id) => {
-                    router.push({ pathname: '/rental/[id]', params: { id } });
+                    router.push(`/rental-wizard/${id}`);
                   }}
                   goSection={goRentingSection}
                   activeRentalCount={rentingActiveRentalRows.length}
@@ -1542,35 +1677,59 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
                           pressOpacityFeedback={false}
                           haptic
                           onPress={() => {
-                            router.push({
-                              pathname: '/rental/[id]',
-                              params: { id: rentalWorkspaceNudgeRow.id },
-                            });
+                            router.push(`/rental-wizard/${rentalWorkspaceNudgeRow.id}`);
                           }}
                           style={({ pressed }) => [
                             styles.workspaceNudgeCta,
                             pressed && primarySolidPressed,
                           ]}
                           accessibilityRole="button"
-                          accessibilityLabel="Open rental workspace"
+                          accessibilityLabel="Continue rental"
                         >
-                          <Text style={styles.workspaceNudgeCtaLabel}>Open Rental Workspace</Text>
+                          <Text style={styles.workspaceNudgeCtaLabel}>Continue</Text>
                         </Pressable>
                       </View>
                     </View>
                   ) : null}
                   <Text style={styles.activePastHeading}>Your rentals</Text>
                   <Text style={styles.tabPanelSubline}>Active agreements where you are the borrower.</Text>
-                  {approvedAsRenter.length === 0 ? (
+                  {rentingActiveRentalRows.length === 0 ? (
                     <View style={styles.emptyBlock}>
-                      <Text style={styles.emptyTitle}>Nothing here yet</Text>
+                      <Text style={styles.emptyTitle}>No active rentals</Text>
                       <Text style={styles.emptySubline}>
-                        Rentals where you are the borrower appear here (requests or listings).
+                        Rentals where you are the borrower appear here once a booking is confirmed.
                       </Text>
                     </View>
                   ) : (
-                    approvedAsRenter.map((row) => renderRentalOperationalRow(row, 'renting'))
+                    rentingActiveRentalRows.map((row) => renderRentalOperationalRow(row, 'renting'))
                   )}
+                  {rentingCompletedHistoryRows.length > 0 ||
+                  rentingCancelledHistoryRows.length > 0 ? (
+                    <>
+                      <View style={[styles.sectionRule, styles.sectionRuleTight]} />
+                      <Text style={styles.activePastHeading}>Rental history</Text>
+                      {rentingCompletedHistoryRows.length > 0 ? (
+                        <>
+                          <Text style={styles.historySubheading}>Completed</Text>
+                          {rentingCompletedHistoryRows.map((row) =>
+                            renderRentalOperationalRow(row, 'renting', {
+                              historyVariant: 'completed',
+                            })
+                          )}
+                        </>
+                      ) : null}
+                      {rentingCancelledHistoryRows.length > 0 ? (
+                        <>
+                          <Text style={styles.historySubheadingMuted}>Cancelled</Text>
+                          {rentingCancelledHistoryRows.map((row) =>
+                            renderRentalOperationalRow(row, 'renting', {
+                              historyVariant: 'cancelled',
+                            })
+                          )}
+                        </>
+                      ) : null}
+                    </>
+                  ) : null}
                 </View>
               ) : null}
 
@@ -1671,7 +1830,9 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
                   <Text style={styles.tabPanelSubline}>
                     Active agreements where you are lending equipment out.
                   </Text>
-                  {approvedAsOwner.length === 0 ? (
+                  {shopActiveRentalRows.length === 0 &&
+                  shopCompletedHistoryRows.length === 0 &&
+                  shopCancelledHistoryRows.length === 0 ? (
                     <View style={styles.emptyBlock}>
                       <Text style={styles.emptyTitle}>Nothing here yet</Text>
                       <Text style={styles.emptySubline}>
@@ -1679,7 +1840,35 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
                       </Text>
                     </View>
                   ) : (
-                    approvedAsOwner.map((row) => renderRentalOperationalRow(row, 'listing'))
+                    <>
+                      {shopActiveRentalRows.map((row) => renderRentalOperationalRow(row, 'listing'))}
+                      {shopCompletedHistoryRows.length > 0 || shopCancelledHistoryRows.length > 0 ? (
+                        <>
+                          <View style={[styles.sectionRule, styles.sectionRuleTight]} />
+                          <Text style={styles.activePastHeading}>Rental history</Text>
+                          {shopCompletedHistoryRows.length > 0 ? (
+                            <>
+                              <Text style={styles.historySubheading}>Completed</Text>
+                              {shopCompletedHistoryRows.map((row) =>
+                                renderRentalOperationalRow(row, 'listing', {
+                                  historyVariant: 'completed',
+                                })
+                              )}
+                            </>
+                          ) : null}
+                          {shopCancelledHistoryRows.length > 0 ? (
+                            <>
+                              <Text style={styles.historySubheadingMuted}>Cancelled</Text>
+                              {shopCancelledHistoryRows.map((row) =>
+                                renderRentalOperationalRow(row, 'listing', {
+                                  historyVariant: 'cancelled',
+                                })
+                              )}
+                            </>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </>
                   )}
                 </View>
               ) : null}
@@ -1763,6 +1952,29 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
 
         </ScreenEntrance>
       </View>
+
+      <RentalCancelRequestSheet
+        visible={cancelSheetRental != null}
+        rental={cancelSheetRental}
+        viewerUserId={me}
+        onClose={() => setCancelSheetRental(null)}
+        onSubmit={async (reason: RentalCancellationReasonKey) => {
+          if (!cancelSheetRental) return;
+          const res = await requestRentalCancellation(
+            getSupabase(),
+            cancelSheetRental.id,
+            me,
+            reason,
+            { rentalTitle: unifiedRentalTitle(cancelSheetRental) }
+          );
+          if (!res.ok) {
+            Alert.alert('Could not send request', res.message);
+            throw new Error(res.message);
+          }
+          showFeedbackToast('Cancellation request sent');
+          await refreshUnifiedRentals();
+        }}
+      />
 
       <Modal
         visible={requestDeleteConfirmTs != null}
@@ -2497,7 +2709,6 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 6,
     paddingVertical: 3,
-    backgroundColor: '#0B1F3A',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -2505,8 +2716,29 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
     letterSpacing: 0.15,
-    color: '#FFFFFF',
     flexShrink: 1,
+  },
+  rentalRowCardHistoryCancelled: {
+    opacity: 0.82,
+    backgroundColor: '#F8FAFC',
+  },
+  rentalRowTitleMuted: {
+    color: ui.textSecondary,
+    fontWeight: '600',
+  },
+  historySubheading: {
+    marginTop: 12,
+    marginBottom: 8,
+    fontSize: 13,
+    fontWeight: '700',
+    color: ui.textPrimary,
+  },
+  historySubheadingMuted: {
+    marginTop: 14,
+    marginBottom: 8,
+    fontSize: 13,
+    fontWeight: '600',
+    color: ui.textMuted,
   },
   rentalRowBottom: {
     marginTop: 6,
@@ -2523,6 +2755,134 @@ const styles = StyleSheet.create({
     color: ui.textSecondary,
     letterSpacing: -0.1,
   },
+  rentalActionGrid: {
+    width: RENTAL_ACTIONS_TOTAL_WIDTH + RENTAL_ACTION_BTN_WIDTH + RENTAL_ACTIONS_GAP,
+    maxWidth: '54%',
+    gap: 6,
+  },
+  rentalActionGridRow: {
+    flexDirection: 'row',
+    gap: RENTAL_ACTIONS_GAP,
+  },
+  rentalGridBtn: {
+    position: 'relative',
+    flex: 1,
+    minHeight: 34,
+    paddingVertical: 6,
+    paddingHorizontal: 6,
+    borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: '#EAF2FF',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#C7D6ED',
+  },
+  rentalGridBtnPressed: { opacity: 0.88 },
+  rentalGridBtnPlaceholder: {
+    opacity: 0,
+    borderColor: 'transparent',
+    backgroundColor: 'transparent',
+  },
+  rentalGridBtnLabel: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: ui.primary,
+  },
+  rentalActionGridBottom: {
+    gap: 6,
+  },
+  rentalGridBtnPrimaryWide: {
+    minHeight: 40,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: ui.primary,
+  },
+  rentalGridBtnPrimaryWideLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    flexShrink: 1,
+  },
+  rentalGridBtnCancelCompact: {
+    alignSelf: 'flex-start',
+    minHeight: 30,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#FECACA',
+    backgroundColor: 'transparent',
+  },
+  rentalGridBtnCancelCompactLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#B91C1C',
+  },
+  rentalGridBtnReportCompact: {
+    alignSelf: 'flex-start',
+    minHeight: 30,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#CBD5E1',
+    backgroundColor: 'transparent',
+  },
+  rentalGridBtnReportCompactLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: ui.textSecondary,
+  },
+  rentalGridBtnDisabled: { opacity: 0.45 },
+  cancelBanner: {
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 10,
+    backgroundColor: '#FFF7ED',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#FDBA74',
+    gap: 8,
+  },
+  cancelBannerText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#9A3412',
+  },
+  cancelBannerActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  cancelBannerBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#DC2626',
+  },
+  cancelBannerBtnText: { fontSize: 12, fontWeight: '700', color: '#FFFFFF' },
+  cancelBannerBtnOutline: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#FFFFFF',
+  },
+  cancelBannerBtnOutlineText: { fontSize: 12, fontWeight: '700', color: ui.textPrimary },
+  cancelBannerBtnGhost: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#EAF2FF',
+  },
+  cancelBannerBtnGhostText: { fontSize: 12, fontWeight: '700', color: ui.primary },
   rentalRowActionsCol: {
     alignItems: 'flex-end',
     gap: 8,

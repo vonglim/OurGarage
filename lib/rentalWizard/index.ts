@@ -1,6 +1,7 @@
 export { buildRentalWizardContext } from '@/lib/rentalWizard/buildRentalWizardContext';
 export { resolveRentalWizardDestination, estimateWizardCtaLabelFromRentalRow } from '@/lib/rentalWizard/rentalWizardStepResolver';
 export {
+  clearCoordinateReturnDraft,
   fetchRentalWizardState,
   markWizardTransitionSeen,
   recordWizardStepSeen,

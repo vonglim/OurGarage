@@ -1,4 +1,11 @@
 import { assertDevToolsEnabled } from '@/lib/devTools/gates';
+import {
+  devForceCancellationAccepted,
+  devForceCancellationDeclined,
+  devForceCancellationRequested,
+  devForceRentalCancelled,
+  resetRentalCancellationState,
+} from '@/lib/rentalCancellation/rentalCancellationActions';
 import { getEffectiveNowIso } from '@/lib/rentalSimulation/simulationClock';
 import { acceptRentalMeetupProposal } from '@/lib/rentalMeetupProposalLifecycle';
 import {
@@ -31,6 +38,49 @@ async function afterMutation(rentalId: string): Promise<void> {
   if (reg?.rentalId === rentalId && reg.refresh) {
     await reg.refresh();
   }
+}
+
+export async function devResetWizardStateOnly(
+  rentalId: string,
+  userId: string
+): Promise<DevRentalActionResult> {
+  assertDevToolsEnabled('devResetWizardStateOnly');
+  useRentalSimulationStore.getState().clearSimulation();
+  if (!shouldWriteDb()) return { ok: true, message: 'Local wizard simulation cleared' };
+
+  const supabase = getSupabase();
+  await supabase
+    .from('rental_wizard_state')
+    .update({
+      seen_transition_keys: [],
+      wizard_progress: {},
+      last_seen_step: null,
+      updated_at: getEffectiveNowIso(),
+    })
+    .eq('rental_id', rentalId)
+    .eq('user_id', userId);
+  await afterMutation(rentalId);
+  return { ok: true, message: 'Wizard state reset (transitions + drafts)' };
+}
+
+export async function devResetOperationalStateOnly(rentalId: string): Promise<DevRentalActionResult> {
+  assertDevToolsEnabled('devResetOperationalStateOnly');
+  if (!shouldWriteDb()) return { ok: true, message: 'Enable DB write for operational reset' };
+
+  const supabase = getSupabase();
+  await supabase
+    .from('rentals')
+    .update({
+      pickup_operational_state: null,
+      return_operational_state: null,
+      handoff_approval_started_at: null,
+      handoff_approved_by_owner: false,
+      handoff_approved_by_renter: false,
+      last_proposed_by: null,
+    })
+    .eq('id', rentalId);
+  await afterMutation(rentalId);
+  return { ok: true, message: 'Operational flags reset on rental row' };
 }
 
 export async function devResetRentalSimulation(rentalId: string, userId: string): Promise<DevRentalActionResult> {
@@ -288,4 +338,66 @@ export async function devClearWizardTransitions(rentalId: string, userId: string
   }
   useRentalSimulationStore.getState().patchLocalWizardProgress({});
   return { ok: true, message: 'Wizard transitions cleared' };
+}
+
+export async function devForceCancelledRental(
+  rentalId: string,
+  actorUserId: string
+): Promise<DevRentalActionResult> {
+  assertDevToolsEnabled('devForceCancelledRental');
+  if (!shouldWriteDb()) {
+    return { ok: true, message: 'Enable “Write simulation to Supabase” to force cancel' };
+  }
+  const res = await devForceRentalCancelled(getSupabase(), rentalId, actorUserId);
+  if (res.ok) await afterMutation(rentalId);
+  return res.ok ? { ok: true, message: 'Rental forced to cancelled' } : res;
+}
+
+export async function devResetCancellationState(rentalId: string): Promise<DevRentalActionResult> {
+  assertDevToolsEnabled('devResetCancellationState');
+  if (!shouldWriteDb()) {
+    return { ok: true, message: 'Enable “Write simulation to Supabase” to reset cancellation' };
+  }
+  const res = await resetRentalCancellationState(getSupabase(), rentalId);
+  if (res.ok) await afterMutation(rentalId);
+  return res.ok ? { ok: true, message: 'Cancellation state reset' } : res;
+}
+
+export async function devForceCancellationRequestedRental(
+  rentalId: string,
+  actorUserId: string
+): Promise<DevRentalActionResult> {
+  assertDevToolsEnabled('devForceCancellationRequestedRental');
+  if (!shouldWriteDb()) {
+    return { ok: true, message: 'Enable “Write simulation to Supabase” for cancellation DEV states' };
+  }
+  const res = await devForceCancellationRequested(getSupabase(), rentalId, actorUserId);
+  if (res.ok) await afterMutation(rentalId);
+  return res.ok ? { ok: true, message: 'Cancellation requested (DEV)' } : res;
+}
+
+export async function devForceCancellationAcceptedRental(
+  rentalId: string,
+  actorUserId: string
+): Promise<DevRentalActionResult> {
+  assertDevToolsEnabled('devForceCancellationAcceptedRental');
+  if (!shouldWriteDb()) {
+    return { ok: true, message: 'Enable “Write simulation to Supabase” for cancellation DEV states' };
+  }
+  const res = await devForceCancellationAccepted(getSupabase(), rentalId, actorUserId);
+  if (res.ok) await afterMutation(rentalId);
+  return res.ok ? { ok: true, message: 'Cancellation accepted (DEV)' } : res;
+}
+
+export async function devForceCancellationDeclinedRental(
+  rentalId: string,
+  actorUserId: string
+): Promise<DevRentalActionResult> {
+  assertDevToolsEnabled('devForceCancellationDeclinedRental');
+  if (!shouldWriteDb()) {
+    return { ok: true, message: 'Enable “Write simulation to Supabase” for cancellation DEV states' };
+  }
+  const res = await devForceCancellationDeclined(getSupabase(), rentalId, actorUserId);
+  if (res.ok) await afterMutation(rentalId);
+  return res.ok ? { ok: true, message: 'Cancellation declined (DEV)' } : res;
 }

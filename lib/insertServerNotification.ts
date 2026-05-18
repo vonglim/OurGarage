@@ -1,3 +1,4 @@
+import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { isUuidString } from '@/lib/requestOwnership';
 
@@ -12,7 +13,11 @@ export type ServerNotificationType =
   | 'message'
   | 'new_offer' /* legacy */
   | 'new_message' /* legacy */
-  | 'rental_confirmed';
+  | 'rental_confirmed'
+  | 'rental_cancellation'
+  | 'rental_cancellation_requested'
+  | 'rental_cancellation_accepted'
+  | 'rental_cancellation_declined';
 
 function dataPayload(
   requestId: string | null,
@@ -63,9 +68,13 @@ export function insertServerNotificationToRecipient(input: {
     return;
   }
 
-  if (__DEV__) {
-    console.log('NOTIFY →', { actorId, recipientId, type: input.type });
-  }
+  logScenario('notification', {
+    event: 'server_notification_enqueue',
+    notificationType: input.type,
+    rentalId: input.rentalId ?? null,
+    offerId: input.offerId ?? null,
+    source: 'insertServerNotificationToRecipient',
+  });
 
   const requestId = input.requestId && isUuidString(input.requestId) ? input.requestId : null;
   const offerId = input.offerId && isUuidString(input.offerId) ? input.offerId : null;

@@ -83,11 +83,13 @@ async function navigateToRentalWorkspace(
   router: Router,
   input: { requestTimestamp: number; offerId: string; requestRowId: string }
 ): Promise<void> {
+  const { pushRentalEntry, viewerRoleOnRental } = await import('@/lib/rentalNavigation');
   const local = getRentalsForRequest(input.requestTimestamp).find(
     (r) => r.offerId === input.offerId
   );
   if (local) {
-    router.push({ pathname: '/rental/[id]', params: { id: local.id } });
+    const role = await viewerRoleOnRental(local.id);
+    pushRentalEntry(router, local.id, role);
     return;
   }
   if (isSupabaseConfigured()) {
@@ -102,7 +104,8 @@ async function navigateToRentalWorkspace(
         ? String((data as { id: string }).id).trim()
         : '';
     if (rid) {
-      router.push({ pathname: '/rental/[id]', params: { id: rid } });
+      const role = await viewerRoleOnRental(rid);
+      pushRentalEntry(router, rid, role);
       return;
     }
   }

@@ -12,6 +12,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DevToolkitActionRow, DevToolkitSection } from '@/components/devtools/DevToolkitActionRow';
+import { RentalLifecycleInspector } from '@/components/devtools/RentalLifecycleInspector';
+import { RentalScenarioAuditPanel } from '@/components/devtools/RentalScenarioAuditPanel';
 import { RentalLifecycleStateMap } from '@/components/devtools/RentalLifecycleStateMap';
 import { Pressable } from '@/components/Pressable';
 import { ui } from '@/constants/appUi';
@@ -20,7 +22,9 @@ import {
   devAutofillRenterJourney,
   devApproveMeetupProposal,
   devClearWizardTransitions,
+  devResetOperationalStateOnly,
   devResetRentalSimulation,
+  devResetWizardStateOnly,
   devSimulateActivateRental,
   devSimulateCompleteReturn,
   devSimulateImHerePickup,
@@ -30,6 +34,11 @@ import {
   devSimulateRenterApprovePhotos,
   devSimulateReturnFlow,
   devSimulateSignAgreement,
+  devForceCancelledRental,
+  devForceCancellationAcceptedRental,
+  devForceCancellationDeclinedRental,
+  devForceCancellationRequestedRental,
+  devResetCancellationState,
   RENTAL_SIMULATION_JUMPS,
 } from '@/lib/rentalSimulation';
 import { getAuthUserIdSync } from '@/lib/authUser';
@@ -224,6 +233,45 @@ export function RentalDevToolkitPanel({ visible, onClose, pathname }: Props) {
             />
           </DevToolkitSection>
 
+          <DevToolkitSection title="Cancellation (DEV)">
+            <DevToolkitActionRow
+              title="Force cancellation requested"
+              subtitle="cancellation_status=requested + system chat line"
+              disabled={busy || !rentalId}
+              onPress={() =>
+                void run('Requested', () => devForceCancellationRequestedRental(rentalId, me))
+              }
+            />
+            <DevToolkitActionRow
+              title="Force cancellation accepted"
+              subtitle="Accepts pending request; purges wizard drafts"
+              disabled={busy || !rentalId}
+              onPress={() =>
+                void run('Accepted', () => devForceCancellationAcceptedRental(rentalId, me))
+              }
+            />
+            <DevToolkitActionRow
+              title="Force cancellation declined"
+              subtitle="Declines pending request"
+              disabled={busy || !rentalId}
+              onPress={() =>
+                void run('Declined', () => devForceCancellationDeclinedRental(rentalId, me))
+              }
+            />
+            <DevToolkitActionRow
+              title="Force cancelled (terminal)"
+              subtitle="Sets cancellation_status=cancelled, status=cancelled"
+              disabled={busy || !rentalId}
+              onPress={() => void run('Force cancelled', () => devForceCancelledRental(rentalId, me))}
+            />
+            <DevToolkitActionRow
+              title="Reset cancellation state"
+              subtitle="Clears cancellation_* fields; restores status if was cancelled"
+              disabled={busy || !rentalId}
+              onPress={() => void run('Reset cancellation', () => devResetCancellationState(rentalId))}
+            />
+          </DevToolkitSection>
+
           <DevToolkitSection title="Time controls">
             <Text style={styles.clockLabel}>Effective now: {clockLabel}</Text>
             <DevToolkitActionRow title="Advance 1 hour" onPress={() => advanceClock(60 * 60 * 1000)} />
@@ -257,8 +305,18 @@ export function RentalDevToolkitPanel({ visible, onClose, pathname }: Props) {
             />
           </DevToolkitSection>
 
+          {registered?.wizardCtx ? (
+            <DevToolkitSection title="Lifecycle inspector">
+              <RentalLifecycleInspector ctx={registered.wizardCtx} />
+            </DevToolkitSection>
+          ) : null}
+
+          <DevToolkitSection title="Scenario audit (QA)">
+            <RentalScenarioAuditPanel ctx={registered?.wizardCtx ?? null} />
+          </DevToolkitSection>
+
           {debugInfo ? (
-            <DevToolkitSection title="Wizard debugging">
+            <DevToolkitSection title="Wizard debugging (legacy)">
               <View style={styles.debugBox}>
                 <DebugLine label="Logical step" value={debugInfo.logicalStep} />
                 <DebugLine label="Effective step" value={debugInfo.effectiveStep} />
@@ -275,12 +333,24 @@ export function RentalDevToolkitPanel({ visible, onClose, pathname }: Props) {
 
           <DevToolkitSection title="Reset / cleanup">
             <DevToolkitActionRow
-              title="Reset wizard state"
+              title="Reset wizard state only"
+              subtitle="Clears seen transitions + wizard_progress drafts"
               disabled={busy || !rentalId}
-              onPress={() => void run('Reset wizard', () => devClearWizardTransitions(rentalId, me))}
+              onPress={() => void run('Reset wizard', () => devResetWizardStateOnly(rentalId, me))}
             />
             <DevToolkitActionRow
-              title="Reset rental simulation"
+              title="Reset operational state only"
+              subtitle="Clears handoff flags + operational states on rentals row"
+              disabled={busy || !rentalId}
+              onPress={() => void run('Reset operational', () => devResetOperationalStateOnly(rentalId))}
+            />
+            <DevToolkitActionRow
+              title="Clear wizard transitions (legacy)"
+              disabled={busy || !rentalId}
+              onPress={() => void run('Clear transitions', () => devClearWizardTransitions(rentalId, me))}
+            />
+            <DevToolkitActionRow
+              title="Reset rental simulation (all)"
               tone="danger"
               disabled={busy || !rentalId}
               onPress={() => void run('Reset all', () => devResetRentalSimulation(rentalId, me))}

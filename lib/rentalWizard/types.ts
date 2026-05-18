@@ -1,6 +1,10 @@
+import type { ListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
+import type { NegotiationDeliveryMethod } from '@/lib/negotiationDelivery';
 import type { RentalVerificationRow } from '@/lib/rentalVerification';
+import type { WizardMeetupProposalDraft } from '@/lib/rentalWizard/wizardMeetupDraft';
 
 export type RentalWizardStep =
+  | 'cancelled'
   | 'coordinate_pickup'
   | 'transition_pickup_confirmed'
   | 'coordinate_return'
@@ -33,6 +37,10 @@ export type RentalWizardProgress = {
   renter_return_im_here_at?: string | null;
   renter_approved_pickup_photos_at?: string | null;
   equipment_ack?: Record<string, boolean>;
+  coordinate_pickup_draft?: WizardMeetupProposalDraft;
+  coordinate_return_draft?: WizardMeetupProposalDraft;
+  /** Set when renter completes the coordinate-return step (Screen 2). */
+  pickup_return_coordination_ack_at?: string | null;
 };
 
 export type RentalWizardRentalRow = {
@@ -67,6 +75,16 @@ export type RentalWizardRentalRow = {
   offer_id?: string | null;
   request_id?: string | null;
   listing_id?: string | null;
+  rental_request_id?: string | null;
+  proposal_version?: number | null;
+  proposal_updated_at?: string | null;
+  latest_proposal_message_id?: string | null;
+  cancellation_status?: string | null;
+  cancellation_requested_by?: string | null;
+  cancellation_requested_at?: string | null;
+  cancellation_reason?: string | null;
+  cancellation_resolved_at?: string | null;
+  cancellation_resolved_by?: string | null;
 };
 
 export type RentalWizardContext = {
@@ -76,6 +94,16 @@ export type RentalWizardContext = {
   rental: RentalWizardRentalRow;
   displayTitle: string;
   ownerDisplayName: string;
+  heroImageUrl: string | null;
+  listingSnapshot: ListingIntentSnapshot | null;
+  agreedDeliveryMethod: NegotiationDeliveryMethod;
+  agreedDeliveryFee: number | null;
+  scheduleHints: {
+    rentalStartDate: string | null;
+    rentalEndDate: string | null;
+    returnIso: string | null;
+  };
+  requestSchedulingMeta: unknown;
   rentalCodeLabel: string;
   lifecyclePhase: 'pickup' | 'active' | 'return' | 'completed';
   termsCompleted: boolean;

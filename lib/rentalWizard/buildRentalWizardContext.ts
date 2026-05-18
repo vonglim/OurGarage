@@ -1,7 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { deriveLifecyclePhaseFromRentalStatus } from '@/lib/rentalLifecyclePhase';
-import { getProfileNameForUserId } from '@/lib/profileDisplayName';
+import { deriveWizardLifecyclePhase } from '@/lib/rentalWizard/rentalWizardGates';
+import { getProfileNameForUserId, prefetchProfileNamesForUserIds } from '@/lib/profileDisplayName';
+import { fetchRentalWizardEnrichment } from '@/lib/rentalWizard/fetchRentalWizardEnrichment';
+import { resolveListingHeroUrl } from '@/lib/rentalWizard/resolveListingHeroUrl';
 import {
   deriveDualConfirmation,
   fetchVerificationPhotos,
@@ -9,12 +11,19 @@ import {
 } from '@/lib/rentalVerification';
 import {
   buildRentalWizardContextFlags,
+} from '@/lib/rentalWizard/rentalWizardContextFlags';
+import {
   isPickupHandoffBilaterallyComplete,
   isReturnBilaterallyComplete,
 } from '@/lib/rentalWizard/rentalWizardStepResolver';
 import { fetchRentalWizardState } from '@/lib/rentalWizard/rentalWizardSeenState';
 import type { RentalWizardContext, RentalWizardRentalRow } from '@/lib/rentalWizard/types';
-import { resolveRentalPickupIso, resolveRentalReturnIso } from '@/lib/rentalExtensionProposal';
+import { resolveAcceptedRentalPickupIso } from '@/lib/rentalWizard/acceptedPickupCoordination';
+import { logPickupCoordinationDiagnostic } from '@/lib/rentalWizard/pickupCoordinationDiagnostics';
+import { assertNoPhaseRegression } from '@/lib/rentalLifecycle/operationalIntegrity';
+import { assertRentalLifecycleIntegrity } from '@/lib/rentalLifecycle/lifecycleTransitionValidator';
+import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
+import { resolveRentalReturnIso } from '@/lib/rentalExtensionProposal';
 
 function rentalCodeFromId(id: string): string {
   const compact = id.replace(/-/g, '').slice(0, 6).toUpperCase();
@@ -55,7 +64,6 @@ export async function buildRentalWizardContext(
   }
 
   const { meetingCompleted, hasPendingProposal } = buildRentalWizardContextFlags(rental);
-  const lifecyclePhase = deriveLifecyclePhaseFromRentalStatus(rental.status);
   const termsCompleted = rental.price != null && Number.isFinite(Number(rental.price));
 
   let verificationRows: Awaited<ReturnType<typeof fetchVerificationRows>> = [];
@@ -75,17 +83,39 @@ export async function buildRentalWizardContext(
   const returnHandoffComplete = isReturnBilaterallyComplete(returnAck);
 
   const wizardState = await fetchRentalWizardState(supabase, rentalId, viewerUserId);
-  const displayTitle = await resolveDisplayTitle(supabase, rental);
+  let wizardProgress = wizardState.wizardProgress;
+  if (meetingCompleted && wizardProgress.coordinate_pickup_draft != null) {
+    const { coordinate_pickup_draft: _draft, ...rest } = wizardProgress;
+    wizardProgress = rest;
+  }
+  const [displayTitle, enrichment] = await Promise.all([
+    resolveDisplayTitle(supabase, rental),
+    fetchRentalWizardEnrichment(supabase, rental),
+  ]);
 
-  return {
+  await prefetchProfileNamesForUserIds([rental.owner_user_id]);
+
+  const heroImageUrl = resolveListingHeroUrl(
+    enrichment.listingSnapshot,
+    enrichment.listingSnapshotRaw
+  );
+  const snapshotTitle = enrichment.listingSnapshot?.title?.trim();
+
+  const ctxDraft: RentalWizardContext = {
     rentalId,
     viewerUserId,
     viewerRole: 'renter',
     rental,
-    displayTitle,
+    displayTitle: snapshotTitle || displayTitle,
     ownerDisplayName: getProfileNameForUserId(rental.owner_user_id),
+    heroImageUrl,
+    listingSnapshot: enrichment.listingSnapshot,
+    agreedDeliveryMethod: enrichment.agreedDeliveryMethod,
+    agreedDeliveryFee: enrichment.agreedDeliveryFee,
+    scheduleHints: enrichment.scheduleHints,
+    requestSchedulingMeta: enrichment.requestSchedulingMeta,
     rentalCodeLabel: rentalCodeFromId(rentalId),
-    lifecyclePhase,
+    lifecyclePhase: 'pickup',
     termsCompleted,
     meetingCompleted,
     hasPendingProposal,
@@ -94,10 +124,32 @@ export async function buildRentalWizardContext(
     pickupAck,
     returnAck,
     ownerPickupPhotoCount,
-    pickupIso: resolveRentalPickupIso(rental),
+    pickupIso: resolveAcceptedRentalPickupIso(rental),
     returnIso: resolveRentalReturnIso(rental),
     seenTransitions: wizardState.seenTransitions,
-    wizardProgress: wizardState.wizardProgress,
+    wizardProgress,
     verificationRows,
   };
+
+  const fullCtx = {
+    ...ctxDraft,
+    lifecyclePhase: deriveWizardLifecyclePhase(ctxDraft),
+  };
+
+  logPickupCoordinationDiagnostic(fullCtx, 'buildRentalWizardContext', {
+    logicalStepHint: 'see resolveLogicalWizardStep',
+  });
+
+  assertRentalLifecycleIntegrity(fullCtx, 'buildRentalWizardContext');
+  assertNoPhaseRegression(fullCtx, 'buildRentalWizardContext');
+  logScenario('lifecycle', {
+    event: 'context_built',
+    rentalId,
+    source: 'buildRentalWizardContext',
+    status: fullCtx.rental.status,
+    cancellation_status: fullCtx.rental.cancellation_status,
+    pickupHandoffComplete: fullCtx.pickupHandoffComplete,
+  });
+
+  return fullCtx;
 }

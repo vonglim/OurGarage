@@ -31,6 +31,10 @@ const SERVER_TYPE_TO_APP: Record<string, AppNotificationType> = {
   rental_confirmed: 'accepted',
   rental_request: 'rental_request',
   rental_declined: 'rental_declined',
+  rental_cancellation: 'message',
+  rental_cancellation_requested: 'rental_cancellation_requested',
+  rental_cancellation_accepted: 'rental_cancellation_accepted',
+  rental_cancellation_declined: 'rental_cancellation_declined',
 };
 
 function mapServerType(raw: string): AppNotificationType {

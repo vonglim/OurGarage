@@ -4,6 +4,7 @@ import { ActivityIndicator, View } from 'react-native';
 
 import { RentalWizardStepView } from '@/components/rentalWizard/RentalWizardStepView';
 import { useRentalWizard } from '@/components/rentalWizard/RentalWizardProvider';
+import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
 import { resolveRentalWizardDestination } from '@/lib/rentalWizard';
 import { wizardStepFromSlug } from '@/lib/rentalWizard/wizardStepMeta';
 import { ui } from '@/constants/appUi';
@@ -19,6 +20,14 @@ export default function RentalWizardStepScreen() {
     if (!step) return;
     const dest = resolveRentalWizardDestination(ctx);
     if (dest.step !== step) {
+      logScenario('routing', {
+        event: 'step_corrected',
+        rentalId: ctx.rentalId,
+        source: 'wizard_step_screen',
+        urlStep: step,
+        logicalStep: dest.step,
+        path: dest.path,
+      });
       router.replace(dest.path as `/rental-wizard/${string}/s/${string}`);
     }
   }, [ctx, step, router]);

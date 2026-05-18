@@ -1,4 +1,6 @@
+import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
 import { getEffectiveNowMs } from '@/lib/rentalSimulation/simulationClock';
+import { isMeetupCoordinationComplete, isPickupCoordinationComplete } from '@/lib/rentalWizard/rentalWizardGates';
 import type { RentalWizardContext, RentalWizardStep, RentalWizardTransitionKey } from '@/lib/rentalWizard/types';
 
 const MS_24H = 24 * 60 * 60 * 1000;
@@ -16,24 +18,6 @@ function isWithin24hBeforeReturn(ctx: RentalWizardContext, nowMs = getEffectiveN
   return ms > 0 && ms <= MS_24H;
 }
 
-function hasReturnSchedule(ctx: RentalWizardContext): boolean {
-  const r = ctx.rental;
-  for (const k of ['agreed_return_datetime', 'return_datetime', 'return_time'] as const) {
-    const v = r[k];
-    if (typeof v === 'string' && v.trim() !== '') return true;
-  }
-  return false;
-}
-
-function hasPickupSchedule(ctx: RentalWizardContext): boolean {
-  const r = ctx.rental;
-  for (const k of ['agreed_pickup_datetime', 'pickup_datetime', 'meetup_time'] as const) {
-    const v = r[k];
-    if (typeof v === 'string' && v.trim() !== '') return true;
-  }
-  return false;
-}
-
 /**
  * If a one-time transition should appear before `logicalStep`, return it.
  * Otherwise null (go straight to logical step).
@@ -43,15 +27,16 @@ export function resolveWizardTransitionBefore(
   ctx: RentalWizardContext,
   nowMs = getEffectiveNowMs()
 ): RentalWizardStep | null {
+  let transition: RentalWizardStep | null = null;
+
   switch (logicalStep) {
+    case 'coordinate_pickup':
     case 'coordinate_return':
-      if (hasPickupSchedule(ctx) && ctx.meetingCompleted && !hasSeen(ctx, 'pickup_confirmed_seen')) {
-        return 'transition_pickup_confirmed';
-      }
-      break;
     case 'prepare_pickup':
-      if (ctx.meetingCompleted && hasReturnSchedule(ctx) && !hasSeen(ctx, 'all_set_seen')) {
-        return 'transition_all_set';
+      if (isPickupCoordinationComplete(ctx) && !hasSeen(ctx, 'pickup_confirmed_seen')) {
+        transition = 'transition_pickup_confirmed';
+      } else if (isMeetupCoordinationComplete(ctx) && !hasSeen(ctx, 'all_set_seen')) {
+        transition = 'transition_all_set';
       }
       break;
     case 'meetup_day':
@@ -59,31 +44,41 @@ export function resolveWizardTransitionBefore(
         (ctx.rental.owner_pickup_ready || ctx.ownerPickupPhotoCount > 0) &&
         !hasSeen(ctx, 'pickup_ready_seen')
       ) {
-        return 'transition_pickup_ready';
+        transition = 'transition_pickup_ready';
       }
       break;
     case 'active_rental':
       if (ctx.pickupHandoffComplete && !hasSeen(ctx, 'enjoy_rental_seen')) {
-        return 'transition_enjoy_rental';
-      }
-      if (isWithin24hBeforeReturn(ctx, nowMs) && !hasSeen(ctx, 'return_reminder_seen')) {
-        return 'transition_return_reminder';
+        transition = 'transition_enjoy_rental';
+      } else if (isWithin24hBeforeReturn(ctx, nowMs) && !hasSeen(ctx, 'return_reminder_seen')) {
+        transition = 'transition_return_reminder';
       }
       break;
     case 'prepare_return':
       if (isWithin24hBeforeReturn(ctx, nowMs) && !hasSeen(ctx, 'return_reminder_seen')) {
-        return 'transition_return_reminder';
+        transition = 'transition_return_reminder';
       }
       break;
     case 'leave_review':
       if (ctx.returnHandoffComplete && !hasSeen(ctx, 'return_complete_seen')) {
-        return 'transition_return_complete';
+        transition = 'transition_return_complete';
       }
       break;
     default:
       break;
   }
-  return null;
+
+  if (transition) {
+    logScenario('transition', {
+      event: 'overlay_resolved',
+      rentalId: ctx.rentalId,
+      logicalStep,
+      transitionStep: transition,
+      seenKeys: [...ctx.seenTransitions],
+    });
+  }
+
+  return transition;
 }
 
 export function transitionKeyForStep(step: RentalWizardStep): RentalWizardTransitionKey | null {

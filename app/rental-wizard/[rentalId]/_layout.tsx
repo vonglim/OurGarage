@@ -1,3 +1,4 @@
+import { useFocusEffect } from '@react-navigation/native';
 import { Stack, useLocalSearchParams, usePathname } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
@@ -9,6 +10,8 @@ import { buildRentalWizardContext } from '@/lib/rentalWizard';
 import type { RentalWizardContext } from '@/lib/rentalWizard/types';
 import { DEV_TOOLS_ENABLED } from '@/lib/devTools/gates';
 import { registerRentalDevContext, unregisterRentalDevContext } from '@/lib/rentalSimulation';
+import { useRentalWizardRealtimeSync } from '@/lib/rentalLifecycle/useRentalWizardRealtimeSync';
+import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
 import { getSupabase } from '@/lib/supabase';
 import { ui } from '@/constants/appUi';
 
@@ -23,6 +26,7 @@ export default function RentalWizardLayout() {
 
   const refresh = useCallback(async () => {
     if (!rentalId || !me) return;
+    logScenario('lifecycle', { event: 'refresh_start', rentalId, source: 'wizard_layout' });
     const supabase = getSupabase();
     const next = await buildRentalWizardContext(supabase, rentalId, me);
     if (!next) {
@@ -33,11 +37,21 @@ export default function RentalWizardLayout() {
       setError(null);
     }
     setLoading(false);
+    logScenario('lifecycle', { event: 'refresh_end', rentalId, source: 'wizard_layout', hasCtx: Boolean(next) });
   }, [rentalId, me]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useFocusEffect(
+    useCallback(() => {
+      logScenario('lifecycle', { event: 'focus_refresh', rentalId, source: 'wizard_layout' });
+      void refresh();
+    }, [refresh, rentalId])
+  );
+
+  useRentalWizardRealtimeSync(rentalId, refresh);
 
   useEffect(() => {
     if (!DEV_TOOLS_ENABLED || !rentalId || !ctx) return;

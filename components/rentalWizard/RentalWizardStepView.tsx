@@ -8,8 +8,13 @@ import { useRentalWizard } from '@/components/rentalWizard/RentalWizardProvider'
 import { WizardItemCard } from '@/components/rentalWizard/WizardItemCard';
 import { WizardLightShell } from '@/components/rentalWizard/shells/WizardLightShell';
 import { WizardTransitionShell } from '@/components/rentalWizard/shells/WizardTransitionShell';
+import { CoordinatePickupStep } from '@/components/rentalWizard/steps/CoordinatePickupStep';
+import { CancelledSummaryStep } from '@/components/rentalWizard/steps/CancelledSummaryStep';
+import { CoordinateReturnStep } from '@/components/rentalWizard/steps/CoordinateReturnStep';
+import { WizardCoordinateStep } from '@/components/rentalWizard/WizardCoordinateStep';
 import { WizardDarkMeetupCards } from '@/components/rentalWizard/shared/WizardMeetupCards';
 import { ui } from '@/constants/appUi';
+import { formatBorrowingFromOwner } from '@/lib/rentalWizard/formatBorrowingFromOwner';
 import { formatWizardDateTime, formatWizardLocation } from '@/lib/rentalWizard/formatWizardSchedule';
 import type { RentalWizardStep } from '@/lib/rentalWizard/types';
 import { WIZARD_STEP_META } from '@/lib/rentalWizard/wizardStepMeta';
@@ -23,95 +28,36 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
   const w = useRentalWizard();
   const { ctx } = w;
   const meta = WIZARD_STEP_META[step];
-  const ownerLine = `${ctx.ownerDisplayName} · Owner`;
+  const ownerLine = formatBorrowingFromOwner(ctx.ownerDisplayName);
+  const itemCardProps = {
+    title: ctx.displayTitle,
+    ownerLine,
+    rentalCode: ctx.rentalCodeLabel,
+    thumbUri: ctx.heroImageUrl,
+  };
 
   switch (step) {
+    case 'cancelled':
+      return <CancelledSummaryStep />;
+
     case 'coordinate_pickup':
-      return (
-        <WizardLightShell
-          title={meta.title}
-          subtitle="Agree on how and where you'll get the item from the owner."
-          onBack={() => router.back()}
-          onOpenMessages={w.openMessages}
-          primaryLabel={ctx.meetingCompleted ? 'Continue' : 'Set pickup in workspace'}
-          onPrimary={() =>
-            ctx.meetingCompleted ? void w.goToResolvedNext() : w.openAdvancedDetails('meeting')
-          }
-          secondaryLabel="Open messages"
-          onSecondary={w.openMessages}
-          footerNote="The owner will be notified of your proposal."
-        >
-          <WizardItemCard
-            title={ctx.displayTitle}
-            ownerLine={ownerLine}
-            rentalCode={ctx.rentalCodeLabel}
-          />
-          <InfoPanel
-            icon="location-outline"
-            title="Pickup location"
-            value={formatWizardLocation(ctx.rental.meetup_location)}
-          />
-          <InfoPanel
-            icon="calendar-outline"
-            title="Pickup time"
-            value={formatWizardDateTime(ctx.pickupIso)}
-          />
-          {!ctx.meetingCompleted ? (
-            <Text style={styles.helper}>
-              Use the full rental workspace to propose or accept meetup times. Your guided flow will
-              pick up right where you left off.
-            </Text>
-          ) : null}
-        </WizardLightShell>
-      );
+      return <CoordinatePickupStep />;
 
     case 'transition_pickup_confirmed':
       return (
         <WizardTransitionShell
-          title="Pickup confirmed"
-          headline="Great! Pickup location and handoff time set."
+          hideHeaderTitle
+          headline="Great! Pickup location and handoff time set"
           subheadline="You're all set for pickup. Now let's coordinate a return time and location."
+          primaryLabel="Continue to return details"
           onBack={() => router.back()}
-          primaryLabel={meta.continueLabel}
+          onOpenMessages={w.openMessages}
           onPrimary={() => void w.advanceAfterTransition('transition_pickup_confirmed')}
-        >
-          <View style={styles.darkSummary}>
-            <Text style={styles.darkSummaryLoc}>
-              {formatWizardLocation(ctx.rental.meetup_location)}
-            </Text>
-            <Text style={styles.darkSummaryTime}>{formatWizardDateTime(ctx.pickupIso)}</Text>
-          </View>
-        </WizardTransitionShell>
+        />
       );
 
     case 'coordinate_return':
-      return (
-        <WizardLightShell
-          title={meta.title}
-          subtitle="Agree on when and where you'll return the item to the owner."
-          onBack={() => router.back()}
-          onOpenMessages={w.openMessages}
-          primaryLabel={ctx.meetingCompleted ? 'Continue' : 'Set return in workspace'}
-          onPrimary={() =>
-            ctx.meetingCompleted ? void w.goToResolvedNext() : w.openAdvancedDetails('meeting')
-          }
-          secondaryLabel="Open messages"
-          onSecondary={w.openMessages}
-          footerNote="The owner will be notified of your proposal."
-        >
-          <WizardItemCard title={ctx.displayTitle} ownerLine={ownerLine} rentalCode={ctx.rentalCodeLabel} />
-          <InfoPanel
-            icon="location-outline"
-            title="Return location"
-            value={formatWizardLocation(ctx.rental.return_location, ctx.rental.meetup_location)}
-          />
-          <InfoPanel
-            icon="calendar-outline"
-            title="Return time"
-            value={formatWizardDateTime(ctx.returnIso)}
-          />
-        </WizardLightShell>
-      );
+      return <CoordinateReturnStep />;
 
     case 'transition_all_set':
       return (
@@ -140,7 +86,7 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
           onPrimary={() => void w.markPhotosApproved()}
           footerNote="You'll be able to review and approve the photos before meetup."
         >
-          <WizardItemCard title={ctx.displayTitle} ownerLine={ownerLine} rentalCode={ctx.rentalCodeLabel} />
+          <WizardItemCard {...itemCardProps} />
           <StatusBanner
             tone={ctx.ownerPickupPhotoCount > 0 ? 'ready' : 'waiting'}
             title={ctx.ownerPickupPhotoCount > 0 ? 'Photos ready for review' : 'Waiting on owner'}
@@ -190,7 +136,7 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
           secondaryLabel="Message owner"
           onSecondary={w.openMessages}
         >
-          <WizardItemCard title={ctx.displayTitle} ownerLine={ownerLine} rentalCode={ctx.rentalCodeLabel} />
+          <WizardItemCard {...itemCardProps} />
           <InfoPanel
             icon="location-outline"
             title="Meetup location"
@@ -213,7 +159,7 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
           secondaryLabel="Message owner"
           onSecondary={w.openMessages}
         >
-          <WizardItemCard title={ctx.displayTitle} ownerLine={ownerLine} rentalCode={ctx.rentalCodeLabel} />
+          <WizardItemCard {...itemCardProps} />
           <View style={styles.successHero}>
             <Ionicons name="checkmark-circle" size={48} color="#22C55E" />
             <Text style={styles.successTitle}>The owner is here!</Text>
@@ -240,7 +186,7 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
           secondaryLabel="Message owner"
           onSecondary={w.openMessages}
         >
-          <WizardItemCard title={ctx.displayTitle} ownerLine={ownerLine} rentalCode={ctx.rentalCodeLabel} />
+          <WizardItemCard {...itemCardProps} />
           <EquipmentChecklist />
         </WizardLightShell>
       );
@@ -277,10 +223,10 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
           title={meta.title}
           onBack={() => router.back()}
           onOpenMessages={w.openMessages}
-          primaryLabel="Open rental workspace"
-          onPrimary={() => w.openAdvancedDetails()}
+          primaryLabel="Message owner"
+          onPrimary={w.openMessages}
           secondaryLabel="Request extension"
-          onSecondary={w.openAdvancedDetails}
+          onSecondary={() => w.openAdvancedDetails()}
         >
           <View style={styles.activeHero}>
             <Text style={styles.activeChip}>ACTIVE</Text>
@@ -288,7 +234,7 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
             <Text style={styles.activeSub}>Return due {formatWizardDateTime(ctx.returnIso)}</Text>
           </View>
           <QuickActionGrid onDetails={w.openAdvancedDetails} onMessages={w.openMessages} />
-          <WizardItemCard title={ctx.displayTitle} ownerLine={ownerLine} rentalCode={ctx.rentalCodeLabel} />
+          <WizardItemCard {...itemCardProps} />
         </WizardLightShell>
       );
 
@@ -317,7 +263,7 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
           onPrimary={() => void w.markImHereReturn()}
           footerNote="Notify the owner that you've arrived."
         >
-          <WizardItemCard title={ctx.displayTitle} ownerLine={ownerLine} rentalCode={ctx.rentalCodeLabel} />
+          <WizardItemCard {...itemCardProps} />
           <ReturnPhotoRows onAdd={() => w.openAdvancedDetails('return')} />
           <FinalChecklist />
         </WizardLightShell>
@@ -362,7 +308,7 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
           onPrimary={() => w.openAdvancedDetails('return')}
         >
           <StatusBanner tone="ready" title="You and the owner are together" body="" />
-          <WizardItemCard title={ctx.displayTitle} ownerLine={ownerLine} rentalCode={ctx.rentalCodeLabel} />
+          <WizardItemCard {...itemCardProps} />
           <HandoffProgress />
         </WizardLightShell>
       );

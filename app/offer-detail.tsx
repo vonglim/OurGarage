@@ -174,7 +174,7 @@ function scheduleNavigateToRentalWorkspace(
   navOnceRef.current = true;
   setTimeout(() => {
     if ('rentalId' in result && result.rentalId) {
-      router.replace({ pathname: '/rental/[id]', params: { id: result.rentalId } });
+      router.replace(`/rental-wizard/${result.rentalId}`);
       return;
     }
     if ('rentalAgreementFallback' in result && result.rentalAgreementFallback) {
@@ -1113,7 +1113,11 @@ export default function OfferDetailScreen() {
     if (!offer) return;
     const offerId = offer.id;
     const go = (id: string) => {
-      router.push({ pathname: '/rental/[id]', params: { id } });
+      if (isViewerPoster) {
+        router.push(`/rental-wizard/${id}`);
+      } else {
+        router.push({ pathname: '/rental/[id]', params: { id } });
+      }
     };
     if (linkedRentalId) {
       go(linkedRentalId);

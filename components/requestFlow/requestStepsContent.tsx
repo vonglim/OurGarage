@@ -697,7 +697,7 @@ export function RequestReviewStepContent({ draft, onEditStep }: RequestStepsCont
 }
 
 const styles = StyleSheet.create({
-  stepPad: { paddingHorizontal: 4 },
+  stepPad: { paddingHorizontal: 4 }, // matches wizardLayout.stepContentInset
   centerHeading: {
     ...wizardStepTitleStyle,
   },

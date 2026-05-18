@@ -13,7 +13,7 @@ export function resolveRentalPickupIso(rental: {
   meetup_time?: string | null;
   agreed_pickup_datetime?: string | null;
 }): string | null {
-  for (const k of ['pickup_datetime', 'meetup_time', 'agreed_pickup_datetime'] as const) {
+  for (const k of ['agreed_pickup_datetime', 'pickup_datetime', 'meetup_time'] as const) {
     const v = rental[k];
     if (typeof v === 'string' && v.trim() !== '') {
       const t = Date.parse(v);

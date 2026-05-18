@@ -2136,7 +2136,13 @@ export default function RentalScreen() {
     if (!rental || !me) return;
     setProposalBusy(true);
     try {
-      const result = await acceptRentalMeetupProposal(supabase, rental, me);
+      const itemTitle =
+        typeof request?.title === 'string'
+          ? request.title
+          : typeof request?.toolName === 'string'
+            ? request.toolName
+            : null;
+      const result = await acceptRentalMeetupProposal(supabase, rental, me, { itemTitle });
       if (!result.ok) {
         Alert.alert('Could not confirm yet', result.message ?? 'Please try again.');
         return;
@@ -5068,7 +5074,9 @@ export default function RentalScreen() {
               </View>
             ) : null}
 
-            <RentalWorkspaceStageWorkbench model={primaryWorkspaceStageModel} viewerRole={viewerRole} />
+            {viewerRole === 'owner' ? (
+              <RentalWorkspaceStageWorkbench model={primaryWorkspaceStageModel} viewerRole={viewerRole} />
+            ) : null}
 
             <RentalWorkspaceUpdatesSection
               activityLine={workspaceUpdatesActivityLine}

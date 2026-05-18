@@ -35,6 +35,7 @@ import {
   OFFER_MEETUP_PROPOSAL_KIND,
   insertMeetupProposalOfferMessage,
 } from '@/lib/meetupProposalThreadEvent';
+import { RENTAL_CANCELLATION_SYSTEM_MESSAGE_KIND } from '@/lib/rentalCancellation/rentalCancellationChat';
 import {
   acceptRentalMeetupProposal,
   declineRentalMeetupProposal,
@@ -629,7 +630,13 @@ export default function ChatDetailScreen() {
 
       setAcceptingMessageId(message.id);
       try {
-        const result = await acceptRentalMeetupProposal(getSupabase(), rental, meId);
+        const itemTitle =
+          typeof requestSchedulingMeta === 'object' &&
+          requestSchedulingMeta != null &&
+          typeof (requestSchedulingMeta as { title?: string }).title === 'string'
+            ? (requestSchedulingMeta as { title: string }).title
+            : null;
+        const result = await acceptRentalMeetupProposal(getSupabase(), rental, meId, { itemTitle });
         if (!result.ok) {
           if (__DEV__) {
             console.warn('[proposal-confirm] accept failed', {
@@ -647,7 +654,7 @@ export default function ChatDetailScreen() {
         setAcceptingMessageId(null);
       }
     },
-    [rental, meId, id, threadOfferId, threadRentalId]
+    [rental, meId, id, threadOfferId, threadRentalId, requestSchedulingMeta]
   );
 
   const onDeclineRentalSystemMessage = useCallback(
@@ -1024,10 +1031,14 @@ export default function ChatDetailScreen() {
                     onConfirm={onConfirmRentalDetails}
                     onProposeChange={onProposeRentalDetails}
                     onPrepareMeetup={() => {
-                      router.push({
-                        pathname: '/rental/[id]',
-                        params: { id: rental.id },
-                      });
+                      if (rental.renter_user_id === meId) {
+                        router.push(`/rental-wizard/${rental.id}`);
+                      } else {
+                        router.push({
+                          pathname: '/rental/[id]',
+                          params: { id: rental.id },
+                        });
+                      }
                     }}
                   />
                 </View>
@@ -1090,6 +1101,8 @@ export default function ChatDetailScreen() {
                       const proposalDetails = parsedProposal ?? parsedLegacy;
                       const isMeetupProposal = message.kind === OFFER_MEETUP_PROPOSAL_KIND;
                       const proposerName = getProfileNameForUserId(message.senderId).trim() || 'Someone';
+                      const isCancellationSystem =
+                        message.kind === RENTAL_CANCELLATION_SYSTEM_MESSAGE_KIND;
                       const isRentalDetailsSystem =
                         message.kind === OFFER_MEETUP_PROPOSAL_KIND ||
                         message.kind === 'system_rental_details' ||
@@ -1110,6 +1123,14 @@ export default function ChatDetailScreen() {
                       (myConfirmed || acceptedMessageIds.includes(message.id));
                       const prev = index > 0 ? messages[index - 1] : null;
                       const senderChanged = prev != null && prev.senderId !== message.senderId;
+                      if (isCancellationSystem) {
+                        return (
+                          <View style={styles.cancellationSystemRow}>
+                            <Text style={styles.cancellationSystemText}>{message.text}</Text>
+                          </View>
+                        );
+                      }
+
                       return (
                         <View style={styles.messageRow}>
                           <View
@@ -1389,6 +1410,22 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#D7DDE6',
+  },
+  cancellationSystemRow: {
+    alignSelf: 'center',
+    maxWidth: '92%',
+    marginVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: '#F8FAFC',
+  },
+  cancellationSystemText: {
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: 'center',
+    color: ui.textSecondary,
+    fontStyle: 'italic',
   },
   systemBubble: {
     alignSelf: 'center',

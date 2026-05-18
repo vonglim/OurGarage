@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
 import { getSupabase } from '@/lib/supabase';
 import type {
   RentalWizardProgress,
@@ -69,6 +70,13 @@ export async function markWizardTransitionSeen(
     appendSeenKey: key,
     lastSeenStep: step,
   });
+  logScenario('transition', {
+    event: 'transition_marked_seen',
+    rentalId,
+    step,
+    seenKey: key,
+    source: 'markWizardTransitionSeen',
+  });
 }
 
 export async function updateWizardProgress(
@@ -81,6 +89,46 @@ export async function updateWizardProgress(
   await upsertWizardState(rentalId, userId, {
     wizardProgress: { ...current.wizardProgress, ...patch },
   });
+}
+
+/** Remove return draft after renter saves return coordination on Screen 2. */
+export async function clearCoordinateReturnDraft(
+  rentalId: string,
+  userId: string,
+  extra?: Partial<RentalWizardProgress>
+): Promise<void> {
+  const supabase = getSupabase();
+  const current = await fetchRentalWizardState(supabase, rentalId, userId);
+  const { coordinate_return_draft: _draft, ...rest } = current.wizardProgress;
+  void _draft;
+  await upsertWizardState(rentalId, userId, {
+    wizardProgress: { ...rest, ...extra },
+  });
+}
+
+/** Drop coordinate drafts after meetup acceptance — canonical state lives on `rentals`. */
+export async function clearWizardCoordinateDraftsForRental(
+  supabase: SupabaseClient,
+  rentalId: string
+): Promise<void> {
+  const { data: rows, error } = await supabase
+    .from('rental_wizard_state')
+    .select('user_id, wizard_progress')
+    .eq('rental_id', rentalId);
+
+  if (error || !rows?.length) return;
+
+  for (const row of rows) {
+    const progress = parseProgress(row.wizard_progress);
+    if (progress.coordinate_pickup_draft == null && progress.coordinate_return_draft == null) {
+      continue;
+    }
+    const { coordinate_pickup_draft: _pickupDraft, coordinate_return_draft: _returnDraft, ...rest } =
+      progress;
+    void _pickupDraft;
+    void _returnDraft;
+    await upsertWizardState(rentalId, String(row.user_id), { wizardProgress: rest });
+  }
 }
 
 export async function recordWizardStepSeen(

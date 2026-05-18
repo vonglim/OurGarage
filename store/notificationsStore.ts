@@ -25,7 +25,10 @@ export type AppNotificationType =
   /** Listing `rental_requests` — owner inbox / Activity badge. */
   | 'rental_request'
   /** Renter notified when a listing rental request is declined. */
-  | 'rental_declined';
+  | 'rental_declined'
+  | 'rental_cancellation_requested'
+  | 'rental_cancellation_accepted'
+  | 'rental_cancellation_declined';
 
 export type AppNotification = {
   id: string;
@@ -71,6 +74,9 @@ function normalizeLoaded(raw: unknown): AppNotification[] {
     'rental_request',
     'rental_declined',
     'rental_confirmed',
+    'rental_cancellation_requested',
+    'rental_cancellation_accepted',
+    'rental_cancellation_declined',
   ]);
   const toAppType = (t: string): string => {
     if (t === 'offer_created' || t === 'offer_updated') return 'new_offer';

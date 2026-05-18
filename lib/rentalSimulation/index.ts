@@ -5,7 +5,9 @@ export {
   devAutofillRenterJourney,
   devApproveMeetupProposal,
   devClearWizardTransitions,
+  devResetOperationalStateOnly,
   devResetRentalSimulation,
+  devResetWizardStateOnly,
   devSimulateActivateRental,
   devSimulateCompleteReturn,
   devSimulateImHerePickup,
@@ -15,5 +17,10 @@ export {
   devSimulateRenterApprovePhotos,
   devSimulateReturnFlow,
   devSimulateSignAgreement,
+  devForceCancelledRental,
+  devForceCancellationAcceptedRental,
+  devForceCancellationDeclinedRental,
+  devForceCancellationRequestedRental,
+  devResetCancellationState,
 } from '@/lib/rentalSimulation/devRentalActions';
 export { registerRentalDevContext, unregisterRentalDevContext } from '@/lib/rentalSimulation/devRentalRegistry';
