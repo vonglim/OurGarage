@@ -9,6 +9,7 @@ import { GuidedWizardChrome } from '@/components/wizard/GuidedWizardChrome';
 import { wizardLayout, wizardSectionStackStyle } from '@/constants/wizardLayout';
 import { ui } from '@/constants/appUi';
 
+/** Form wizard shell — see `shells/README.md` for shell categories. */
 export type WizardLightShellProps = {
   title: string;
   subtitle?: string;

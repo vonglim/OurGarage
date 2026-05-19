@@ -1,12 +1,23 @@
 -- Refine cancellation_status: none | requested | declined | cancelled (terminal).
 -- Distinct notification types for request / accept / decline.
+--
+-- IMPORTANT: Drop the old check constraint BEFORE setting cancellation_status = 'cancelled'.
+-- Migration 067 only allowed (none, requested, accepted, declined, completed) — not 'cancelled'.
 
+alter table public.rentals
+  drop constraint if exists rentals_cancellation_status_check;
+
+-- Legacy 067 values → terminal cancelled
 update public.rentals
 set cancellation_status = 'cancelled'
 where cancellation_status in ('accepted', 'completed');
 
-alter table public.rentals
-  drop constraint if exists rentals_cancellation_status_check;
+-- App may have written 'cancelled' while 067 was still active via NOT VALID constraint edge cases,
+-- or rentals.status was set cancelled without matching cancellation_status.
+update public.rentals
+set cancellation_status = 'cancelled'
+where status = 'cancelled'
+  and cancellation_status is distinct from 'cancelled';
 
 alter table public.rentals
   add constraint rentals_cancellation_status_check

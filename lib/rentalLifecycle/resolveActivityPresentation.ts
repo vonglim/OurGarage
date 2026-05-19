@@ -15,6 +15,7 @@ export type RentalCardStatusBadge = {
 const BADGE_BY_PHASE: Record<CanonicalRentalPhase, RentalCardStatusBadge> = {
   request_pending: { label: 'Request pending', tone: 'default' },
   approved: { label: 'Awaiting confirmation', tone: 'default' },
+  rental_confirmed_transition: { label: 'Rental confirmed', tone: 'default' },
   coordinate_pickup: { label: 'Coordinate pickup', tone: 'default' },
   pickup_confirmed_transition: { label: 'Pickup confirmed', tone: 'default' },
   coordinate_return: { label: 'Coordinate return', tone: 'default' },

@@ -108,6 +108,25 @@ export async function scheduleLocalNewMessageNotificationForTesting(
   }
 }
 
+/** Immediate local banner for rental lifecycle alerts (cancellation, etc.). */
+export async function presentLocalLifecycleBanner(title: string, body: string): Promise<void> {
+  if (Platform.OS === 'web') return;
+  const t = String(title ?? '').trim();
+  const b = String(body ?? '').trim();
+  if (!t && !b) return;
+  try {
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: t || 'Rental update',
+        body: b || '',
+      },
+      trigger: null,
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Immediate local banner when the user receives a chat-related server notification while not on that thread. */
 export async function presentLocalChatBanner(title: string, body: string): Promise<void> {
   if (Platform.OS === 'web') return;

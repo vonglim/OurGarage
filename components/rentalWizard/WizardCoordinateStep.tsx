@@ -28,6 +28,8 @@ export type WizardCoordinateStepProps = {
   locationCardTitle: string;
   /** Overrides default time field label (e.g. calmer return copy). */
   scheduleFieldTitle?: string;
+  /** e.g. "All times shown for May 20" */
+  meetupDateHint?: string;
   onPressLocation: () => void;
   scheduleIso: string | null;
   /** Locks location/time editing (waiting for owner, etc.). */
@@ -51,6 +53,7 @@ export function WizardCoordinateStep({
   location,
   locationCardTitle,
   scheduleFieldTitle,
+  meetupDateHint,
   onPressLocation,
   scheduleIso,
   lockFields = false,
@@ -87,8 +90,8 @@ export function WizardCoordinateStep({
         ? 'Proposed time'
         : 'Confirmed time'
       : isPickup
-        ? 'Select a time'
-        : 'Select return time');
+        ? 'Choose a meetup time'
+        : 'Choose a return time');
 
   return (
     <View style={wizardSectionStackStyle}>
@@ -174,8 +177,11 @@ export function WizardCoordinateStep({
             </View>
             <View style={styles.fieldText}>
               <Text style={styles.fieldTitle}>{timeFieldTitle}</Text>
+              {meetupDateHint && !fieldsLocked ? (
+                <Text style={styles.fieldDateHint}>{meetupDateHint}</Text>
+              ) : null}
               <Text style={styles.fieldValue}>
-                {scheduleIso ? formatWizardDateTime(scheduleIso) : 'Choose a time slot'}
+                {scheduleIso ? formatWizardDateTime(scheduleIso) : 'Choose a time'}
               </Text>
             </View>
             {!fieldsLocked ? (
@@ -198,7 +204,7 @@ export function WizardCoordinateStep({
               ))}
               <TimeSlotChip
                 label="Custom"
-                icon="calendar-outline"
+                icon="time-outline"
                 selected={false}
                 onPress={onPressTime}
               />
@@ -345,6 +351,13 @@ const styles = StyleSheet.create({
   },
   fieldText: { flex: 1, minWidth: 0 },
   fieldTitle: { fontSize: 12, fontWeight: '600', color: ui.textSecondary },
+  fieldDateHint: {
+    marginTop: 2,
+    fontSize: 12,
+    fontWeight: '500',
+    color: ui.textMuted,
+    lineHeight: 16,
+  },
   fieldValue: { marginTop: 2, fontSize: 14, fontWeight: '700', color: ui.textPrimary },
   changeBtn: {
     flexDirection: 'row',

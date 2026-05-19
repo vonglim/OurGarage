@@ -27,6 +27,18 @@ export function resolveWizardTransitionBefore(
   ctx: RentalWizardContext,
   nowMs = getEffectiveNowMs()
 ): RentalWizardStep | null {
+  if (!hasSeen(ctx, 'rental_confirmed_seen') && !isPickupCoordinationComplete(ctx)) {
+    const transition: RentalWizardStep = 'transition_rental_confirmed';
+    logScenario('transition', {
+      event: 'overlay_resolved',
+      rentalId: ctx.rentalId,
+      logicalStep,
+      transitionStep: transition,
+      seenKeys: [...ctx.seenTransitions],
+    });
+    return transition;
+  }
+
   let transition: RentalWizardStep | null = null;
 
   switch (logicalStep) {
@@ -83,6 +95,8 @@ export function resolveWizardTransitionBefore(
 
 export function transitionKeyForStep(step: RentalWizardStep): RentalWizardTransitionKey | null {
   switch (step) {
+    case 'transition_rental_confirmed':
+      return 'rental_confirmed_seen';
     case 'transition_pickup_confirmed':
       return 'pickup_confirmed_seen';
     case 'transition_all_set':

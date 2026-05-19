@@ -73,6 +73,12 @@ function buildReasoningLines(ctx: RentalWizardContext, logical: string, transiti
     return lines;
   }
 
+  if (!ctx.seenTransitions.has('rental_confirmed_seen') && !isPickupCoordinationComplete(ctx)) {
+    lines.push('!rental_confirmed_seen → transition_rental_confirmed (before coordinate_pickup).');
+    if (transition) lines.push(`transition overlay: ${transition}`);
+    return lines;
+  }
+
   if (!isPickupCoordinationComplete(ctx)) {
     lines.push('!isPickupCoordinationComplete → coordinate_pickup.');
     if (!r.agreed_pickup_datetime?.trim()) lines.push('  missing agreed_pickup_datetime.');

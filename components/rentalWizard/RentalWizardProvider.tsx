@@ -2,6 +2,7 @@ import { useRouter } from 'expo-router';
 import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import { Alert } from 'react-native';
 
+import { WizardLifecyclePromptHost } from '@/components/rentalWizard/WizardLifecyclePromptHost';
 import {
   clearCoordinateReturnDraft,
   markWizardTransitionSeen,
@@ -22,12 +23,26 @@ import {
   resolveProposalReturnIsoForPickup,
   type WizardMeetupProposalDraft,
 } from '@/lib/rentalWizard/wizardMeetupDraft';
+import {
+  evaluateWizardNavigationWithLifecycleGate,
+  hasPendingWizardLifecyclePrompt,
+  type WizardLifecyclePromptGateState,
+  type WizardLifecyclePromptId,
+} from '@/lib/rentalWizard/wizardLifecyclePromptGate';
+import { logWizardNotificationPrompt } from '@/lib/rentalWizard/wizardLifecyclePromptFromNotification';
 import { getSupabase } from '@/lib/supabase';
 
 type RentalWizardContextValue = {
   ctx: RentalWizardContext;
   refresh: () => Promise<void>;
   proposalBusy: boolean;
+  lifecycleGate: WizardLifecyclePromptGateState;
+  lifecyclePromptId: WizardLifecyclePromptId | null;
+  hasPendingLifecyclePrompt: boolean;
+  /** @deprecated Use hasPendingLifecyclePrompt — same gate blocks step correction. */
+  holdStepAutoCorrection: boolean;
+  acknowledgeLifecyclePrompt: (id: WizardLifecyclePromptId) => Promise<void>;
+  goToWizardStep: (step: RentalWizardStep) => void;
   openMessages: () => void;
   openAdvancedDetails: (focus?: string) => void;
   submitCoordinatePickupProposal: (draft: WizardMeetupProposalDraft) => Promise<boolean>;
@@ -52,12 +67,36 @@ export function useRentalWizard(): RentalWizardContextValue {
 export type RentalWizardProviderProps = {
   ctx: RentalWizardContext;
   onRefresh: () => Promise<void>;
+  lifecycleGate: WizardLifecyclePromptGateState;
+  onClearLifecyclePrompt: () => void;
   children: React.ReactNode;
 };
 
-export function RentalWizardProvider({ ctx, onRefresh, children }: RentalWizardProviderProps) {
+export function RentalWizardProvider({
+  ctx,
+  onRefresh,
+  lifecycleGate,
+  onClearLifecyclePrompt,
+  children,
+}: RentalWizardProviderProps) {
   const router = useRouter();
   const [proposalBusy, setProposalBusy] = useState(false);
+  const hasPendingLifecyclePrompt = hasPendingWizardLifecyclePrompt(lifecycleGate);
+  const lifecyclePromptId = lifecycleGate.id;
+
+  const blockRedirectForLifecyclePrompt = useCallback(
+    (source: string, targetStep?: string) => {
+      if (!hasPendingLifecyclePrompt) return false;
+      logWizardNotificationPrompt(ctx.rentalId, 'notification_prompt_blocking_redirect', {
+        source,
+        targetStep,
+        promptId: lifecyclePromptId,
+        suspendedStep: lifecycleGate.suspendedStep,
+      });
+      return true;
+    },
+    [ctx.rentalId, hasPendingLifecyclePrompt, lifecycleGate.suspendedStep, lifecyclePromptId]
+  );
 
   const openMessages = useCallback(() => {
     router.push({ pathname: '/chat/[id]', params: { id: ctx.rentalId } });
@@ -73,14 +112,43 @@ export function RentalWizardProvider({ ctx, onRefresh, children }: RentalWizardP
     [ctx.rentalId, router]
   );
 
+  const goToWizardStep = useCallback(
+    (step: RentalWizardStep) => {
+      router.replace(wizardPathForStep(ctx.rentalId, step) as `/rental-wizard/${string}/s/${string}`);
+    },
+    [ctx.rentalId, router]
+  );
+
   const goToResolvedNext = useCallback(async () => {
+    if (blockRedirectForLifecyclePrompt('goToResolvedNext')) return;
     await onRefresh();
-    const dest = resolveRentalWizardDestination(ctx);
-    if (dest.path) router.replace(dest.path as `/rental-wizard/${string}/s/${string}`);
-  }, [ctx, onRefresh, router]);
+    const nav = evaluateWizardNavigationWithLifecycleGate({
+      ctx,
+      urlStep: lifecycleGate.suspendedStep ?? 'coordinate_pickup',
+      gate: lifecycleGate,
+    });
+    if (nav.dest.path && nav.shouldRedirect) {
+      router.replace(nav.dest.path as `/rental-wizard/${string}/s/${string}`);
+    }
+  }, [blockRedirectForLifecyclePrompt, ctx, lifecycleGate, onRefresh, router]);
+
+  const acknowledgeLifecyclePrompt = useCallback(
+    async (id: WizardLifecyclePromptId) => {
+      if (lifecyclePromptId !== id) return;
+      logWizardNotificationPrompt(ctx.rentalId, 'notification_prompt_acknowledged', { promptId: id });
+      onClearLifecyclePrompt();
+      if (id === 'pickup_coordination_accepted') {
+        logWizardNotificationPrompt(ctx.rentalId, 'notification_prompt_continue', { promptId: id });
+        await onRefresh();
+        goToWizardStep('transition_pickup_confirmed');
+      }
+    },
+    [ctx.rentalId, goToWizardStep, lifecyclePromptId, onClearLifecyclePrompt, onRefresh]
+  );
 
   const advanceAfterTransition = useCallback(
     async (fromStep: RentalWizardStep) => {
+      if (blockRedirectForLifecyclePrompt('advanceAfterTransition', fromStep)) return;
       const key = transitionKeyForStep(fromStep);
       if (key) {
         ctx.seenTransitions.add(key);
@@ -93,7 +161,7 @@ export function RentalWizardProvider({ ctx, onRefresh, children }: RentalWizardP
       });
       router.replace(freshDest.path as `/rental-wizard/${string}/s/${string}`);
     },
-    [ctx, onRefresh, router]
+    [blockRedirectForLifecyclePrompt, ctx, onRefresh, router]
   );
 
   const submitCoordinatePickupProposal = useCallback(
@@ -116,6 +184,7 @@ export function RentalWizardProvider({ ctx, onRefresh, children }: RentalWizardP
             returnTimeIso,
             meetupLocation,
             proposalMeta: {
+              phase: 'pickup',
               handoffMethod: draft.method,
               agreedMethod: draft.agreedMethod,
               deliveryFee: draft.agreedDeliveryFee,
@@ -129,6 +198,7 @@ export function RentalWizardProvider({ ctx, onRefresh, children }: RentalWizardP
         );
         if (!result.ok) return false;
         await onRefresh();
+        if (blockRedirectForLifecyclePrompt('submitCoordinatePickupProposal')) return true;
         const freshCtx = { ...ctx, rental: { ...ctx.rental, last_proposed_by: ctx.viewerUserId } };
         const dest = resolveRentalWizardDestination(freshCtx);
         if (dest.path) router.replace(dest.path as `/rental-wizard/${string}/s/${string}`);
@@ -137,7 +207,7 @@ export function RentalWizardProvider({ ctx, onRefresh, children }: RentalWizardP
         setProposalBusy(false);
       }
     },
-    [ctx, onRefresh, router]
+    [blockRedirectForLifecyclePrompt, ctx, onRefresh, router]
   );
 
   const submitCoordinateReturnProposal = useCallback(
@@ -225,6 +295,7 @@ export function RentalWizardProvider({ ctx, onRefresh, children }: RentalWizardP
   );
 
   const markImHerePickup = useCallback(async () => {
+    if (blockRedirectForLifecyclePrompt('markImHerePickup')) return;
     await updateWizardProgress(ctx.rentalId, ctx.viewerUserId, {
       renter_pickup_im_here_at: new Date().toISOString(),
     });
@@ -232,9 +303,10 @@ export function RentalWizardProvider({ ctx, onRefresh, children }: RentalWizardP
     await onRefresh();
     const dest = resolveRentalWizardDestination(ctx);
     router.replace(dest.path as `/rental-wizard/${string}/s/${string}`);
-  }, [ctx, onRefresh, router]);
+  }, [blockRedirectForLifecyclePrompt, ctx, onRefresh, router]);
 
   const markImHereReturn = useCallback(async () => {
+    if (blockRedirectForLifecyclePrompt('markImHereReturn')) return;
     await updateWizardProgress(ctx.rentalId, ctx.viewerUserId, {
       renter_return_im_here_at: new Date().toISOString(),
     });
@@ -242,9 +314,10 @@ export function RentalWizardProvider({ ctx, onRefresh, children }: RentalWizardP
     await onRefresh();
     const dest = resolveRentalWizardDestination(ctx);
     router.replace(dest.path as `/rental-wizard/${string}/s/${string}`);
-  }, [ctx, onRefresh, router]);
+  }, [blockRedirectForLifecyclePrompt, ctx, onRefresh, router]);
 
   const markPhotosApproved = useCallback(async () => {
+    if (blockRedirectForLifecyclePrompt('markPhotosApproved')) return;
     await updateWizardProgress(ctx.rentalId, ctx.viewerUserId, {
       renter_approved_pickup_photos_at: new Date().toISOString(),
     });
@@ -252,13 +325,19 @@ export function RentalWizardProvider({ ctx, onRefresh, children }: RentalWizardP
     await onRefresh();
     const dest = resolveRentalWizardDestination(ctx);
     router.replace(dest.path as `/rental-wizard/${string}/s/${string}`);
-  }, [ctx, onRefresh, router]);
+  }, [blockRedirectForLifecyclePrompt, ctx, onRefresh, router]);
 
   const value = useMemo(
     () => ({
       ctx,
       refresh: onRefresh,
       proposalBusy,
+      lifecycleGate,
+      lifecyclePromptId,
+      hasPendingLifecyclePrompt,
+      holdStepAutoCorrection: hasPendingLifecyclePrompt,
+      acknowledgeLifecyclePrompt,
+      goToWizardStep,
       openMessages,
       openAdvancedDetails,
       submitCoordinatePickupProposal,
@@ -275,6 +354,11 @@ export function RentalWizardProvider({ ctx, onRefresh, children }: RentalWizardP
       ctx,
       onRefresh,
       proposalBusy,
+      lifecycleGate,
+      lifecyclePromptId,
+      hasPendingLifecyclePrompt,
+      acknowledgeLifecyclePrompt,
+      goToWizardStep,
       openMessages,
       openAdvancedDetails,
       submitCoordinatePickupProposal,
@@ -289,7 +373,12 @@ export function RentalWizardProvider({ ctx, onRefresh, children }: RentalWizardP
     ]
   );
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  return (
+    <Ctx.Provider value={value}>
+      {children}
+      <WizardLifecyclePromptHost />
+    </Ctx.Provider>
+  );
 }
 
 export { WIZARD_STEP_META, wizardPathForStep };

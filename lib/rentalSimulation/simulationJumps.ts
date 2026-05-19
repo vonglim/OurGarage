@@ -9,10 +9,18 @@ export const RENTAL_SIMULATION_JUMPS: RentalSimulationJumpConfig[] = [
     blockerHint: 'awaiting_owner_approval',
   },
   {
+    id: 'rental_confirmed',
+    label: 'Rental confirmed',
+    lifecycle: 'pickup',
+    wizardStep: 'transition_rental_confirmed',
+    blockerHint: 'rental_just_accepted',
+  },
+  {
     id: 'pickup_coordination',
     label: 'Pickup coordination',
     lifecycle: 'pickup',
     wizardStep: 'coordinate_pickup',
+    markTransitionsSeen: ['rental_confirmed_seen'],
     blockerHint: 'pickup_schedule_pending',
   },
   {

@@ -4,6 +4,7 @@ import type { RentalWizardProgress, RentalWizardStep, RentalWizardTransitionKey 
 /** Dev-only lifecycle snapshot for one-tap jumps (UI + optional DB simulation). */
 export type RentalSimulationJump =
   | 'request_pending'
+  | 'rental_confirmed'
   | 'pickup_coordination'
   | 'pickup_confirmed'
   | 'waiting_for_photos'
@@ -35,4 +36,6 @@ export type RentalDevRegisteredContext = {
   source: 'rental_workspace' | 'rental_wizard';
   refresh?: () => Promise<void>;
   wizardCtx?: RentalWizardContext | null;
+  /** DEV: show pickup-accepted lifecycle overlay without realtime. */
+  simulatePickupAcceptedOverlay?: () => void;
 };

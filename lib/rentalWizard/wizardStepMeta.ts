@@ -2,6 +2,7 @@ import type { RentalWizardStep } from '@/lib/rentalWizard/types';
 
 export const WIZARD_STEP_SLUG: Record<RentalWizardStep, string> = {
   cancelled: 'cancelled',
+  transition_rental_confirmed: 'transition-rental-confirmed',
   coordinate_pickup: 'coordinate-pickup',
   transition_pickup_confirmed: 'transition-pickup-confirmed',
   coordinate_return: 'coordinate-return',
@@ -47,6 +48,12 @@ export const WIZARD_STEP_META: Record<RentalWizardStep, StepMeta> = {
     ctaLabel: 'Cancelled',
     continueLabel: 'View summary',
     isTransition: false,
+  },
+  transition_rental_confirmed: {
+    title: 'Rental confirmed',
+    ctaLabel: 'Coordinate pickup',
+    continueLabel: 'Coordinate pickup',
+    isTransition: true,
   },
   coordinate_pickup: {
     title: 'Coordinate pickup',

@@ -24,6 +24,7 @@ import { assertNoPhaseRegression } from '@/lib/rentalLifecycle/operationalIntegr
 import { assertRentalLifecycleIntegrity } from '@/lib/rentalLifecycle/lifecycleTransitionValidator';
 import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
 import { resolveRentalReturnIso } from '@/lib/rentalExtensionProposal';
+import { resolveReturnMeetupTimeIso } from '@/lib/rentalWizard/resolveReturnMeetupDefaults';
 
 function rentalCodeFromId(id: string): string {
   const compact = id.replace(/-/g, '').slice(0, 6).toUpperCase();
@@ -135,6 +136,11 @@ export async function buildRentalWizardContext(
     ...ctxDraft,
     lifecyclePhase: deriveWizardLifecyclePhase(ctxDraft),
   };
+
+  const canonicalReturn = resolveReturnMeetupTimeIso(fullCtx);
+  if (canonicalReturn.iso) {
+    fullCtx.returnIso = canonicalReturn.iso;
+  }
 
   logPickupCoordinationDiagnostic(fullCtx, 'buildRentalWizardContext', {
     logicalStepHint: 'see resolveLogicalWizardStep',

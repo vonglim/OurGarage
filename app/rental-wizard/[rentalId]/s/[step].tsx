@@ -5,32 +5,52 @@ import { ActivityIndicator, View } from 'react-native';
 import { RentalWizardStepView } from '@/components/rentalWizard/RentalWizardStepView';
 import { useRentalWizard } from '@/components/rentalWizard/RentalWizardProvider';
 import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
-import { resolveRentalWizardDestination } from '@/lib/rentalWizard';
 import { wizardStepFromSlug } from '@/lib/rentalWizard/wizardStepMeta';
+import { evaluateWizardNavigationWithLifecycleGate } from '@/lib/rentalWizard/wizardLifecyclePromptGate';
+import { logWizardNotificationPrompt } from '@/lib/rentalWizard/wizardLifecyclePromptFromNotification';
 import { ui } from '@/constants/appUi';
 
 export default function RentalWizardStepScreen() {
   const { step: rawStep } = useLocalSearchParams<{ step: string }>();
   const router = useRouter();
-  const { ctx } = useRentalWizard();
+  const { ctx, lifecycleGate, hasPendingLifecyclePrompt } = useRentalWizard();
   const slug = typeof rawStep === 'string' ? rawStep : '';
   const step = wizardStepFromSlug(slug);
 
   useEffect(() => {
     if (!step) return;
-    const dest = resolveRentalWizardDestination(ctx);
-    if (dest.step !== step) {
+
+    const nav = evaluateWizardNavigationWithLifecycleGate({
+      ctx,
+      urlStep: step,
+      gate: lifecycleGate,
+    });
+
+    if (nav.redirectBlockedByPrompt) {
+      logWizardNotificationPrompt(ctx.rentalId, 'notification_prompt_blocking_redirect', {
+        source: 'wizard_step_screen',
+        urlStep: step,
+        logicalStep: nav.dest.step,
+        path: nav.dest.path,
+        promptId: lifecycleGate.id,
+        suspendedStep: lifecycleGate.suspendedStep,
+      });
+      return;
+    }
+
+    if (nav.shouldRedirect && nav.dest.path) {
       logScenario('routing', {
         event: 'step_corrected',
         rentalId: ctx.rentalId,
         source: 'wizard_step_screen',
         urlStep: step,
-        logicalStep: dest.step,
-        path: dest.path,
+        logicalStep: nav.dest.step,
+        path: nav.dest.path,
+        hasPendingLifecyclePrompt,
       });
-      router.replace(dest.path as `/rental-wizard/${string}/s/${string}`);
+      router.replace(nav.dest.path as `/rental-wizard/${string}/s/${string}`);
     }
-  }, [ctx, step, router]);
+  }, [ctx, hasPendingLifecyclePrompt, lifecycleGate, router, step]);
 
   if (!step) {
     return (

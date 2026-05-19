@@ -88,21 +88,76 @@ export function insertServerNotificationToRecipient(input: {
       : null;
   const data = dataPayload(requestId, offerId, rentalId, listingIdClean);
   const supabase = getSupabase();
-  void (async () => {
-    const { error } = await supabase.from('notifications').insert({
-      user_id: recipientId,
-      type: input.type,
-      title: input.title,
-      body: input.body,
-      data,
-      read: false,
-      request_id: requestId,
-      offer_id: offerId,
-    });
-    if (error != null && __DEV__) {
-      console.warn('[notifications] insert failed:', error.message);
+  void insertServerNotificationToRecipientAsync(input);
+}
+
+/**
+ * Awaitable insert — use for lifecycle-critical alerts (cancellation, etc.) so failures are visible.
+ */
+export async function insertServerNotificationToRecipientAsync(input: {
+  actorId: string;
+  recipientUserId: string;
+  type: ServerNotificationType;
+  title: string;
+  body: string;
+  requestId: string | null;
+  offerId: string | null;
+  rentalId?: string | null;
+  listingId?: string | null;
+}): Promise<boolean> {
+  if (!isSupabaseConfigured()) return false;
+
+  const actorId = String(input.actorId ?? '').trim();
+  const recipientId = String(input.recipientUserId ?? '').trim();
+  if (actorId === '' || recipientId === '' || !isUuidString(recipientId)) {
+    return false;
+  }
+  if (actorId === recipientId) {
+    if (__DEV__) {
+      console.log('NOTIFY skip: actorId === recipientId (no self-notify)', {
+        actorId,
+        recipientId,
+        type: input.type,
+      });
     }
-  })();
+    return false;
+  }
+
+  logScenario('notification', {
+    event: 'server_notification_insert',
+    notificationType: input.type,
+    rentalId: input.rentalId ?? null,
+    offerId: input.offerId ?? null,
+    source: 'insertServerNotificationToRecipientAsync',
+  });
+
+  const requestId = input.requestId && isUuidString(input.requestId) ? input.requestId : null;
+  const offerId = input.offerId && isUuidString(input.offerId) ? input.offerId : null;
+  const rentalId =
+    input.rentalId != null && isUuidString(String(input.rentalId).trim())
+      ? String(input.rentalId).trim()
+      : null;
+  const listingIdClean =
+    input.listingId != null && isUuidString(String(input.listingId).trim())
+      ? String(input.listingId).trim()
+      : null;
+  const data = dataPayload(requestId, offerId, rentalId, listingIdClean);
+  const supabase = getSupabase();
+  const { error } = await supabase.from('notifications').insert({
+    user_id: recipientId,
+    type: input.type,
+    title: input.title,
+    body: input.body,
+    data,
+    read: false,
+    request_id: requestId,
+    offer_id: offerId,
+  });
+  if (error != null) {
+    console.warn('[notifications] insert failed:', input.type, error.message);
+    return false;
+  }
+  return true;
 }
 
 /**

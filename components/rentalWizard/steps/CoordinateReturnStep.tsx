@@ -13,6 +13,15 @@ import {
 } from '@/lib/rentalWizard/acceptedPickupCoordination';
 import { formatBorrowingFromOwner } from '@/lib/rentalWizard/formatBorrowingFromOwner';
 import { buildCoordinateTimeSlots } from '@/lib/rentalWizard/buildCoordinateTimeSlots';
+import {
+  applyTimeToLockedMeetupDate,
+  meetupDateHintForYmd,
+  resolveLockedReturnSchedule,
+} from '@/lib/rentalWizard/coordinateMeetupSchedule';
+import {
+  buildInheritedReturnDefaults,
+  logReturnMeetupDefaults,
+} from '@/lib/rentalWizard/resolveReturnMeetupDefaults';
 import { WIZARD_STEP_META } from '@/lib/rentalWizard/wizardStepMeta';
 import {
   buildDefaultCoordinateReturnDraft,
@@ -25,23 +34,25 @@ import {
   returnLocationCardTitle,
   returnTimeCardTitle,
   wizardHandoffFromNegotiation,
+  type CoordinateReturnInheritedDefaults,
   type WizardMeetupProposalDraft,
 } from '@/lib/rentalWizard/wizardMeetupDraft';
 import { updateWizardProgress } from '@/lib/rentalWizard';
 
-function displayDraftFromAccepted(
+function displayDraftFromDefaults(
   draft: WizardMeetupProposalDraft,
-  accepted: ReturnType<typeof buildAcceptedPickupCoordination>
+  inherited: CoordinateReturnInheritedDefaults,
+  agreedMethod: ReturnType<typeof buildAcceptedPickupCoordination>
 ): WizardMeetupProposalDraft {
   return {
     ...draft,
-    location: draft.locationEditedByRenter ? draft.location : draft.location.trim() || accepted.location,
+    location: draft.locationEditedByRenter ? draft.location : draft.location.trim() || inherited.location,
     meetupTimeIso: draft.timeEditedByRenter
       ? draft.meetupTimeIso
-      : draft.meetupTimeIso ?? accepted.meetupTimeIso,
-    method: accepted.method,
-    agreedMethod: accepted.method,
-    agreedDeliveryFee: accepted.deliveryFee,
+      : draft.meetupTimeIso ?? inherited.meetupTimeIso,
+    method: agreedMethod.method,
+    agreedMethod: agreedMethod.method,
+    agreedDeliveryFee: agreedMethod.deliveryFee,
   };
 }
 
@@ -51,7 +62,8 @@ export function CoordinateReturnStep() {
   const { ctx } = w;
   const meta = WIZARD_STEP_META.coordinate_return;
 
-  const accepted = useMemo(() => buildAcceptedPickupCoordination(ctx), [ctx]);
+  const pickupAccepted = useMemo(() => buildAcceptedPickupCoordination(ctx), [ctx]);
+  const returnDefaults = useMemo(() => buildInheritedReturnDefaults(ctx), [ctx]);
 
   const [draft, setDraft] = useState<WizardMeetupProposalDraft>(() =>
     mergeCoordinateReturnDraft(ctx, readCoordinateReturnDraft(ctx.wizardProgress))
@@ -60,9 +72,13 @@ export function CoordinateReturnStep() {
   const [timeOpen, setTimeOpen] = useState(false);
 
   const displayDraft = useMemo(
-    () => displayDraftFromAccepted(draft, accepted),
-    [draft, accepted]
+    () => displayDraftFromDefaults(draft, returnDefaults, pickupAccepted),
+    [draft, returnDefaults, pickupAccepted]
   );
+
+  useEffect(() => {
+    logReturnMeetupDefaults(ctx, 'coordinate_return_mount');
+  }, [ctx]);
 
   useEffect(() => {
     const merged = mergeCoordinateReturnDraft(ctx, readCoordinateReturnDraft(ctx.wizardProgress));
@@ -73,7 +89,7 @@ export function CoordinateReturnStep() {
       stored &&
       !stored.locationEditedByRenter &&
       !stored.timeEditedByRenter &&
-      hasCoordinateReturnChangesFromPickup(stored, accepted)
+      hasCoordinateReturnChangesFromPickup(stored, returnDefaults)
     ) {
       const fresh = buildDefaultCoordinateReturnDraft(ctx);
       void updateWizardProgress(
@@ -83,16 +99,20 @@ export function CoordinateReturnStep() {
       );
     }
   }, [
-    accepted,
     ctx,
     ctx.rentalId,
     ctx.rental.agreed_pickup_datetime,
+    ctx.rental.agreed_return_datetime,
     ctx.rental.meetup_location,
-    ctx.rental.meetup_time,
-    ctx.rental.pickup_datetime,
+    ctx.rental.return_datetime,
+    ctx.rental.return_time,
     ctx.pickupIso,
+    ctx.returnIso,
+    ctx.scheduleHints.rentalEndDate,
+    ctx.scheduleHints.returnIso,
     ctx.viewerUserId,
     ctx.wizardProgress.coordinate_return_draft,
+    returnDefaults,
   ]);
 
   const persistDraft = useCallback(
@@ -112,25 +132,37 @@ export function CoordinateReturnStep() {
 
   const agreedMethod = wizardHandoffFromNegotiation(ctx.agreedDeliveryMethod);
   const returnChanges = useMemo(
-    () => hasReturnChanges(displayDraft, ctx, accepted),
-    [displayDraft, ctx, accepted]
+    () => hasReturnChanges(displayDraft, ctx, returnDefaults),
+    [displayDraft, ctx, returnDefaults]
   );
 
   const waitingForOwner =
     ctx.hasPendingProposal && String(ctx.rental.last_proposed_by ?? '').trim() === ctx.viewerUserId;
 
+  const lockedReturnSchedule = useMemo(() => resolveLockedReturnSchedule(ctx), [ctx]);
+
   const timeSlots = useMemo(
     () =>
       buildCoordinateTimeSlots({
-        ownerProposalIso: accepted.meetupTimeIso,
-        rentalStartDate: ctx.scheduleHints.rentalEndDate,
+        lockedSchedule: lockedReturnSchedule,
+        ownerProposalIso: ctx.returnIso ?? returnDefaults.meetupTimeIso,
         selectedIso: displayDraft.meetupTimeIso,
       }),
-    [accepted.meetupTimeIso, ctx.scheduleHints.rentalEndDate, displayDraft.meetupTimeIso]
+    [ctx.returnIso, displayDraft.meetupTimeIso, lockedReturnSchedule, returnDefaults.meetupTimeIso]
+  );
+
+  const saveReturnTime = useCallback(
+    (iso: string) => {
+      patchDraft({
+        meetupTimeIso: applyTimeToLockedMeetupDate(lockedReturnSchedule.dateYmd, iso),
+        timeEditedByRenter: true,
+      });
+    },
+    [lockedReturnSchedule.dateYmd, patchDraft]
   );
 
   const canAct =
-    isAcceptedPickupCoordinationReady(accepted) || isCoordinateDraftValid(displayDraft);
+    isAcceptedPickupCoordinationReady(pickupAccepted) || isCoordinateDraftValid(displayDraft);
 
   const primaryLabel = waitingForOwner
     ? 'Waiting for owner'
@@ -146,7 +178,7 @@ export function CoordinateReturnStep() {
 
   const handlePrimary = async () => {
     if (!canAct || waitingForOwner) return;
-    const payload = displayDraftFromAccepted(draft, accepted);
+    const payload = displayDraftFromDefaults(draft, returnDefaults, pickupAccepted);
     if (returnChanges) {
       const ok = await w.submitCoordinateReturnProposal(payload);
       if (ok) await w.refresh();
@@ -185,7 +217,14 @@ export function CoordinateReturnStep() {
           methodReadOnly
           location={displayDraft.location}
           locationCardTitle={returnLocationCardTitle(displayDraft, returnChanges)}
-          scheduleFieldTitle={returnTimeCardTitle(returnChanges)}
+          scheduleFieldTitle={
+            returnChanges ? 'Choose a return time' : returnTimeCardTitle(returnChanges)
+          }
+          meetupDateHint={
+            returnChanges && !waitingForOwner
+              ? meetupDateHintForYmd(lockedReturnSchedule.dateYmd)
+              : undefined
+          }
           onPressLocation={() => setLocationOpen(true)}
           scheduleIso={displayDraft.meetupTimeIso}
           lockFields={waitingForOwner}
@@ -193,12 +232,7 @@ export function CoordinateReturnStep() {
           waitingForOwner={waitingForOwner}
           timeSlots={timeSlots}
           selectedTimeIso={displayDraft.meetupTimeIso}
-          onSelectTimeSlot={(iso) =>
-            patchDraft({
-              meetupTimeIso: iso,
-              timeEditedByRenter: true,
-            })
-          }
+          onSelectTimeSlot={saveReturnTime}
           onPressTime={() => setTimeOpen(true)}
         />
       </WizardLightShell>
@@ -214,8 +248,11 @@ export function CoordinateReturnStep() {
       <WizardTimeProposalSheet
         visible={timeOpen}
         initialIso={displayDraft.meetupTimeIso}
+        lockedDateYmd={lockedReturnSchedule.dateYmd}
+        title="Choose return time"
+        dateHint={meetupDateHintForYmd(lockedReturnSchedule.dateYmd)}
         onClose={() => setTimeOpen(false)}
-        onSave={(iso) => patchDraft({ meetupTimeIso: iso, timeEditedByRenter: true })}
+        onSave={saveReturnTime}
       />
     </>
   );

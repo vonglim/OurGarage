@@ -303,6 +303,13 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
     if (__DEV__) {
       console.log('NOTIFICATION RECEIVED:', row);
     }
+    try {
+      const { tryArmPickupAcceptedFromNotification } =
+        require('@/lib/rentalWizard/wizardLifecyclePromptFromNotification') as typeof import('@/lib/rentalWizard/wizardLifecyclePromptFromNotification');
+      tryArmPickupAcceptedFromNotification(row);
+    } catch {
+      /* wizard module optional at startup */
+    }
     void persistNotifications(get().notifications);
   },
   replaceNotificationInStore: (row) => {

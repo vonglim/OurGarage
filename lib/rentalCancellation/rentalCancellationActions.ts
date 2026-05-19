@@ -1,10 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { getProfileNameForUserId } from '@/lib/profileDisplayName';
+import { getProfileNameForUserId, prefetchProfileNamesForUserIds } from '@/lib/profileDisplayName';
 import {
-  insertServerNotificationToRecipient,
+  insertServerNotificationToRecipientAsync,
   type ServerNotificationType,
 } from '@/lib/insertServerNotification';
+import { mergeRecentNotificationsFromServer } from '@/lib/notificationsServerSync';
 import { insertRentalCancellationSystemMessage } from '@/lib/rentalCancellation/rentalCancellationChat';
 import { purgeTransientRentalStateOnCancellationAccepted } from '@/lib/rentalCancellation/rentalCancellationCleanup';
 import { logRentalCancellation } from '@/lib/rentalCancellation/rentalCancellationDebug';
@@ -36,15 +37,16 @@ async function fetchRentalRow(
   return data as RentalWizardRentalRow;
 }
 
-function notifyCancellation(
+async function notifyCancellation(
   rental: RentalWizardRentalRow,
   actorId: string,
   recipientId: string,
   type: ServerNotificationType,
   title: string,
   body: string
-): void {
-  if (!recipientId || recipientId === actorId) return;
+): Promise<boolean> {
+  if (!recipientId || recipientId === actorId) return false;
+  await prefetchProfileNamesForUserIds([actorId, recipientId]);
   const offerId =
     rental.offer_id != null && isUuidString(String(rental.offer_id))
       ? String(rental.offer_id)
@@ -53,7 +55,7 @@ function notifyCancellation(
     rental.request_id != null && isUuidString(String(rental.request_id))
       ? String(rental.request_id)
       : null;
-  insertServerNotificationToRecipient({
+  return insertServerNotificationToRecipientAsync({
     actorId,
     recipientUserId: recipientId,
     type,
@@ -108,15 +110,19 @@ export async function requestRentalCancellation(
 
   const recipientId = isOwner ? rental.renter_user_id : rental.owner_user_id;
   const actorName = getProfileNameForUserId(requesterUserId);
-  const titleLabel = options?.rentalTitle?.trim() || 'your rental';
-  notifyCancellation(
+  const titleLabel = options?.rentalTitle?.trim() || 'this rental';
+  const notified = await notifyCancellation(
     rental,
     requesterUserId,
     recipientId,
     'rental_cancellation_requested',
     'Cancellation requested',
-    `${actorName} asked to cancel ${titleLabel} (${reasonLabel(reason)}). The rental stays active until you respond.`
+    `${actorName} requested to cancel ${titleLabel}. Review and respond in the rental — it stays active until you accept or decline.`
   );
+  if (!notified && __DEV__) {
+    logRentalCancellation('request notification skipped or failed', { rentalId, recipientId });
+  }
+  mergeRecentNotificationsFromServer();
   await insertRentalCancellationSystemMessage(supabase, rental, requesterUserId, 'requested');
 
   logRentalCancellation('request created', {
@@ -166,14 +172,19 @@ export async function acceptRentalCancellation(
   await purgeTransientRentalStateOnCancellationAccepted(supabase, rentalId);
 
   const fresh = (await fetchRentalRow(supabase, rentalId)) ?? rental;
-  notifyCancellation(
+  const titleSuffix = options?.rentalTitle?.trim() ? ` for ${options.rentalTitle.trim()}` : '';
+  const notified = await notifyCancellation(
     fresh,
     responderUserId,
     requester,
     'rental_cancellation_accepted',
-    'Cancellation accepted',
-    `Your cancellation request was accepted${options?.rentalTitle ? ` for ${options.rentalTitle.trim()}` : ''}.`
+    'Cancellation approved',
+    `Your cancellation request was approved${titleSuffix}. The rental is now cancelled.`
   );
+  if (!notified && __DEV__) {
+    logRentalCancellation('accept notification skipped or failed', { rentalId, requester });
+  }
+  mergeRecentNotificationsFromServer();
   await insertRentalCancellationSystemMessage(supabase, fresh, responderUserId, 'accepted');
 
   logRentalCancellation('request accepted', { rentalId, responderUserId, requester });
@@ -213,14 +224,19 @@ export async function declineRentalCancellation(
     return { ok: false, message: error.message || 'Could not decline cancellation.' };
   }
 
-  notifyCancellation(
+  const titleSuffix = options?.rentalTitle?.trim() ? ` for ${options.rentalTitle.trim()}` : '';
+  const notified = await notifyCancellation(
     rental,
     responderUserId,
     requester,
     'rental_cancellation_declined',
     'Cancellation declined',
-    `Your cancellation request was declined${options?.rentalTitle ? ` for ${options.rentalTitle.trim()}` : ''}. You can message to discuss next steps.`
+    `Your cancellation request was declined${titleSuffix}. You can keep coordinating or message to discuss next steps.`
   );
+  if (!notified && __DEV__) {
+    logRentalCancellation('decline notification skipped or failed', { rentalId, requester });
+  }
+  mergeRecentNotificationsFromServer();
   await insertRentalCancellationSystemMessage(supabase, rental, responderUserId, 'declined');
 
   logRentalCancellation('request declined', { rentalId, responderUserId, requester });
@@ -298,6 +314,17 @@ export async function devForceCancellationRequested(
     })
     .eq('id', rentalId);
   if (error) return { ok: false, message: error.message };
+  const recipientId =
+    rental.owner_user_id === actorUserId ? rental.renter_user_id : rental.owner_user_id;
+  await notifyCancellation(
+    rental,
+    actorUserId,
+    recipientId,
+    'rental_cancellation_requested',
+    'Cancellation requested',
+    `${getProfileNameForUserId(actorUserId)} requested to cancel this rental. Review and respond in the rental.`
+  );
+  mergeRecentNotificationsFromServer();
   await insertRentalCancellationSystemMessage(supabase, rental, actorUserId, 'requested');
   logRentalCancellation('dev force requested', { rentalId, actorUserId });
   return { ok: true };

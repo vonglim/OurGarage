@@ -10,11 +10,19 @@ export type WizardItemCardProps = {
   ownerLine: string;
   rentalCode: string;
   thumbUri?: string | null;
+  /** Nested inside a parent summary card — no outer border/shadow. */
+  embedded?: boolean;
 };
 
-export function WizardItemCard({ title, ownerLine, rentalCode, thumbUri }: WizardItemCardProps) {
+export function WizardItemCard({
+  title,
+  ownerLine,
+  rentalCode,
+  thumbUri,
+  embedded = false,
+}: WizardItemCardProps) {
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, embedded && styles.cardEmbedded]}>
       {thumbUri ? (
         <Image source={{ uri: thumbUri }} style={styles.thumb} contentFit="cover" />
       ) : (
@@ -47,6 +55,11 @@ const styles = StyleSheet.create({
     padding: 14,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(15, 23, 42, 0.08)',
+  },
+  cardEmbedded: {
+    borderWidth: 0,
+    borderRadius: 0,
+    backgroundColor: 'transparent',
   },
   thumb: { width: 56, height: 56, borderRadius: 10, backgroundColor: '#E2E8F0' },
   thumbPh: {

@@ -10,6 +10,7 @@ import { WizardLightShell } from '@/components/rentalWizard/shells/WizardLightSh
 import { WizardTransitionShell } from '@/components/rentalWizard/shells/WizardTransitionShell';
 import { CoordinatePickupStep } from '@/components/rentalWizard/steps/CoordinatePickupStep';
 import { CancelledSummaryStep } from '@/components/rentalWizard/steps/CancelledSummaryStep';
+import { RentalConfirmedTransitionStep } from '@/components/rentalWizard/steps/RentalConfirmedTransitionStep';
 import { CoordinateReturnStep } from '@/components/rentalWizard/steps/CoordinateReturnStep';
 import { WizardCoordinateStep } from '@/components/rentalWizard/WizardCoordinateStep';
 import { WizardDarkMeetupCards } from '@/components/rentalWizard/shared/WizardMeetupCards';
@@ -39,6 +40,9 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
   switch (step) {
     case 'cancelled':
       return <CancelledSummaryStep />;
+
+    case 'transition_rental_confirmed':
+      return <RentalConfirmedTransitionStep />;
 
     case 'coordinate_pickup':
       return <CoordinatePickupStep />;

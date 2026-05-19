@@ -28,7 +28,7 @@ export function resolveRentalReturnIso(rental: {
   return_time?: string | null;
   agreed_return_datetime?: string | null;
 }): string | null {
-  for (const k of ['return_datetime', 'return_time', 'agreed_return_datetime'] as const) {
+  for (const k of ['agreed_return_datetime', 'return_datetime', 'return_time'] as const) {
     const v = rental[k];
     if (typeof v === 'string' && v.trim() !== '') {
       const t = Date.parse(v);

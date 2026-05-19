@@ -41,12 +41,8 @@ import {
   declineRentalMeetupProposal,
 } from '@/lib/rentalMeetupProposalLifecycle';
 import { getProfileNameForUserId } from '@/lib/profileDisplayName';
-import {
-  DURATION_GRACE_HOURS,
-  durationHoursBetween,
-  evaluateDurationChange,
-  resolveAgreementBaselineDurationHours,
-} from '@/lib/proposalDurationChange';
+import { resolveAgreementBaselineDurationHours } from '@/lib/proposalDurationChange';
+import { evaluateMeetupProposalDurationWarning } from '@/lib/rentalDurationValidation';
 import { isUuidString } from '@/lib/requestOwnership';
 import { sendOfferThreadUserMessage } from '@/lib/sendOfferThreadMessage';
 import { decodeDescriptionExtras } from '@/lib/supabaseRequests';
@@ -808,12 +804,11 @@ export default function ChatDetailScreen() {
         });
       }
       if (!rental) return false;
-      const baselineHours = resolveAgreementBaselineDurationHours(rental, requestSchedulingMeta);
-      const proposedDurationHours = durationHoursBetween(input.meetupTimeIso, input.returnTimeIso);
-      const durationEval = evaluateDurationChange({
-        baselineDurationHours: baselineHours,
-        proposedDurationHours,
-        graceHours: DURATION_GRACE_HOURS,
+      const durationEval = evaluateMeetupProposalDurationWarning({
+        rental,
+        requestSchedulingMeta,
+        meetupTimeIso: input.meetupTimeIso,
+        returnTimeIso: input.returnTimeIso,
       });
       if (durationEval.warningTriggered) {
         const continueProposal = await new Promise<boolean>((resolve) => {

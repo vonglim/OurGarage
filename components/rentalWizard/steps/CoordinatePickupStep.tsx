@@ -1,5 +1,6 @@
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { usePickupCoordinationAcceptedPromptSnapshotTrace } from '@/components/rentalWizard/hooks/usePickupCoordinationAcceptedPrompt';
 import { useRentalWizard } from '@/components/rentalWizard/RentalWizardProvider';
 import { WizardCoordinateStep } from '@/components/rentalWizard/WizardCoordinateStep';
 import { WizardItemCard } from '@/components/rentalWizard/WizardItemCard';
@@ -8,6 +9,11 @@ import { WizardLocationProposalSheet } from '@/components/rentalWizard/modals/Wi
 import { WizardTimeProposalSheet } from '@/components/rentalWizard/modals/WizardTimeProposalSheet';
 import { formatBorrowingFromOwner } from '@/lib/rentalWizard/formatBorrowingFromOwner';
 import { buildCoordinateTimeSlots } from '@/lib/rentalWizard/buildCoordinateTimeSlots';
+import {
+  applyTimeToLockedMeetupDate,
+  meetupDateHintForYmd,
+  resolveLockedPickupSchedule,
+} from '@/lib/rentalWizard/coordinateMeetupSchedule';
 import { WIZARD_STEP_META } from '@/lib/rentalWizard/wizardStepMeta';
 import {
   coordinatePickupDraftProgressPatch,
@@ -23,7 +29,7 @@ import { updateWizardProgress } from '@/lib/rentalWizard';
 export function CoordinatePickupStep() {
   const router = useRouter();
   const w = useRentalWizard();
-  const { ctx } = w;
+  const { ctx, hasPendingLifecyclePrompt } = w;
   const meta = WIZARD_STEP_META.coordinate_pickup;
 
   const [draft, setDraft] = useState<WizardMeetupProposalDraft>(() =>
@@ -32,9 +38,18 @@ export function CoordinatePickupStep() {
   const [locationOpen, setLocationOpen] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);
 
+  usePickupCoordinationAcceptedPromptSnapshotTrace(ctx, true);
+
   useEffect(() => {
     setDraft(mergeCoordinatePickupDraft(ctx, readCoordinatePickupDraft(ctx.wizardProgress)));
   }, [ctx.rentalId, ctx.wizardProgress.coordinate_pickup_draft, ctx.rental.meetup_location, ctx.rental.meetup_time]);
+
+  useEffect(() => {
+    if (hasPendingLifecyclePrompt) {
+      setLocationOpen(false);
+      setTimeOpen(false);
+    }
+  }, [hasPendingLifecyclePrompt]);
 
   const persistDraft = useCallback(
     (next: WizardMeetupProposalDraft) => {
@@ -55,21 +70,32 @@ export function CoordinatePickupStep() {
   const waitingForOwner =
     ctx.hasPendingProposal && String(ctx.rental.last_proposed_by ?? '').trim() === ctx.viewerUserId;
 
+  const lockedPickupSchedule = useMemo(() => resolveLockedPickupSchedule(ctx), [ctx]);
+
   const timeSlots = useMemo(
     () =>
       buildCoordinateTimeSlots({
+        lockedSchedule: lockedPickupSchedule,
         ownerProposalIso: ctx.pickupIso,
-        rentalStartDate: ctx.scheduleHints.rentalStartDate,
         selectedIso: draft.meetupTimeIso,
       }),
-    [ctx.pickupIso, ctx.scheduleHints.rentalStartDate, draft.meetupTimeIso]
+    [ctx.pickupIso, draft.meetupTimeIso, lockedPickupSchedule]
+  );
+
+  const saveMeetupTime = useCallback(
+    (iso: string) => {
+      patchDraft({
+        meetupTimeIso: applyTimeToLockedMeetupDate(lockedPickupSchedule.dateYmd, iso),
+      });
+    },
+    [lockedPickupSchedule.dateYmd, patchDraft]
   );
 
   const scheduleIso = ctx.meetingCompleted ? ctx.pickupIso : draft.meetupTimeIso;
   const canPropose = isCoordinateDraftValid(draft) && !waitingForOwner && !ctx.meetingCompleted;
 
   const handlePropose = async () => {
-    if (!canPropose) return;
+    if (!canPropose || hasPendingLifecyclePrompt) return;
     const ok = await w.submitCoordinatePickupProposal(draft);
     if (ok) await w.refresh();
   };
@@ -82,8 +108,17 @@ export function CoordinatePickupStep() {
         onBack={() => router.back()}
         onOpenMessages={w.openMessages}
         primaryLabel={ctx.meetingCompleted ? 'Continue' : waitingForOwner ? 'Waiting for owner' : 'Propose'}
-        primaryDisabled={ctx.meetingCompleted ? false : waitingForOwner ? true : !canPropose || w.proposalBusy}
+        primaryDisabled={
+          hasPendingLifecyclePrompt
+            ? true
+            : ctx.meetingCompleted
+              ? false
+              : waitingForOwner
+                ? true
+                : !canPropose || w.proposalBusy
+        }
         onPrimary={() => {
+          if (hasPendingLifecyclePrompt) return;
           if (ctx.meetingCompleted) void w.goToResolvedNext();
           else if (!waitingForOwner) void handlePropose();
         }}
@@ -113,11 +148,16 @@ export function CoordinatePickupStep() {
           locationCardTitle={locationCardTitleForDraft(draft, 'pickup')}
           onPressLocation={() => setLocationOpen(true)}
           scheduleIso={scheduleIso}
-          lockFields={ctx.meetingCompleted || waitingForOwner}
+          lockFields={ctx.meetingCompleted || waitingForOwner || hasPendingLifecyclePrompt}
           waitingForOwner={waitingForOwner}
+          meetupDateHint={
+            !ctx.meetingCompleted && !waitingForOwner
+              ? meetupDateHintForYmd(lockedPickupSchedule.dateYmd)
+              : undefined
+          }
           timeSlots={timeSlots}
           selectedTimeIso={draft.meetupTimeIso}
-          onSelectTimeSlot={(iso) => patchDraft({ meetupTimeIso: iso })}
+          onSelectTimeSlot={saveMeetupTime}
           onPressTime={() => setTimeOpen(true)}
         />
       </WizardLightShell>
@@ -137,8 +177,11 @@ export function CoordinatePickupStep() {
       <WizardTimeProposalSheet
         visible={timeOpen}
         initialIso={draft.meetupTimeIso}
+        lockedDateYmd={lockedPickupSchedule.dateYmd}
+        title="Choose meetup time"
+        dateHint={meetupDateHintForYmd(lockedPickupSchedule.dateYmd)}
         onClose={() => setTimeOpen(false)}
-        onSave={(iso) => patchDraft({ meetupTimeIso: iso })}
+        onSave={saveMeetupTime}
       />
     </>
   );

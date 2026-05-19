@@ -5,86 +5,69 @@ import { Platform, StyleSheet, Text, View } from 'react-native';
 import { Pressable } from '@/components/Pressable';
 import { WizardFormSheet } from '@/components/wizard/WizardFormSheet';
 import { snapDateTimeToQuarterHour } from '@/lib/dateTimeScheduling';
+import {
+  applyTimeToLockedMeetupDate,
+  formatMeetupTimeLabel,
+} from '@/lib/rentalWizard/coordinateMeetupSchedule';
 import { wizardLayout } from '@/constants/wizardLayout';
 import { ui } from '@/constants/appUi';
 
 export type WizardTimeProposalSheetProps = {
   visible: boolean;
   initialIso: string | null;
+  /** Rental schedule day — only hour/minute may change. */
+  lockedDateYmd: string;
+  title?: string;
+  dateHint?: string;
   onClose: () => void;
   onSave: (iso: string) => void;
 };
 
-function initialDate(iso: string | null): Date {
+function initialTimeOnLocked(lockedDateYmd: string, iso: string | null): Date {
   if (iso) {
     const t = Date.parse(iso);
-    if (Number.isFinite(t)) return snapDateTimeToQuarterHour(new Date(t));
+    if (Number.isFinite(t)) {
+      return new Date(Date.parse(applyTimeToLockedMeetupDate(lockedDateYmd, new Date(t))));
+    }
   }
-  const d = new Date();
-  d.setHours(17, 0, 0, 0);
-  return snapDateTimeToQuarterHour(d);
+  return new Date(Date.parse(applyTimeToLockedMeetupDate(lockedDateYmd, new Date(2000, 0, 1, 17, 0, 0, 0))));
 }
-
-type IosPickerMode = 'date' | 'time';
 
 export function WizardTimeProposalSheet({
   visible,
   initialIso,
+  lockedDateYmd,
+  title = 'Choose meetup time',
+  dateHint,
   onClose,
   onSave,
 }: WizardTimeProposalSheetProps) {
-  const [draft, setDraft] = useState(() => initialDate(initialIso));
-  const [iosMode, setIosMode] = useState<IosPickerMode>('date');
-  const [androidMode, setAndroidMode] = useState<IosPickerMode>('date');
+  const [draft, setDraft] = useState(() => initialTimeOnLocked(lockedDateYmd, initialIso));
+
   useEffect(() => {
     if (visible) {
-      setDraft(initialDate(initialIso));
-      setIosMode('date');
-      setAndroidMode('date');
+      setDraft(initialTimeOnLocked(lockedDateYmd, initialIso));
     }
-  }, [visible, initialIso]);
+  }, [visible, initialIso, lockedDateYmd]);
 
-  const label = draft.toLocaleString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  const timePreview = formatMeetupTimeLabel(draft);
 
-  const pickerMode = Platform.OS === 'ios' ? iosMode : androidMode;
   const onPickerChange = (_: unknown, selected?: Date) => {
     if (!selected) return;
-    const snapped = snapDateTimeToQuarterHour(selected);
-    if (Platform.OS === 'ios' && iosMode === 'date') {
-      setDraft((prev) => {
-        const next = new Date(prev);
-        next.setFullYear(snapped.getFullYear(), snapped.getMonth(), snapped.getDate());
-        return snapDateTimeToQuarterHour(next);
-      });
-      return;
-    }
-    if (Platform.OS === 'ios' && iosMode === 'time') {
-      setDraft((prev) => {
-        const next = new Date(prev);
-        next.setHours(snapped.getHours(), snapped.getMinutes(), 0, 0);
-        return snapDateTimeToQuarterHour(next);
-      });
-      return;
-    }
-    setDraft(snapped);
+    const iso = applyTimeToLockedMeetupDate(lockedDateYmd, selected);
+    setDraft(snapDateTimeToQuarterHour(new Date(Date.parse(iso))));
   };
 
   return (
     <WizardFormSheet
       visible={visible}
-      title="Choose date & time"
+      title={title}
       onClose={onClose}
       footer={
         <Pressable
           pressOpacityFeedback={false}
           onPress={() => {
-            onSave(snapDateTimeToQuarterHour(draft).toISOString());
+            onSave(applyTimeToLockedMeetupDate(lockedDateYmd, draft));
             onClose();
           }}
           style={({ pressed }) => [styles.saveBtn, pressed && { opacity: 0.92 }]}
@@ -93,30 +76,12 @@ export function WizardTimeProposalSheet({
         </Pressable>
       }
     >
-      <Text style={styles.preview}>{label}</Text>
-      <View style={styles.modeRow}>
-        {(['date', 'time'] as const).map((key) => {
-          const on = pickerMode === key;
-          return (
-            <Pressable
-              key={key}
-              onPress={() => {
-                if (Platform.OS === 'ios') setIosMode(key);
-                else setAndroidMode(key);
-              }}
-              style={[styles.modeChip, on && styles.modeChipOn]}
-            >
-              <Text style={[styles.modeChipText, on && styles.modeChipTextOn]}>
-                {key === 'date' ? 'Date' : 'Time'}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      {dateHint ? <Text style={styles.dateHint}>{dateHint}</Text> : null}
+      <Text style={styles.preview}>{timePreview}</Text>
       <View style={styles.pickerShell}>
         <DateTimePicker
           value={draft}
-          mode={pickerMode}
+          mode="time"
           display={Platform.OS === 'ios' ? 'spinner' : 'default'}
           themeVariant="light"
           style={styles.picker}
@@ -128,22 +93,20 @@ export function WizardTimeProposalSheet({
 }
 
 const styles = StyleSheet.create({
+  dateHint: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: ui.textSecondary,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
   preview: {
-    fontSize: 15,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '700',
     color: ui.textPrimary,
     textAlign: 'center',
+    letterSpacing: -0.2,
   },
-  modeRow: { flexDirection: 'row', gap: 8, justifyContent: 'center' },
-  modeChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: '#F1F5F9',
-  },
-  modeChipOn: { backgroundColor: '#EEF2FF' },
-  modeChipText: { fontSize: 14, fontWeight: '600', color: ui.textSecondary },
-  modeChipTextOn: { color: ui.primary },
   pickerShell: {
     minHeight: wizardLayout.sheetPickerHeight,
     width: '100%',

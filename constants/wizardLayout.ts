@@ -44,6 +44,31 @@ export const wizardLayout = {
   sheetPickerHeight: 216,
   /** Space after the item summary card before first section. */
   afterSummaryCard: 24,
+  /** Rental summary card (celebration / confirmation). */
+  summaryCardInset: 12,
+  summaryMetaPaddingVertical: 8,
+  summaryMetaColumnGap: 8,
+
+  /** Light celebration transition screens (rental confirmed, etc.). */
+  celebrationScrollPaddingTop: 6,
+  celebrationHeaderPaddingBottom: 4,
+  celebrationHeroOuter: 76,
+  celebrationHeroInner: 54,
+  celebrationHeroIconToTextGap: 6,
+  celebrationHeroTextGap: 6,
+  celebrationHeadlineMaxWidth: 340,
+  celebrationSupportMaxWidth: 320,
+  celebrationSectionGap: 20,
+  journeyRowPaddingVertical: 11,
+  journeyRowPaddingHorizontal: 14,
+  /** Extra scroll reserve when footer has primary + 2 outlined tiers. */
+  footerStackedExtraReserve: 80,
+  celebrationFooterGap: 6,
+  celebrationFooterSecondaryBg: '#FAFBFD',
+  celebrationFooterSecondaryBorder: '#D1D5DB',
+  celebrationFooterTertiaryBg: '#FCFCFD',
+  celebrationFooterTertiaryBorder: '#EEF0F3',
+  celebrationFooterTertiaryPaddingVertical: 11,
 
   footerPaddingTop: 8,
   footerBottomMin: 10,
@@ -60,6 +85,14 @@ export const wizardLayout = {
 
 export function wizardScrollBottomPadding(safeBottom: number): number {
   return wizardLayout.scrollBottomReserve + safeBottom;
+}
+
+export function wizardScrollBottomPaddingStackedFooter(safeBottom: number): number {
+  return (
+    wizardLayout.scrollBottomReserve +
+    wizardLayout.footerStackedExtraReserve +
+    safeBottom
+  );
 }
 
 export const wizardStepContentStyle: ViewStyle = {
@@ -154,4 +187,78 @@ export const guidedWizardChromeStyles = StyleSheet.create({
     borderRadius: wizardLayout.footerNoteRadius,
     overflow: 'hidden',
   },
+  /** Celebration shell — secondary tier (message, etc.). */
+  celebrationFooterSecondary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'stretch',
+    gap: 8,
+    paddingVertical: wizardLayout.ctaPaddingVertical,
+    borderRadius: wizardLayout.ctaBorderRadius,
+    borderWidth: 1,
+    borderColor: wizardLayout.celebrationFooterSecondaryBorder,
+    backgroundColor: wizardLayout.celebrationFooterSecondaryBg,
+  },
+  celebrationFooterSecondaryText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: ui.textPrimary,
+  },
+  celebrationHeaderBlock: {
+    paddingBottom: wizardLayout.celebrationHeaderPaddingBottom,
+  },
+  /** Celebration shell — tertiary tier (view details, etc.). */
+  celebrationFooterTertiary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'stretch',
+    gap: 4,
+    paddingVertical: wizardLayout.celebrationFooterTertiaryPaddingVertical,
+    borderRadius: wizardLayout.ctaBorderRadius,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: wizardLayout.celebrationFooterTertiaryBorder,
+    backgroundColor: wizardLayout.celebrationFooterTertiaryBg,
+  },
+  celebrationFooterTertiaryText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: ui.primary,
+    letterSpacing: -0.2,
+  },
+  celebrationFooterStack: {
+    gap: wizardLayout.celebrationFooterGap,
+    paddingTop: wizardLayout.footerPaddingTop,
+    paddingBottom: wizardLayout.footerBottomMin,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: ui.border,
+    backgroundColor: '#FAFBFC',
+  },
+  celebrationCta: {
+    alignSelf: 'stretch',
+  },
 });
+
+/** Centered hero block for light celebration transitions. */
+export const wizardCelebrationHeroStyle: ViewStyle = {
+  alignItems: 'center',
+  gap: wizardLayout.celebrationHeroIconToTextGap,
+};
+
+/** Headline + supporting copy within the celebration hero. */
+export const wizardCelebrationHeroTextStyle: ViewStyle = {
+  alignItems: 'center',
+  gap: wizardLayout.celebrationHeroTextGap,
+};
+
+/** Step body for celebration transitions — full-width sections, wizard rhythm. */
+export const wizardCelebrationBodyStyle: ViewStyle = {
+  gap: wizardLayout.celebrationSectionGap,
+};
+
+/** Tighter scroll inset for celebration transition screens. */
+export const wizardCelebrationScrollContentStyle: ViewStyle = {
+  paddingTop: wizardLayout.celebrationScrollPaddingTop,
+  flexGrow: 1,
+};

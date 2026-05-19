@@ -1,11 +1,14 @@
 import type { NegotiationDeliveryMethod } from '@/lib/negotiationDelivery';
-import { mergeCalendarDayKeepingClock } from '@/lib/dateTimeScheduling';
 import { resolveRentalReturnIso } from '@/lib/rentalExtensionProposal';
 import {
-  buildAcceptedPickupCoordination,
   resolveAcceptedMeetupLocation,
   resolveAcceptedRentalPickupIso,
 } from '@/lib/rentalWizard/acceptedPickupCoordination';
+import {
+  buildInheritedReturnDefaults,
+  mergeReturnOntoEndDateIfNeeded,
+  resolveReturnMeetupTimeIso,
+} from '@/lib/rentalWizard/resolveReturnMeetupDefaults';
 import type { RentalWizardContext, RentalWizardProgress } from '@/lib/rentalWizard/types';
 import { formatUsd } from '@/lib/money';
 
@@ -105,26 +108,18 @@ export function buildDefaultCoordinatePickupDraft(ctx: RentalWizardContext): Wiz
   };
 }
 
-/** Accepted pickup/handoff — baseline for return confirmation (Screen 2). */
-export function buildInheritedReturnDefaults(ctx: RentalWizardContext): CoordinateReturnInheritedDefaults {
-  const accepted = buildAcceptedPickupCoordination(ctx);
-  return {
-    location: accepted.location,
-    meetupTimeIso: accepted.meetupTimeIso,
-    method: accepted.method,
-  };
-}
+export { buildInheritedReturnDefaults } from '@/lib/rentalWizard/resolveReturnMeetupDefaults';
 
 export function buildDefaultCoordinateReturnDraft(ctx: RentalWizardContext): WizardMeetupProposalDraft {
-  const accepted = buildAcceptedPickupCoordination(ctx);
+  const inherited = buildInheritedReturnDefaults(ctx);
   return {
-    method: accepted.method,
-    location: accepted.location,
+    method: inherited.method,
+    location: inherited.location,
     locationEditedByRenter: false,
     timeEditedByRenter: false,
-    meetupTimeIso: accepted.meetupTimeIso,
-    agreedMethod: accepted.method,
-    agreedDeliveryFee: accepted.deliveryFee,
+    meetupTimeIso: inherited.meetupTimeIso,
+    agreedMethod: inherited.method,
+    agreedDeliveryFee: ctx.agreedDeliveryFee,
   };
 }
 
@@ -238,14 +233,12 @@ export function resolveProposalReturnIsoForPickup(
   ctx: RentalWizardContext,
   pickupIso: string
 ): string {
+  const canonical = resolveReturnMeetupTimeIso(ctx);
+  if (canonical.iso) return canonical.iso;
   const fromRental = resolveRentalReturnIso(ctx.rental);
   if (fromRental) return fromRental;
   if (ctx.scheduleHints.returnIso) return ctx.scheduleHints.returnIso;
-  const pickup = new Date(pickupIso);
-  if (Number.isFinite(pickup.getTime())) {
-    return mergeCalendarDayKeepingClock(pickup, 1, pickup).toISOString();
-  }
-  return new Date(Date.now() + 86_400_000).toISOString();
+  return mergeReturnOntoEndDateIfNeeded(ctx, pickupIso);
 }
 
 export function locationCardTitleForDraft(

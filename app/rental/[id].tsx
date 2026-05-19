@@ -59,6 +59,7 @@ import {
   evaluateDurationChange,
   resolveAgreementBaselineDurationHours,
 } from '@/lib/proposalDurationChange';
+import { evaluateMeetupProposalDurationWarning } from '@/lib/rentalDurationValidation';
 import { isUuidString } from '@/lib/requestOwnership';
 import { normalizeLegalName } from '@/lib/legalName';
 import {
@@ -2007,13 +2008,6 @@ export default function RentalScreen() {
       isExtension?: boolean;
     }): Promise<boolean> => {
       if (!rental || !me) return false;
-      const baselineDurationHours = resolveAgreementBaselineDurationHours(rental, request);
-      const proposedDurationHours = durationHoursBetween(input.meetupTimeIso, input.returnTimeIso);
-      const durationEval = evaluateDurationChange({
-        baselineDurationHours,
-        proposedDurationHours,
-        graceHours: DURATION_GRACE_HOURS,
-      });
       const isExtension =
         input.isExtension === true ||
         isReturnExtensionProposal({
@@ -2022,7 +2016,15 @@ export default function RentalScreen() {
           proposedPickupIso: input.meetupTimeIso,
           proposedReturnIso: input.returnTimeIso,
         });
-      if (durationEval.warningTriggered && !isExtension) {
+      const durationEval = evaluateMeetupProposalDurationWarning({
+        rental,
+        requestSchedulingMeta: request,
+        meetupTimeIso: input.meetupTimeIso,
+        returnTimeIso: input.returnTimeIso,
+        isExtension,
+        proposalMeta: isExtension ? { extension: true } : undefined,
+      });
+      if (durationEval.warningTriggered) {
         const continueProposal = await new Promise<boolean>((resolve) => {
           Alert.alert(
             'Duration change',

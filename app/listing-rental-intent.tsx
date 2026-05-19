@@ -20,9 +20,9 @@ import { insertRentalRequest, type HandoffPreference } from '@/lib/insertRentalR
 import { buildListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
 import { billingDaysInclusive, isDateRangeAvailable } from '@/lib/listingAvailability';
 import { compareIsoDate, formatIsoDateMedium } from '@/lib/listingAvailabilityDates';
-import { estimateListingRentalTotalFromCalendar } from '@/lib/listingRentalEstimate';
+import { computeListingRentalRequestPricing } from '@/lib/rentalPricing';
 import { isToolListingOwner } from '@/lib/listingOwnership';
-import { formatUsd } from '@/lib/money';
+import { RentalPricingBreakdown } from '@/components/rentalPricing';
 import { normalizeListingImages } from '@/lib/normalizeListingImages';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import {
@@ -44,19 +44,6 @@ const HANDOFF_OPTIONS: readonly ThreeLineOption<HandoffPreference>[] = [
 ];
 
 type WizardStep = 1 | 2 | 3;
-
-function handoffSummaryLabel(key: HandoffPreference): string {
-  switch (key) {
-    case 'pickup':
-      return 'Pickup';
-    case 'owner_delivery':
-      return 'Delivery';
-    case 'either':
-      return 'Either';
-    default:
-      return key;
-  }
-}
 
 export default function ListingRentalIntentScreen() {
   const router = useRouter();
@@ -184,12 +171,13 @@ export default function ListingRentalIntentScreen() {
         listingId,
         renterUserId: renterId,
         durationType,
-        price: estimateListingRentalTotalFromCalendar({
+        price: computeListingRentalRequestPricing({
           listing,
           rentalStartIso: start,
           rentalEndIso: end,
           durationKey,
-        }),
+          handoff,
+        }).finalComputedTotal,
         listingSnapshot: snapshot,
         requestedStartDate: start,
         requestedEndDate: end,
@@ -220,15 +208,16 @@ export default function ListingRentalIntentScreen() {
     router,
   ]);
 
-  const displayPrice = useMemo(() => {
-    if (!listing) return 0;
-    return estimateListingRentalTotalFromCalendar({
+  const rentalPricing = useMemo(() => {
+    if (!listing) return null;
+    return computeListingRentalRequestPricing({
       listing,
       rentalStartIso,
       rentalEndIso,
       durationKey,
+      handoff,
     });
-  }, [listing, rentalStartIso, rentalEndIso, durationKey]);
+  }, [listing, rentalStartIso, rentalEndIso, durationKey, handoff]);
 
   const onFooterPress = useCallback(() => {
     if (!canContinue || submitting) return;
@@ -247,7 +236,7 @@ export default function ListingRentalIntentScreen() {
 
   const reviewBody = useMemo(() => {
     if (!listing) return null;
-    const pref = handoffSummaryLabel(handoff);
+    const pref = rentalPricing?.handoffSummaryLine ?? '—';
     const msgTrim = message.trim();
     return (
       <View style={styles.pad}>
@@ -275,10 +264,7 @@ export default function ListingRentalIntentScreen() {
           <Text style={styles.kvK}>Pickup / delivery</Text>
           <Text style={styles.kvV}>{pref}</Text>
         </View>
-        <View style={styles.kv}>
-          <Text style={styles.kvK}>Estimated total</Text>
-          <Text style={styles.kvV}>{displayPrice > 0 ? formatUsd(displayPrice) : '—'}</Text>
-        </View>
+        {rentalPricing ? <RentalPricingBreakdown pricing={rentalPricing} /> : null}
         {msgTrim ? (
           <View style={styles.messagePreview}>
             <Text style={styles.kvK}>Message to host</Text>
@@ -303,7 +289,7 @@ export default function ListingRentalIntentScreen() {
     rentalEndIso,
     billingDays,
     handoff,
-    displayPrice,
+    rentalPricing,
     message,
   ]);
 

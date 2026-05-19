@@ -4,12 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getProfileNameForUserId } from '@/lib/profileDisplayName';
 import { insertMeetupProposalOfferMessage } from '@/lib/meetupProposalThreadEvent';
 import { insertServerNotificationToRecipient } from '@/lib/insertServerNotification';
-import {
-  DURATION_GRACE_HOURS,
-  evaluateDurationChange,
-  resolveAgreementBaselineDurationHours,
-  durationHoursBetween,
-} from '@/lib/proposalDurationChange';
+import { evaluateMeetupProposalDurationWarning } from '@/lib/rentalDurationValidation';
 import { isUuidString } from '@/lib/requestOwnership';
 import { clearWizardCoordinateDraftsForRental } from '@/lib/rentalWizard/rentalWizardSeenState';
 import type { RentalWizardRentalRow } from '@/lib/rentalWizard/types';
@@ -48,15 +43,14 @@ export async function submitRentalMeetupProposal(
     return { ok: false, reason: 'validation' };
   }
 
-  const baselineDurationHours = resolveAgreementBaselineDurationHours(
+  const durationEval = evaluateMeetupProposalDurationWarning({
     rental,
-    options?.requestSchedulingMeta
-  );
-  const proposedDurationHours = durationHoursBetween(meetupTimeIso, returnTimeIso);
-  const durationEval = evaluateDurationChange({
-    baselineDurationHours,
-    proposedDurationHours,
-    graceHours: DURATION_GRACE_HOURS,
+    requestSchedulingMeta: options?.requestSchedulingMeta,
+    meetupTimeIso,
+    returnTimeIso,
+    isReturnOnly,
+    isExtension: input.proposalMeta?.extension === true,
+    proposalMeta: input.proposalMeta,
   });
 
   if (durationEval.warningTriggered && !options?.skipDurationAlert) {

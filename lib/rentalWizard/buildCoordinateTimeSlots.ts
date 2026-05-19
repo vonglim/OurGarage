@@ -1,4 +1,9 @@
 import { snapDateTimeToQuarterHour } from '@/lib/dateTimeScheduling';
+import {
+  applyTimeToLockedMeetupDate,
+  formatMeetupTimeLabel,
+  type LockedMeetupSchedule,
+} from '@/lib/rentalWizard/coordinateMeetupSchedule';
 
 export type CoordinateTimeSlot = {
   id: string;
@@ -6,80 +11,70 @@ export type CoordinateTimeSlot = {
   iso: string;
 };
 
-function formatSlotLabel(d: Date): string {
-  return d.toLocaleString(undefined, {
-    weekday: 'short',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
-function addHours(base: Date, hours: number): Date {
-  return new Date(base.getTime() + hours * 60 * 60 * 1000);
-}
-
 function parseAnchor(iso: string | null | undefined): Date | null {
   if (!iso?.trim()) return null;
   const t = Date.parse(iso);
   return Number.isFinite(t) ? snapDateTimeToQuarterHour(new Date(t)) : null;
 }
 
+function timeOnLockedDay(lockedYmd: string, hours: number, minutes: number): Date {
+  const iso = applyTimeToLockedMeetupDate(
+    lockedYmd,
+    new Date(2000, 0, 1, hours, minutes, 0, 0)
+  );
+  return snapDateTimeToQuarterHour(new Date(Date.parse(iso)));
+}
+
 /**
- * Suggested meetup chips for the coordinate wizard — owner proposal, rental start, nearby times.
+ * Suggested meetup time chips — same agreed rental day only; labels are time-only.
  */
 export function buildCoordinateTimeSlots(input: {
+  lockedSchedule: LockedMeetupSchedule;
   ownerProposalIso?: string | null;
-  rentalStartDate?: string | null;
   selectedIso?: string | null;
 }): CoordinateTimeSlot[] {
+  const { lockedSchedule } = input;
+  const lockedYmd = lockedSchedule.dateYmd;
   const seen = new Set<string>();
   const out: CoordinateTimeSlot[] = [];
 
   const push = (d: Date, id: string) => {
-    const iso = snapDateTimeToQuarterHour(d).toISOString();
+    const iso = applyTimeToLockedMeetupDate(lockedYmd, d);
     if (seen.has(iso)) return;
     seen.add(iso);
-    out.push({ id, label: formatSlotLabel(d), iso });
+    out.push({
+      id,
+      label: formatMeetupTimeLabel(new Date(Date.parse(iso))),
+      iso,
+    });
   };
 
   const owner = parseAnchor(input.ownerProposalIso);
-  if (owner) push(owner, 'owner');
-
-  const startDate = input.rentalStartDate?.trim();
-  if (startDate && /^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startDate);
-    if (m) {
-      const y = Number(m[1]);
-      const mo = Number(m[2]);
-      const day = Number(m[3]);
-      push(new Date(y, mo - 1, day, 17, 0, 0, 0), 'start-evening');
-      push(new Date(y, mo - 1, day, 10, 0, 0, 0), 'start-morning');
-    }
+  if (owner) {
+    push(new Date(Date.parse(applyTimeToLockedMeetupDate(lockedYmd, owner))), 'owner');
   }
 
-  const base = owner ?? new Date();
-  const friday = new Date(base);
-  while (friday.getDay() !== 5) friday.setDate(friday.getDate() + 1);
-  friday.setHours(17, 0, 0, 0);
-  push(friday, 'fri-5');
-
-  const saturday = new Date(friday);
-  saturday.setDate(saturday.getDate() + 1);
-  saturday.setHours(10, 0, 0, 0);
-  push(saturday, 'sat-10');
-
-  if (out.length < 3) {
-    push(addHours(base, 2), 'near-2h');
-    push(addHours(base, 24), 'near-24h');
+  const anchor = parseAnchor(lockedSchedule.anchorIso);
+  if (anchor) {
+    const onLocked = new Date(Date.parse(applyTimeToLockedMeetupDate(lockedYmd, anchor)));
+    push(onLocked, 'agreed');
   }
+
+  push(timeOnLockedDay(lockedYmd, 10, 0), 'morning');
+  push(timeOnLockedDay(lockedYmd, 14, 0), 'afternoon');
+  push(timeOnLockedDay(lockedYmd, 17, 0), 'evening');
 
   const selected = parseAnchor(input.selectedIso);
   if (selected) {
-    const iso = selected.toISOString();
+    const iso = applyTimeToLockedMeetupDate(lockedYmd, selected);
     if (!seen.has(iso)) {
-      out.unshift({ id: 'selected', label: formatSlotLabel(selected), iso });
+      out.unshift({
+        id: 'selected',
+        label: formatMeetupTimeLabel(new Date(Date.parse(iso))),
+        iso,
+      });
     }
   }
 
-  return out.slice(0, 5);
+  return out.slice(0, 4);
 }

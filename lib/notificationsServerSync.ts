@@ -10,7 +10,7 @@ import { getAuthUserIdSync } from '@/lib/authUser';
 import { getActiveChatOfferThreadId } from '@/lib/activeChatOfferThread';
 import { isUuidString } from '@/lib/requestOwnership';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
-import { presentLocalChatBanner } from '@/lib/notifications';
+import { presentLocalChatBanner, presentLocalLifecycleBanner } from '@/lib/notifications';
 import {
   addNotificationToStore,
   replaceNotificationInStore,
@@ -263,8 +263,23 @@ export function startNotificationsServerSync(userId: string): () => void {
           const n = mapSupabaseNotificationToApp(r, currentUserId);
           if (n) {
             addNotificationToStore(n);
-            if (rawType === 'rental_confirmed') {
+            if (
+              rawType === 'rental_confirmed' ||
+              rawType === 'rental_cancellation_requested' ||
+              rawType === 'rental_cancellation_accepted' ||
+              rawType === 'rental_cancellation_declined'
+            ) {
               void useUnifiedRentalsActivityStore.getState().refreshFromServer();
+            }
+            if (
+              Platform.OS !== 'web' &&
+              (rawType === 'rental_cancellation_requested' ||
+                rawType === 'rental_cancellation_accepted' ||
+                rawType === 'rental_cancellation_declined')
+            ) {
+              const titleStr = typeof r.title === 'string' ? r.title.trim() : '';
+              const bodyStr = typeof r.body === 'string' ? r.body.trim() : '';
+              void presentLocalLifecycleBanner(titleStr || 'Rental update', bodyStr || n.message);
             }
             const offerIdRaw = r.offer_id;
             const offerId =

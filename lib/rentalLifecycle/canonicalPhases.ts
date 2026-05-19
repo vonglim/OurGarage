@@ -7,6 +7,7 @@ import type { RentalWizardStep } from '@/lib/rentalWizard/types';
 export type CanonicalRentalPhase =
   | 'request_pending'
   | 'approved'
+  | 'rental_confirmed_transition'
   | 'coordinate_pickup'
   | 'pickup_confirmed_transition'
   | 'coordinate_return'
@@ -62,7 +63,7 @@ export const CANONICAL_LIFECYCLE_MAP: Record<CanonicalRentalPhase, LifecyclePhas
     phase: 'approved',
     label: 'Approved',
     resolverPriority: RESOLVER_PRIORITY.APPROVED,
-    wizardSteps: ['coordinate_pickup'],
+    wizardSteps: ['transition_rental_confirmed', 'coordinate_pickup'],
     entryConditions: [
       'rentals row exists',
       'status pending or approved',
@@ -72,6 +73,17 @@ export const CANONICAL_LIFECYCLE_MAP: Record<CanonicalRentalPhase, LifecyclePhas
     blockingFields: ['last_proposed_by when agreement_status=pending'],
     notificationEvents: ['rental_confirmed / offer_accepted'],
     allowedActions: ['propose pickup', 'message', 'request cancel (if eligible)'],
+  },
+  rental_confirmed_transition: {
+    phase: 'rental_confirmed_transition',
+    label: 'Rental confirmed (transition)',
+    resolverPriority: RESOLVER_PRIORITY.APPROVED,
+    wizardSteps: ['transition_rental_confirmed'],
+    entryConditions: ['offer/request accepted', '!rental_confirmed_seen', '!isPickupCoordinationComplete'],
+    exitConditions: ['markWizardTransitionSeen rental_confirmed_seen'],
+    blockingFields: ['seen_transition_keys missing rental_confirmed_seen'],
+    notificationEvents: ['rental_confirmed / offer_accepted'],
+    allowedActions: ['continue to coordinate pickup', 'message owner', 'view rental details'],
   },
   coordinate_pickup: {
     phase: 'coordinate_pickup',
@@ -224,6 +236,7 @@ export const CANONICAL_LIFECYCLE_MAP: Record<CanonicalRentalPhase, LifecyclePhas
 
 export const WIZARD_STEP_TO_CANONICAL: Record<RentalWizardStep, CanonicalRentalPhase> = {
   cancelled: 'cancelled',
+  transition_rental_confirmed: 'rental_confirmed_transition',
   coordinate_pickup: 'coordinate_pickup',
   transition_pickup_confirmed: 'pickup_confirmed_transition',
   coordinate_return: 'coordinate_return',

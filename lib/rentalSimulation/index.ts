@@ -22,5 +22,6 @@ export {
   devForceCancellationDeclinedRental,
   devForceCancellationRequestedRental,
   devResetCancellationState,
+  devSimulatePickupAcceptedOverlay,
 } from '@/lib/rentalSimulation/devRentalActions';
 export { registerRentalDevContext, unregisterRentalDevContext } from '@/lib/rentalSimulation/devRentalRegistry';

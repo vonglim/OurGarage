@@ -9,6 +9,29 @@ import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
 
 const REFRESH_DEBOUNCE_MS = 120;
 
+type RentalsUpdatePayload = {
+  agreement_status?: string | null;
+  last_proposed_by?: string | null;
+  meetup_location?: string | null;
+  agreed_pickup_datetime?: string | null;
+};
+
+function summarizeRentalsRow(row: Record<string, unknown> | undefined): RentalsUpdatePayload | null {
+  if (!row || typeof row !== 'object') return null;
+  return {
+    agreement_status:
+      typeof row.agreement_status === 'string' ? row.agreement_status : (row.agreement_status as null),
+    last_proposed_by:
+      typeof row.last_proposed_by === 'string' ? row.last_proposed_by : (row.last_proposed_by as null),
+    meetup_location:
+      typeof row.meetup_location === 'string' ? row.meetup_location : (row.meetup_location as null),
+    agreed_pickup_datetime:
+      typeof row.agreed_pickup_datetime === 'string'
+        ? row.agreed_pickup_datetime
+        : (row.agreed_pickup_datetime as null),
+  };
+}
+
 /**
  * Subscribes to rentals + rental_wizard_state changes and coalesces refresh bursts (stress-safe).
  */
@@ -20,13 +43,22 @@ export function useRentalWizardRealtimeSync(
   const onRefreshRef = useRef(onRefresh);
   onRefreshRef.current = onRefresh;
 
-  const scheduleRefresh = useCallback((trigger: string, table: string) => {
+  const scheduleRefresh = useCallback((trigger: string, table: string, payload?: unknown) => {
+    const rentalsSummary =
+      table === 'rentals' && payload && typeof payload === 'object'
+        ? {
+            old: summarizeRentalsRow((payload as { old?: Record<string, unknown> }).old),
+            new: summarizeRentalsRow((payload as { new?: Record<string, unknown> }).new),
+          }
+        : undefined;
+
     logScenario('realtime', {
       event: 'change_received',
       rentalId,
       source: 'rental_wizard_layout',
       table,
       trigger,
+      ...(rentalsSummary ? { rentals: rentalsSummary } : {}),
     });
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
@@ -60,12 +92,12 @@ export function useRentalWizardRealtimeSync(
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'rentals', filter: `id=eq.${id}` },
-        () => scheduleRefresh('rentals_update', 'rentals')
+        (payload) => scheduleRefresh('rentals_update', 'rentals', payload)
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'rental_wizard_state', filter: `rental_id=eq.${id}` },
-        () => scheduleRefresh('wizard_state_change', 'rental_wizard_state')
+        (payload) => scheduleRefresh('wizard_state_change', 'rental_wizard_state', payload)
       )
       .subscribe((status) => {
         logScenario('realtime', {

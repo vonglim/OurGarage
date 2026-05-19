@@ -72,6 +72,21 @@ function typePillStyle(t: AppNotification['type']) {
         backgroundColor: '#FCE8E6',
         color: '#C62828',
       };
+    case 'rental_cancellation_requested':
+      return {
+        backgroundColor: '#FFF7ED',
+        color: '#C2410C',
+      };
+    case 'rental_cancellation_accepted':
+      return {
+        backgroundColor: '#E8F5E9',
+        color: '#2E7D32',
+      };
+    case 'rental_cancellation_declined':
+      return {
+        backgroundColor: '#FEF3C7',
+        color: '#B45309',
+      };
     default:
       return {
         backgroundColor: ui.surfaceNeutral,
@@ -105,6 +120,12 @@ function typeLabel(t: AppNotification['type']): string {
       return 'Rental request';
     case 'rental_declined':
       return 'Request declined';
+    case 'rental_cancellation_requested':
+      return 'Cancel request';
+    case 'rental_cancellation_accepted':
+      return 'Cancel approved';
+    case 'rental_cancellation_declined':
+      return 'Cancel declined';
     default:
       return '';
   }

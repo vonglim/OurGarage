@@ -401,3 +401,17 @@ export async function devForceCancellationDeclinedRental(
   if (res.ok) await afterMutation(rentalId);
   return res.ok ? { ok: true, message: 'Cancellation declined (DEV)' } : res;
 }
+
+/** DEV: show pickup-accepted lifecycle overlay in wizard (no realtime). */
+export function devSimulatePickupAcceptedOverlay(): DevRentalActionResult {
+  assertDevToolsEnabled('devSimulatePickupAcceptedOverlay');
+  const reg = useRentalSimulationStore.getState().registered;
+  if (!reg?.simulatePickupAcceptedOverlay) {
+    return {
+      ok: false,
+      message: 'Open rental wizard first (coordinate pickup screen preferred)',
+    };
+  }
+  reg.simulatePickupAcceptedOverlay();
+  return { ok: true, message: 'Pickup accepted overlay shown' };
+}

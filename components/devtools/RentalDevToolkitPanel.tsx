@@ -34,6 +34,7 @@ import {
   devSimulateRenterApprovePhotos,
   devSimulateReturnFlow,
   devSimulateSignAgreement,
+  devSimulatePickupAcceptedOverlay,
   devForceCancelledRental,
   devForceCancellationAcceptedRental,
   devForceCancellationDeclinedRental,
@@ -178,6 +179,15 @@ export function RentalDevToolkitPanel({ visible, onClose, pathname }: Props) {
           </DevToolkitSection>
 
           <DevToolkitSection title="Simulate renter actions">
+            <DevToolkitActionRow
+              title="Simulate pickup accepted overlay"
+              subtitle="Lifecycle prompt on Coordinate Pickup (no realtime)"
+              disabled={busy || !rentalId}
+              onPress={() => {
+                const res = devSimulatePickupAcceptedOverlay();
+                showFeedbackToast(res.ok ? res.message ?? 'Overlay shown' : res.message ?? 'Failed');
+              }}
+            />
             <DevToolkitActionRow
               title="Propose / confirm pickup schedule"
               disabled={busy || !rentalId}

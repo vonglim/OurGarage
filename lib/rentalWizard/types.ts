@@ -5,6 +5,7 @@ import type { WizardMeetupProposalDraft } from '@/lib/rentalWizard/wizardMeetupD
 
 export type RentalWizardStep =
   | 'cancelled'
+  | 'transition_rental_confirmed'
   | 'coordinate_pickup'
   | 'transition_pickup_confirmed'
   | 'coordinate_return'
@@ -24,6 +25,7 @@ export type RentalWizardStep =
   | 'leave_review';
 
 export type RentalWizardTransitionKey =
+  | 'rental_confirmed_seen'
   | 'pickup_confirmed_seen'
   | 'return_confirmed_seen'
   | 'all_set_seen'
