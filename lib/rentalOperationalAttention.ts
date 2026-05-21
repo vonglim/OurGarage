@@ -40,14 +40,14 @@ export function isRentalPastPickupPhase(status: string | null | undefined): bool
 }
 
 export function shouldFlagPickupMissedConfirmation(input: {
-  meetingCompleted: boolean;
+  meetupCoordinationComplete: boolean;
   lifecyclePhase: 'pickup' | 'active' | 'return' | 'completed';
   pickupHandoffComplete: boolean;
   pickupIso: string | null | undefined;
   pickupOperationalState: string | null | undefined;
   nowMs?: number;
 }): boolean {
-  if (!input.meetingCompleted) return false;
+  if (!input.meetupCoordinationComplete) return false;
   if (input.lifecyclePhase !== 'pickup') return false;
   if (input.pickupHandoffComplete) return false;
   if (input.pickupOperationalState === 'running_late' || input.pickupOperationalState === 'no_show_reported') {

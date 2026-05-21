@@ -41,8 +41,10 @@ type PrimaryResolveInput = {
   viewerRole: 'owner' | 'renter';
   workspaceGuidanceLine: string | null;
   termsCompleted: boolean;
-  meetingCompleted: boolean;
+  meetupCoordinationComplete: boolean;
   showMeetingAccept: boolean;
+  /** Active rental: pending proposal crosses contractual return day. */
+  showExtensionAccept: boolean;
   showMeetingPrimaryAction: boolean;
   showMeetingPendingPill: boolean;
   proposalBusy: boolean;
@@ -159,12 +161,14 @@ export function resolveRentalWorkspacePrimaryStageModel(
         secondaryAction: null,
       };
     }
-    if (!input.meetingCompleted) {
+    if (!input.meetupCoordinationComplete) {
       if (input.showMeetingAccept) {
         return {
           stageLabel: 'COORDINATE',
-          summaryLine: guide || `${who} sent a meetup proposal — accept it or suggest a change.`,
-          primaryLabel: input.proposalBusy ? 'Saving…' : 'Respond to meetup',
+          summaryLine:
+            guide ||
+            `${who} sent pickup or return details — accept or suggest a change for the phase that needs your response.`,
+          primaryLabel: input.proposalBusy ? 'Saving…' : 'Respond to proposal',
           primaryDisabled: input.proposalBusy,
           onPrimary: input.onFocusMeetingSection,
           benchTone: 'coordination',
@@ -176,7 +180,8 @@ export function resolveRentalWorkspacePrimaryStageModel(
         if (input.showMeetingPendingPill) {
           return {
             stageLabel: 'COORDINATE',
-            summaryLine: guide || `Waiting on ${who} to respond to your meetup proposal.`,
+            summaryLine:
+              guide || `Waiting on ${who} to respond to your pickup or return proposal.`,
             primaryLabel: 'Open messages',
             primaryDisabled: false,
             onPrimary: input.onOpenChat,
@@ -185,14 +190,14 @@ export function resolveRentalWorkspacePrimaryStageModel(
             secondaryAction: null,
           };
         }
-        const proposeLabel = input.viewerRole === 'owner' ? 'Propose meetup' : 'Suggest times';
+        const proposeLabel = input.viewerRole === 'owner' ? 'Propose pickup' : 'Suggest pickup';
         return {
           stageLabel: 'COORDINATE',
           summaryLine:
             guide ||
             (input.viewerRole === 'owner'
-              ? `Confirm pickup and return with ${who} so both sides know where to meet.`
-              : `Propose pickup and return times that work for you and ${who}.`),
+              ? `Confirm pickup first, then return details with ${who}. Each phase is coordinated separately.`
+              : `Propose pickup details that work for you and ${who}. Return coordination unlocks after pickup is confirmed.`),
           primaryLabel: input.proposalBusy ? 'Saving…' : proposeLabel,
           primaryDisabled: input.proposalBusy,
           onPrimary: input.onOpenMeetingProposal,
@@ -203,8 +208,8 @@ export function resolveRentalWorkspacePrimaryStageModel(
       }
       return {
         stageLabel: 'COORDINATE',
-        summaryLine: guide || 'Open meetup details to finish pickup and return scheduling.',
-        primaryLabel: 'Open meetup',
+        summaryLine: guide || 'Open meetup coordination to finish pickup and return scheduling.',
+        primaryLabel: 'Open coordination',
         primaryDisabled: false,
         onPrimary: input.onFocusMeetingSection,
         benchTone: 'coordination',
@@ -212,6 +217,27 @@ export function resolveRentalWorkspacePrimaryStageModel(
         secondaryAction: null,
       };
     }
+  }
+
+  if (input.workspaceStage === 'pickup_authorization') {
+    return {
+      stageLabel: 'AUTHORIZE',
+      summaryLine:
+        guide ||
+        (input.viewerRole === 'renter'
+          ? 'Review the agreement, authorize the security hold, and sign to officially activate your rental.'
+          : `Waiting for ${who} to complete rental authorization.`),
+      primaryLabel:
+        input.viewerRole === 'renter' ? 'Complete authorization' : 'Open messages',
+      primaryDisabled: input.viewerRole !== 'renter',
+      onPrimary:
+        input.viewerRole === 'renter'
+          ? input.onFocusPickupSection
+          : input.onOpenChat,
+      benchTone: 'pickup',
+      contextLine: ctx,
+      secondaryAction: null,
+    };
   }
 
   if (input.workspaceStage === 'pickup_prep') {
@@ -231,7 +257,7 @@ export function resolveRentalWorkspacePrimaryStageModel(
     const summaryLine = activeOnRentSummaryLine(input.viewerRole, sched);
     const urgencyLine = activeExtensionUrgencyLine(input.viewerRole);
 
-    if (input.showMeetingAccept) {
+    if (input.showExtensionAccept) {
       return {
         stageLabel: 'ON RENT',
         summaryLine:
@@ -250,6 +276,20 @@ export function resolveRentalWorkspacePrimaryStageModel(
           onPress: input.onDeclineExtension,
           disabled: input.proposalBusy,
         },
+      };
+    }
+
+    if (input.showMeetingAccept) {
+      return {
+        stageLabel: 'ON RENT',
+        summaryLine: guide || `${who} sent a meetup proposal — accept it or suggest a change.`,
+        primaryLabel: input.proposalBusy ? 'Saving…' : 'Respond to meetup',
+        primaryDisabled: input.proposalBusy,
+        onPrimary: input.onFocusMeetingSection,
+        benchTone: 'active',
+        contextLine: ctx,
+        urgencyLine,
+        secondaryAction: issueAction(input),
       };
     }
 

@@ -99,6 +99,8 @@ export function transitionKeyForStep(step: RentalWizardStep): RentalWizardTransi
       return 'rental_confirmed_seen';
     case 'transition_pickup_confirmed':
       return 'pickup_confirmed_seen';
+    case 'transition_return_confirmed':
+      return 'return_confirmed_seen';
     case 'transition_all_set':
       return 'all_set_seen';
     case 'transition_pickup_ready':

@@ -1,11 +1,14 @@
 import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
-import { resolveRentalWizardDestination } from '@/lib/rentalWizard';
+import { safeResolveRentalWizardDestination } from '@/lib/rentalWizard/rentalWizardStepResolver';
 import type { RentalWizardDestination, RentalWizardStep } from '@/lib/rentalWizard/types';
 
 /** Transient in-wizard gates that block resolver redirects until acknowledged. */
-export type WizardLifecyclePromptId = 'pickup_coordination_accepted';
+export type WizardLifecyclePromptId =
+  | 'pickup_coordination_accepted'
+  | 'return_coordination_accepted';
 
 export const PICKUP_COORDINATION_ACCEPTED_SUSPENDED_STEP: RentalWizardStep = 'coordinate_pickup';
+export const RETURN_COORDINATION_ACCEPTED_SUSPENDED_STEP: RentalWizardStep = 'coordinate_return';
 
 export type WizardLifecyclePromptGateState = {
   id: WizardLifecyclePromptId | null;
@@ -42,7 +45,11 @@ export function createLifecyclePromptGateState(
   return {
     id,
     suspendedStep:
-      id === 'pickup_coordination_accepted' ? PICKUP_COORDINATION_ACCEPTED_SUSPENDED_STEP : null,
+      id === 'pickup_coordination_accepted'
+        ? PICKUP_COORDINATION_ACCEPTED_SUSPENDED_STEP
+        : id === 'return_coordination_accepted'
+          ? RETURN_COORDINATION_ACCEPTED_SUSPENDED_STEP
+          : null,
   };
 }
 
@@ -57,7 +64,7 @@ export function hasPendingWizardLifecyclePrompt(
  * Step auto-correction and transition redirects must defer to acknowledgment.
  */
 export function evaluateWizardNavigationWithLifecycleGate(input: {
-  ctx: Parameters<typeof resolveRentalWizardDestination>[0];
+  ctx: Parameters<typeof safeResolveRentalWizardDestination>[0];
   urlStep: RentalWizardStep;
   gate: WizardLifecyclePromptGateState | null | undefined;
 }): {
@@ -66,7 +73,7 @@ export function evaluateWizardNavigationWithLifecycleGate(input: {
   redirectBlockedByPrompt: boolean;
   frozenUrlStep: RentalWizardStep | null;
 } {
-  const dest = resolveRentalWizardDestination(input.ctx);
+  const dest = safeResolveRentalWizardDestination(input.ctx);
   const pending = hasPendingWizardLifecyclePrompt(input.gate);
 
   if (pending) {

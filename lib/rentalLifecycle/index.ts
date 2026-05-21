@@ -46,8 +46,12 @@ export {
   getActiveRealtimeSubscriptionCount,
   registerRentalRealtimeSubscription,
   unregisterRentalRealtimeSubscription,
+  isRentalRealtimeSubscriptionActive,
+  getRentalRealtimeSubscription,
+  listActiveRentalRealtimeSubscriptions,
 } from '@/lib/rentalLifecycle/realtimeSubscriptionRegistry';
 export { useRentalWizardRealtimeSync } from '@/lib/rentalLifecycle/useRentalWizardRealtimeSync';
+export { usePickupHandoffPresenceRealtime } from '@/lib/rentalLifecycle/usePickupHandoffPresenceRealtime';
 export {
   assertNoPhaseRegression,
   assertOperationalQueues,

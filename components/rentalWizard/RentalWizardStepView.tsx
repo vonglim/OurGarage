@@ -9,6 +9,9 @@ import { WizardItemCard } from '@/components/rentalWizard/WizardItemCard';
 import { WizardLightShell } from '@/components/rentalWizard/shells/WizardLightShell';
 import { WizardTransitionShell } from '@/components/rentalWizard/shells/WizardTransitionShell';
 import { CoordinatePickupStep } from '@/components/rentalWizard/steps/CoordinatePickupStep';
+import { MeetupInspectionStep } from '@/components/rentalWizard/steps/MeetupInspectionStep';
+import { RentalAuthorizationStep } from '@/components/rentalWizard/steps/RentalAuthorizationStep';
+import { PreparePickupStep } from '@/components/rentalWizard/steps/PreparePickupStep';
 import { CancelledSummaryStep } from '@/components/rentalWizard/steps/CancelledSummaryStep';
 import { RentalConfirmedTransitionStep } from '@/components/rentalWizard/steps/RentalConfirmedTransitionStep';
 import { CoordinateReturnStep } from '@/components/rentalWizard/steps/CoordinateReturnStep';
@@ -17,8 +20,33 @@ import { WizardDarkMeetupCards } from '@/components/rentalWizard/shared/WizardMe
 import { ui } from '@/constants/appUi';
 import { formatBorrowingFromOwner } from '@/lib/rentalWizard/formatBorrowingFromOwner';
 import { formatWizardDateTime, formatWizardLocation } from '@/lib/rentalWizard/formatWizardSchedule';
-import type { RentalWizardStep } from '@/lib/rentalWizard/types';
+import {
+  buildPickupHandoffCompletionInputFromWizard,
+  resolvePickupHandoffCompletionState,
+} from '@/lib/pickupHandoffCompletion';
+import { resolvePickupHandoffPresenceState } from '@/lib/pickupHandoffLive';
+import type { RentalWizardContext, RentalWizardStep } from '@/lib/rentalWizard/types';
 import { WIZARD_STEP_META } from '@/lib/rentalWizard/wizardStepMeta';
+
+function resolveMeetupDayPresence(ctx: RentalWizardContext) {
+  const completion = resolvePickupHandoffCompletionState(
+    buildPickupHandoffCompletionInputFromWizard(ctx)
+  );
+  return resolvePickupHandoffPresenceState({
+    rental: ctx.rental,
+    renterPickupImHereAt: ctx.wizardProgress.renter_pickup_im_here_at,
+    renterApprovedPickupPhotosAt: ctx.wizardProgress.renter_approved_pickup_photos_at,
+    pickupAck: ctx.pickupAck,
+    ownerPickupPrepComplete: false,
+    handoffApprovalStarted: Boolean(
+      ctx.rental.handoff_approval_started_at?.trim() || ctx.rental.handoff_approved_by_owner
+    ),
+    handoffCompleted: ctx.pickupHandoffComplete,
+    renterConfirmedReceipt: completion.renterConfirmedReceipt,
+    ownerConfirmedHandoff: completion.ownerConfirmedHandoff,
+    viewerRole: 'renter',
+  });
+}
 
 export type RentalWizardStepViewProps = {
   step: RentalWizardStep;
@@ -63,6 +91,19 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
     case 'coordinate_return':
       return <CoordinateReturnStep />;
 
+    case 'transition_return_confirmed':
+      return (
+        <WizardTransitionShell
+          hideHeaderTitle
+          headline="Return location and time set"
+          subheadline="You're all set for return. Next we'll get you ready for pickup day."
+          primaryLabel="Continue"
+          onBack={() => router.back()}
+          onOpenMessages={w.openMessages}
+          onPrimary={() => void w.advanceAfterTransition('transition_return_confirmed')}
+        />
+      );
+
     case 'transition_all_set':
       return (
         <WizardTransitionShell
@@ -78,31 +119,7 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
       );
 
     case 'prepare_pickup':
-      return (
-        <WizardLightShell
-          title={meta.title}
-          onBack={() => router.back()}
-          onOpenMessages={w.openMessages}
-          primaryLabel={
-            ctx.ownerPickupPhotoCount > 0 ? 'Approve photos' : 'Waiting for owner photos'
-          }
-          primaryDisabled={ctx.ownerPickupPhotoCount === 0}
-          onPrimary={() => void w.markPhotosApproved()}
-          footerNote="You'll be able to review and approve the photos before meetup."
-        >
-          <WizardItemCard {...itemCardProps} />
-          <StatusBanner
-            tone={ctx.ownerPickupPhotoCount > 0 ? 'ready' : 'waiting'}
-            title={ctx.ownerPickupPhotoCount > 0 ? 'Photos ready for review' : 'Waiting on owner'}
-            body={
-              ctx.ownerPickupPhotoCount > 0
-                ? 'The owner uploaded fresh photos of the exact item. Review them in the rental workspace, then approve here.'
-                : 'The owner will upload fresh photos of the exact item before pickup.'
-            }
-          />
-          <QuestionBox />
-        </WizardLightShell>
-      );
+      return <PreparePickupStep />;
 
     case 'transition_pickup_ready':
       return (
@@ -129,14 +146,17 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
         </WizardTransitionShell>
       );
 
-    case 'meetup_day':
+    case 'meetup_day': {
+      const presence = resolveMeetupDayPresence(ctx);
+      const waitingForOwner = presence.renterLivePhase === 'waiting_for_owner';
       return (
         <WizardLightShell
           title={meta.title}
           onBack={() => router.back()}
           onOpenMessages={w.openMessages}
-          primaryLabel="I'm here"
-          onPrimary={() => void w.markImHerePickup()}
+          primaryLabel={waitingForOwner ? 'Waiting for owner' : "I'm here"}
+          onPrimary={waitingForOwner ? () => {} : () => void w.markImHerePickup()}
+          primaryDisabled={waitingForOwner}
           secondaryLabel="Message owner"
           onSecondary={w.openMessages}
         >
@@ -148,36 +168,20 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
             actionLabel="View map"
           />
           <InfoPanel icon="calendar-outline" title="Pickup time" value={formatWizardDateTime(ctx.pickupIso)} />
+          {waitingForOwner ? (
+            <StatusBanner
+              tone="info"
+              title="You're here"
+              body="Waiting for the owner to mark arrival at the meetup."
+            />
+          ) : null}
           <ArrivalChecklist />
         </WizardLightShell>
       );
+    }
 
     case 'owner_confirmed_arrival':
-      return (
-        <WizardLightShell
-          title={meta.title}
-          onBack={() => router.back()}
-          onOpenMessages={w.openMessages}
-          primaryLabel="Equipment confirmation"
-          onPrimary={() => void w.goToResolvedNext()}
-          secondaryLabel="Message owner"
-          onSecondary={w.openMessages}
-        >
-          <WizardItemCard {...itemCardProps} />
-          <View style={styles.successHero}>
-            <Ionicons name="checkmark-circle" size={48} color="#22C55E" />
-            <Text style={styles.successTitle}>The owner is here!</Text>
-            <Text style={styles.successBody}>
-              The owner has confirmed their arrival. You can now continue with equipment confirmation.
-            </Text>
-          </View>
-          <StatusBanner
-            tone="info"
-            title="Take your time"
-            body="Inspect the item in person before confirming."
-          />
-        </WizardLightShell>
-      );
+      return <MeetupInspectionStep />;
 
     case 'equipment_confirmation':
       return (
@@ -194,6 +198,9 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
           <EquipmentChecklist />
         </WizardLightShell>
       );
+
+    case 'rental_authorization':
+      return <RentalAuthorizationStep />;
 
     case 'transition_enjoy_rental':
       return (

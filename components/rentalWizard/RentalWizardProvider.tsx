@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 
 import { WizardLifecyclePromptHost } from '@/components/rentalWizard/WizardLifecyclePromptHost';
@@ -18,6 +18,7 @@ import {
   resolveAcceptedRentalPickupIso,
 } from '@/lib/rentalWizard/acceptedPickupCoordination';
 import { submitRentalMeetupProposal } from '@/lib/rentalWizard/submitRentalMeetupProposal';
+import { acceptRentalMeetupProposal } from '@/lib/rentalMeetupProposalLifecycle';
 import { saveReturnCoordinationToRental } from '@/lib/rentalWizard/saveReturnCoordination';
 import {
   resolveProposalReturnIsoForPickup,
@@ -29,7 +30,24 @@ import {
   type WizardLifecyclePromptGateState,
   type WizardLifecyclePromptId,
 } from '@/lib/rentalWizard/wizardLifecyclePromptGate';
-import { logWizardNotificationPrompt } from '@/lib/rentalWizard/wizardLifecyclePromptFromNotification';
+import {
+  logWizardNotificationPrompt,
+  logWizardReturnPrompt,
+} from '@/lib/rentalWizard/wizardLifecyclePromptFromNotification';
+import { computeOwnerPickupEvidenceRevision } from '@/lib/rentalPickupViewerFlags';
+import { markRenterPickupArrived } from '@/lib/pickupHandoffArrival';
+import { evaluatePickupInspectionFlow } from '@/lib/pickupInspectionFlow';
+import { persistRenterConfirmedPickupReceipt } from '@/lib/pickupHandoffMilestones';
+import {
+  deriveWizardRenterViewerFlags,
+  manualRenterPickupMapOnly,
+  renterPickupManualFromVerificationRows,
+  RENTER_PICKUP_ITEMS,
+} from '@/lib/rentalPickupChecklist';
+import {
+  ensureVerificationRows,
+  persistChecklistState,
+} from '@/lib/rentalVerification';
 import { getSupabase } from '@/lib/supabase';
 
 type RentalWizardContextValue = {
@@ -46,14 +64,19 @@ type RentalWizardContextValue = {
   openMessages: () => void;
   openAdvancedDetails: (focus?: string) => void;
   submitCoordinatePickupProposal: (draft: WizardMeetupProposalDraft) => Promise<boolean>;
+  acceptCoordinatePickupProposal: () => Promise<boolean>;
   submitCoordinateReturnProposal: (draft: WizardMeetupProposalDraft) => Promise<boolean>;
   acknowledgeReturnCoordination: () => Promise<void>;
   completeReturnCoordination: (draft: WizardMeetupProposalDraft) => Promise<boolean>;
   advanceAfterTransition: (fromStep: RentalWizardStep) => Promise<void>;
   goToResolvedNext: () => Promise<void>;
+  confirmPickupReceipt: () => Promise<void>;
+  toggleRenterPickupChecklistItem: (itemId: string) => Promise<void>;
+  markViewedTimestampProof: () => Promise<void>;
   markImHerePickup: () => Promise<void>;
   markImHereReturn: () => Promise<void>;
   markPhotosApproved: () => Promise<void>;
+  markPickupEvidenceReviewOpened: () => Promise<void>;
 };
 
 const Ctx = createContext<RentalWizardContextValue | null>(null);
@@ -80,6 +103,10 @@ export function RentalWizardProvider({
   children,
 }: RentalWizardProviderProps) {
   const router = useRouter();
+  const ctxRef = useRef(ctx);
+  useEffect(() => {
+    ctxRef.current = ctx;
+  }, [ctx]);
   const [proposalBusy, setProposalBusy] = useState(false);
   const hasPendingLifecyclePrompt = hasPendingWizardLifecyclePrompt(lifecycleGate);
   const lifecyclePromptId = lifecycleGate.id;
@@ -87,12 +114,17 @@ export function RentalWizardProvider({
   const blockRedirectForLifecyclePrompt = useCallback(
     (source: string, targetStep?: string) => {
       if (!hasPendingLifecyclePrompt) return false;
-      logWizardNotificationPrompt(ctx.rentalId, 'notification_prompt_blocking_redirect', {
+      const extra = {
         source,
         targetStep,
         promptId: lifecyclePromptId,
         suspendedStep: lifecycleGate.suspendedStep,
-      });
+      };
+      if (lifecyclePromptId === 'return_coordination_accepted') {
+        logWizardReturnPrompt(ctx.rentalId, 'return_prompt_blocking_redirect', extra);
+      } else {
+        logWizardNotificationPrompt(ctx.rentalId, 'notification_prompt_blocking_redirect', extra);
+      }
       return true;
     },
     [ctx.rentalId, hasPendingLifecyclePrompt, lifecycleGate.suspendedStep, lifecyclePromptId]
@@ -119,28 +151,102 @@ export function RentalWizardProvider({
     [ctx.rentalId, router]
   );
 
-  const goToResolvedNext = useCallback(async () => {
+  const navigateToResolvedDestination = useCallback(async () => {
     if (blockRedirectForLifecyclePrompt('goToResolvedNext')) return;
     await onRefresh();
+    const freshCtx = ctxRef.current;
+    if (!freshCtx) return;
+    const dest = resolveRentalWizardDestination(freshCtx);
     const nav = evaluateWizardNavigationWithLifecycleGate({
-      ctx,
-      urlStep: lifecycleGate.suspendedStep ?? 'coordinate_pickup',
+      ctx: freshCtx,
+      urlStep: lifecycleGate.suspendedStep ?? dest.step,
       gate: lifecycleGate,
     });
-    if (nav.dest.path && nav.shouldRedirect) {
-      router.replace(nav.dest.path as `/rental-wizard/${string}/s/${string}`);
+    const path = nav.shouldRedirect && nav.dest.path ? nav.dest.path : dest.path;
+    if (path) {
+      router.replace(path as `/rental-wizard/${string}/s/${string}`);
     }
-  }, [blockRedirectForLifecyclePrompt, ctx, lifecycleGate, onRefresh, router]);
+  }, [blockRedirectForLifecyclePrompt, lifecycleGate, onRefresh, router]);
+
+  const goToResolvedNext = navigateToResolvedDestination;
+
+  const confirmPickupReceipt = useCallback(async () => {
+    if (blockRedirectForLifecyclePrompt('confirmPickupReceipt')) return;
+    const evidenceReviewed = Boolean(
+      ctx.wizardProgress.renter_approved_pickup_photos_at?.trim() ||
+        ctx.wizardProgress.renter_pickup_evidence_review_opened_at?.trim()
+    );
+    const inspection = evaluatePickupInspectionFlow({
+      bothPresent: Boolean(
+        ctx.rental.owner_arrived_at?.trim() &&
+          (ctx.wizardProgress.renter_pickup_im_here_at?.trim() || ctx.rental.renter_arrived_at?.trim())
+      ),
+      handoffApprovalStarted: Boolean(
+        ctx.rental.handoff_approval_started_at?.trim() || ctx.rental.handoff_approved_by_owner
+      ),
+      handoffCompleted: ctx.pickupHandoffComplete,
+      renterArrived: Boolean(
+        ctx.wizardProgress.renter_pickup_im_here_at?.trim() || ctx.rental.renter_arrived_at?.trim()
+      ),
+      evidenceReviewed,
+      renterConfirmedReceipt: ctx.pickupAck.renter,
+      manualChecklist: renterPickupManualFromVerificationRows(ctx.verificationRows, ctx.viewerUserId),
+      viewerFlags: deriveWizardRenterViewerFlags({
+        renterApprovedPickupPhotosAt: ctx.wizardProgress.renter_approved_pickup_photos_at,
+        renterPickupEvidenceReviewOpenedAt: ctx.wizardProgress.renter_pickup_evidence_review_opened_at,
+        renterViewedTimestampProofAt: ctx.wizardProgress.renter_viewed_timestamp_proof_at,
+      }),
+      pickupRenterConfirmed: ctx.pickupAck.renter,
+    });
+    if (!inspection.receiptButtonEnabled) {
+      Alert.alert(
+        'Finish your inspection',
+        !evidenceReviewed
+          ? 'Review the owner’s pickup photos first.'
+          : 'Complete every in-person inspection item before confirming receipt.'
+      );
+      return;
+    }
+    const result = await persistRenterConfirmedPickupReceipt(
+      getSupabase(),
+      ctx.rentalId,
+      ctx.rental.owner_user_id,
+      ctx.viewerUserId
+    );
+    if (!result.ok) {
+      Alert.alert('Could not confirm receipt', result.error);
+      return;
+    }
+    await onRefresh();
+    await navigateToResolvedDestination();
+  }, [
+    blockRedirectForLifecyclePrompt,
+    ctx.rental.owner_user_id,
+    ctx.rentalId,
+    ctx.viewerUserId,
+    navigateToResolvedDestination,
+    onRefresh,
+  ]);
 
   const acknowledgeLifecyclePrompt = useCallback(
     async (id: WizardLifecyclePromptId) => {
       if (lifecyclePromptId !== id) return;
-      logWizardNotificationPrompt(ctx.rentalId, 'notification_prompt_acknowledged', { promptId: id });
+      if (id === 'return_coordination_accepted') {
+        logWizardReturnPrompt(ctx.rentalId, 'return_prompt_acknowledged', { promptId: id });
+      } else {
+        logWizardNotificationPrompt(ctx.rentalId, 'notification_prompt_acknowledged', { promptId: id });
+      }
       onClearLifecyclePrompt();
       if (id === 'pickup_coordination_accepted') {
         logWizardNotificationPrompt(ctx.rentalId, 'notification_prompt_continue', { promptId: id });
         await onRefresh();
         goToWizardStep('transition_pickup_confirmed');
+        return;
+      }
+      if (id === 'return_coordination_accepted') {
+        logWizardReturnPrompt(ctx.rentalId, 'return_prompt_continue', { promptId: id });
+        await onRefresh();
+        goToWizardStep('transition_return_confirmed');
       }
     },
     [ctx.rentalId, goToWizardStep, lifecyclePromptId, onClearLifecyclePrompt, onRefresh]
@@ -193,6 +299,7 @@ export function RentalWizardProvider({
           },
           {
             requestSchedulingMeta: ctx.requestSchedulingMeta,
+            scheduleHints: ctx.scheduleHints,
             rentalTitle: ctx.displayTitle,
           }
         );
@@ -209,6 +316,25 @@ export function RentalWizardProvider({
     },
     [blockRedirectForLifecyclePrompt, ctx, onRefresh, router]
   );
+
+  const acceptCoordinatePickupProposal = useCallback(async (): Promise<boolean> => {
+    setProposalBusy(true);
+    try {
+      const result = await acceptRentalMeetupProposal(getSupabase(), ctx.rental, ctx.viewerUserId, {
+        itemTitle: ctx.displayTitle,
+      });
+      if (!result.ok) {
+        Alert.alert('Could not accept pickup details', result.message ?? 'Please try again.');
+        return false;
+      }
+      await onRefresh();
+      if (blockRedirectForLifecyclePrompt('acceptCoordinatePickupProposal')) return true;
+      goToWizardStep('transition_pickup_confirmed');
+      return true;
+    } finally {
+      setProposalBusy(false);
+    }
+  }, [blockRedirectForLifecyclePrompt, ctx.displayTitle, ctx.rental, ctx.viewerUserId, goToWizardStep, onRefresh]);
 
   const submitCoordinateReturnProposal = useCallback(
     async (draft: WizardMeetupProposalDraft): Promise<boolean> => {
@@ -240,17 +366,19 @@ export function RentalWizardProvider({
           },
           {
             requestSchedulingMeta: ctx.requestSchedulingMeta,
+            scheduleHints: ctx.scheduleHints,
             rentalTitle: ctx.displayTitle,
           }
         );
         if (!result.ok) return false;
         await onRefresh();
+        if (blockRedirectForLifecyclePrompt('submitCoordinateReturnProposal')) return true;
         return true;
       } finally {
         setProposalBusy(false);
       }
     },
-    [ctx, onRefresh]
+    [blockRedirectForLifecyclePrompt, ctx, onRefresh]
   );
 
   const acknowledgeReturnCoordination = useCallback(async () => {
@@ -294,12 +422,42 @@ export function RentalWizardProvider({
     [acknowledgeReturnCoordination, ctx, onRefresh]
   );
 
+  const toggleRenterPickupChecklistItem = useCallback(
+    async (itemId: string) => {
+      const def = RENTER_PICKUP_ITEMS.find((i) => i.id === itemId);
+      if (!def || def.control !== 'manual') return;
+      await ensureVerificationRows(
+        getSupabase(),
+        ctx.rentalId,
+        ctx.rental.owner_user_id,
+        ctx.viewerUserId,
+        'pickup'
+      );
+      const manual = renterPickupManualFromVerificationRows(ctx.verificationRows, ctx.viewerUserId);
+      const next = manualRenterPickupMapOnly({ ...manual, [itemId]: !manual[itemId] });
+      await persistChecklistState(getSupabase(), ctx.rentalId, 'pickup', ctx.viewerUserId, next);
+      await onRefresh();
+    },
+    [ctx.rental.owner_user_id, ctx.rentalId, ctx.verificationRows, ctx.viewerUserId, onRefresh]
+  );
+
+  const markViewedTimestampProof = useCallback(async () => {
+    const at = new Date().toISOString();
+    await updateWizardProgress(ctx.rentalId, ctx.viewerUserId, {
+      renter_viewed_timestamp_proof_at: at,
+    });
+    ctx.wizardProgress.renter_viewed_timestamp_proof_at = at;
+    await onRefresh();
+  }, [ctx.rentalId, ctx.viewerUserId, ctx.wizardProgress, onRefresh]);
+
   const markImHerePickup = useCallback(async () => {
     if (blockRedirectForLifecyclePrompt('markImHerePickup')) return;
+    const at = new Date().toISOString();
     await updateWizardProgress(ctx.rentalId, ctx.viewerUserId, {
-      renter_pickup_im_here_at: new Date().toISOString(),
+      renter_pickup_im_here_at: at,
     });
-    ctx.wizardProgress.renter_pickup_im_here_at = new Date().toISOString();
+    ctx.wizardProgress.renter_pickup_im_here_at = at;
+    await markRenterPickupArrived(getSupabase(), ctx.rentalId, at);
     await onRefresh();
     const dest = resolveRentalWizardDestination(ctx);
     router.replace(dest.path as `/rental-wizard/${string}/s/${string}`);
@@ -316,8 +474,38 @@ export function RentalWizardProvider({
     router.replace(dest.path as `/rental-wizard/${string}/s/${string}`);
   }, [blockRedirectForLifecyclePrompt, ctx, onRefresh, router]);
 
+  const markPickupEvidenceReviewOpened = useCallback(async () => {
+    const at = new Date().toISOString();
+    const evidenceRevision = computeOwnerPickupEvidenceRevision(
+      ctx.ownerPickupEvidence.map((p) => ({
+        id: p.id,
+        path: p.storagePath,
+        pickupPhotoCategory: p.pickupPhotoCategory,
+        createdAt: p.createdAt,
+      }))
+    );
+    await updateWizardProgress(ctx.rentalId, ctx.viewerUserId, {
+      renter_pickup_evidence_review_opened_at: at,
+      renter_pickup_evidence_seen_revision: evidenceRevision,
+    });
+    ctx.wizardProgress.renter_pickup_evidence_review_opened_at = at;
+    ctx.wizardProgress.renter_pickup_evidence_seen_revision = evidenceRevision;
+    await onRefresh();
+  }, [ctx, onRefresh]);
+
   const markPhotosApproved = useCallback(async () => {
     if (blockRedirectForLifecyclePrompt('markPhotosApproved')) return;
+    if (!ctx.pickupEvidenceReadiness.renterEvidenceReady) {
+      Alert.alert(
+        'Photos not ready',
+        'The owner still needs to finish uploading item, serial, and live possession proof photos.'
+      );
+      return;
+    }
+    if (!ctx.wizardProgress.renter_pickup_evidence_review_opened_at?.trim()) {
+      Alert.alert('Review required', 'Open the evidence review screen before approving photos.');
+      return;
+    }
     await updateWizardProgress(ctx.rentalId, ctx.viewerUserId, {
       renter_approved_pickup_photos_at: new Date().toISOString(),
     });
@@ -341,14 +529,19 @@ export function RentalWizardProvider({
       openMessages,
       openAdvancedDetails,
       submitCoordinatePickupProposal,
+      acceptCoordinatePickupProposal,
       submitCoordinateReturnProposal,
       acknowledgeReturnCoordination,
       completeReturnCoordination,
       advanceAfterTransition,
       goToResolvedNext,
+      confirmPickupReceipt,
+      toggleRenterPickupChecklistItem,
+      markViewedTimestampProof,
       markImHerePickup,
       markImHereReturn,
       markPhotosApproved,
+      markPickupEvidenceReviewOpened,
     }),
     [
       ctx,
@@ -362,14 +555,19 @@ export function RentalWizardProvider({
       openMessages,
       openAdvancedDetails,
       submitCoordinatePickupProposal,
+      acceptCoordinatePickupProposal,
       submitCoordinateReturnProposal,
       acknowledgeReturnCoordination,
       completeReturnCoordination,
       advanceAfterTransition,
       goToResolvedNext,
+      confirmPickupReceipt,
+      toggleRenterPickupChecklistItem,
+      markViewedTimestampProof,
       markImHerePickup,
       markImHereReturn,
       markPhotosApproved,
+      markPickupEvidenceReviewOpened,
     ]
   );
 

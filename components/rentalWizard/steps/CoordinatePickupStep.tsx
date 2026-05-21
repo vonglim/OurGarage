@@ -25,6 +25,10 @@ import {
   type WizardMeetupProposalDraft,
 } from '@/lib/rentalWizard/wizardMeetupDraft';
 import { updateWizardProgress } from '@/lib/rentalWizard';
+import type { WizardFooterInlineAction } from '@/components/wizard/GuidedWizardChrome';
+
+const WIZARD_MESSAGES_HELP =
+  'Use Messages to discuss pickup location, pickup timing, or return timing with the owner.';
 
 export function CoordinatePickupStep() {
   const router = useRouter();
@@ -37,12 +41,39 @@ export function CoordinatePickupStep() {
   );
   const [locationOpen, setLocationOpen] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);
+  const [suggestingChanges, setSuggestingChanges] = useState(false);
 
   usePickupCoordinationAcceptedPromptSnapshotTrace(ctx, true);
 
+  const pickupCoordination = ctx.meetupCoordination.pickup;
+  const waitingOnCounterparty =
+    pickupCoordination.isPendingThisPhase && pickupCoordination.viewerIsProposer;
+  const ownerProposalPending =
+    pickupCoordination.isPendingThisPhase &&
+    pickupCoordination.proposedByRole === 'owner' &&
+    !pickupCoordination.viewerIsProposer;
+  const reviewingOwnerProposal = ownerProposalPending && !suggestingChanges;
+
   useEffect(() => {
     setDraft(mergeCoordinatePickupDraft(ctx, readCoordinatePickupDraft(ctx.wizardProgress)));
-  }, [ctx.rentalId, ctx.wizardProgress.coordinate_pickup_draft, ctx.rental.meetup_location, ctx.rental.meetup_time]);
+  }, [
+    ctx.rentalId,
+    ctx.wizardProgress.coordinate_pickup_draft,
+    ctx.rental.meetup_location,
+    ctx.rental.meetup_time,
+    ctx.rental.pickup_datetime,
+    ctx.rental.return_datetime,
+    ctx.rental.last_proposed_by,
+    ctx.meetupCoordination.revision,
+    ctx.meetupCoordination.pickup.dateTimeIso,
+    ctx.meetupCoordination.pickup.status,
+  ]);
+
+  useEffect(() => {
+    if (!ownerProposalPending) {
+      setSuggestingChanges(false);
+    }
+  }, [ownerProposalPending]);
 
   useEffect(() => {
     if (hasPendingLifecyclePrompt) {
@@ -67,38 +98,132 @@ export function CoordinatePickupStep() {
   );
 
   const agreedMethod = wizardHandoffFromNegotiation(ctx.agreedDeliveryMethod);
-  const waitingForOwner =
-    ctx.hasPendingProposal && String(ctx.rental.last_proposed_by ?? '').trim() === ctx.viewerUserId;
-
   const lockedPickupSchedule = useMemo(() => resolveLockedPickupSchedule(ctx), [ctx]);
+
+  const proposedLocation = pickupCoordination.location || draft.location;
+  const proposedScheduleIso =
+    pickupCoordination.dateTimeIso ?? ctx.pickupIso ?? draft.meetupTimeIso;
 
   const timeSlots = useMemo(
     () =>
       buildCoordinateTimeSlots({
         lockedSchedule: lockedPickupSchedule,
-        ownerProposalIso: ctx.pickupIso,
+        ownerProposalIso: proposedScheduleIso,
         selectedIso: draft.meetupTimeIso,
       }),
-    [ctx.pickupIso, draft.meetupTimeIso, lockedPickupSchedule]
+    [draft.meetupTimeIso, lockedPickupSchedule, proposedScheduleIso]
   );
 
   const saveMeetupTime = useCallback(
     (iso: string) => {
       patchDraft({
         meetupTimeIso: applyTimeToLockedMeetupDate(lockedPickupSchedule.dateYmd, iso),
+        timeEditedByRenter: true,
       });
     },
     [lockedPickupSchedule.dateYmd, patchDraft]
   );
 
-  const scheduleIso = ctx.meetingCompleted ? ctx.pickupIso : draft.meetupTimeIso;
-  const canPropose = isCoordinateDraftValid(draft) && !waitingForOwner && !ctx.meetingCompleted;
+  const displayLocation = reviewingOwnerProposal ? proposedLocation : draft.location;
+  const scheduleIso = ctx.pickupCoordinationComplete
+    ? ctx.pickupIso
+    : reviewingOwnerProposal
+      ? proposedScheduleIso
+      : draft.meetupTimeIso;
+  const canPropose =
+    isCoordinateDraftValid(draft) && !waitingOnCounterparty && !ctx.pickupCoordinationComplete && !reviewingOwnerProposal;
 
   const handlePropose = async () => {
     if (!canPropose || hasPendingLifecyclePrompt) return;
     const ok = await w.submitCoordinatePickupProposal(draft);
+    if (ok) {
+      setSuggestingChanges(false);
+      await w.refresh();
+    }
+  };
+
+  const handleAccept = async () => {
+    if (!reviewingOwnerProposal || hasPendingLifecyclePrompt || w.proposalBusy) return;
+    const ok = await w.acceptCoordinatePickupProposal();
     if (ok) await w.refresh();
   };
+
+  const footer = ((): {
+    primaryLabel: string;
+    primaryDisabled: boolean;
+    onPrimary: () => void;
+    inlineActions?: WizardFooterInlineAction[];
+  } => {
+    const openMessagesAction: WizardFooterInlineAction = {
+      label: 'Open messages',
+      onPress: w.openMessages,
+      emphasis: 'tertiary',
+    };
+
+    if (ctx.pickupCoordinationComplete) {
+      return {
+        primaryLabel: 'Continue',
+        primaryDisabled: hasPendingLifecyclePrompt,
+        onPrimary: () => {
+          if (hasPendingLifecyclePrompt) return;
+          void w.goToResolvedNext();
+        },
+        inlineActions: [openMessagesAction],
+      };
+    }
+    if (reviewingOwnerProposal) {
+      return {
+        primaryLabel: w.proposalBusy ? 'Accepting…' : 'Accept pickup details',
+        primaryDisabled: hasPendingLifecyclePrompt || w.proposalBusy,
+        onPrimary: () => void handleAccept(),
+        inlineActions: [
+          {
+            label: 'Suggest changes',
+            onPress: () => setSuggestingChanges(true),
+            emphasis: 'secondary',
+            disabled: w.proposalBusy,
+          },
+          openMessagesAction,
+        ],
+      };
+    }
+    if (suggestingChanges && ownerProposalPending) {
+      return {
+        primaryLabel: w.proposalBusy ? 'Sending…' : 'Send counter-proposal',
+        primaryDisabled: hasPendingLifecyclePrompt || !canPropose || w.proposalBusy,
+        onPrimary: () => void handlePropose(),
+        inlineActions: [
+          {
+            label: 'Back to review',
+            onPress: () => setSuggestingChanges(false),
+            emphasis: 'secondary',
+            disabled: w.proposalBusy,
+          },
+          openMessagesAction,
+        ],
+      };
+    }
+    if (waitingOnCounterparty) {
+      return {
+        primaryLabel: 'Waiting for owner',
+        primaryDisabled: true,
+        onPrimary: () => {},
+        inlineActions: [openMessagesAction],
+      };
+    }
+    return {
+      primaryLabel: 'Propose',
+      primaryDisabled: hasPendingLifecyclePrompt || !canPropose || w.proposalBusy,
+      onPrimary: () => void handlePropose(),
+      inlineActions: [openMessagesAction],
+    };
+  })();
+
+  const fieldsLocked =
+    ctx.pickupCoordinationComplete ||
+    waitingOnCounterparty ||
+    reviewingOwnerProposal ||
+    hasPendingLifecyclePrompt;
 
   return (
     <>
@@ -107,30 +232,11 @@ export function CoordinatePickupStep() {
         subtitle="Agree on how and where you'll get the item from the owner."
         onBack={() => router.back()}
         onOpenMessages={w.openMessages}
-        primaryLabel={ctx.meetingCompleted ? 'Continue' : waitingForOwner ? 'Waiting for owner' : 'Propose'}
-        primaryDisabled={
-          hasPendingLifecyclePrompt
-            ? true
-            : ctx.meetingCompleted
-              ? false
-              : waitingForOwner
-                ? true
-                : !canPropose || w.proposalBusy
-        }
-        onPrimary={() => {
-          if (hasPendingLifecyclePrompt) return;
-          if (ctx.meetingCompleted) void w.goToResolvedNext();
-          else if (!waitingForOwner) void handlePropose();
-        }}
-        secondaryLabel="Open messages"
-        onSecondary={w.openMessages}
-        footerNote={
-          waitingForOwner
-            ? 'Your proposal was sent. The owner will review pickup details in Messages.'
-            : ctx.meetingCompleted
-              ? undefined
-              : 'The owner will be notified of your proposal.'
-        }
+        primaryLabel={footer.primaryLabel}
+        primaryDisabled={footer.primaryDisabled}
+        onPrimary={footer.onPrimary}
+        footerInlineActions={footer.inlineActions}
+        footerCompact
       >
         <WizardItemCard
           title={ctx.displayTitle}
@@ -144,14 +250,26 @@ export function CoordinatePickupStep() {
           agreedDeliveryFee={ctx.agreedDeliveryFee}
           method={draft.method}
           onMethodChange={(method) => patchDraft({ method })}
-          location={draft.location}
-          locationCardTitle={locationCardTitleForDraft(draft, 'pickup')}
+          location={displayLocation}
+          locationCardTitle={
+            reviewingOwnerProposal
+              ? "Owner's proposed location"
+              : locationCardTitleForDraft(draft, 'pickup')
+          }
           onPressLocation={() => setLocationOpen(true)}
           scheduleIso={scheduleIso}
-          lockFields={ctx.meetingCompleted || waitingForOwner || hasPendingLifecyclePrompt}
-          waitingForOwner={waitingForOwner}
+          lockFields={fieldsLocked}
+          waitingForOwner={waitingOnCounterparty}
+          waitingBannerText="Your pickup proposal was sent. The owner will review it here."
+          ownerProposalPending={reviewingOwnerProposal}
+          ownerProposalBannerText="Pickup proposal pending — review the owner's proposed location and time below."
+          messagesHelpText={
+            reviewingOwnerProposal || suggestingChanges || waitingOnCounterparty
+              ? WIZARD_MESSAGES_HELP
+              : undefined
+          }
           meetupDateHint={
-            !ctx.meetingCompleted && !waitingForOwner
+            !ctx.pickupCoordinationComplete && !waitingOnCounterparty && !reviewingOwnerProposal
               ? meetupDateHintForYmd(lockedPickupSchedule.dateYmd)
               : undefined
           }

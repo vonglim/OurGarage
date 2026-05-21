@@ -1,5 +1,10 @@
 /** Helpers for rental return extensions via meetup proposal infrastructure. */
 
+import {
+  isMeetupProposalExtensionRequest,
+  type ContractualRentalWindowInput,
+} from '@/lib/rentalContractWindow';
+
 const MS_PER_DAY = 86_400_000;
 
 export function addCalendarDaysToIso(iso: string, days: number): string | null {
@@ -43,19 +48,25 @@ export function buildExtensionReturnIso(currentReturnIso: string, extraDays: num
   return addCalendarDaysToIso(currentReturnIso, extraDays);
 }
 
-/** Extension = return moves later while pickup stays within 4h of baseline pickup. */
+/**
+ * Extension = proposed return crosses beyond the contractual end calendar day,
+ * or proposed pickup is before the contractual start calendar day.
+ * Does NOT compare pickup↔return hour span.
+ */
 export function isReturnExtensionProposal(input: {
-  baselinePickupIso: string | null;
-  baselineReturnIso: string | null;
+  baselinePickupIso?: string | null;
+  baselineReturnIso?: string | null;
   proposedPickupIso: string;
   proposedReturnIso: string;
+  schedulingMeta?: unknown;
+  scheduleHints?: ContractualRentalWindowInput['scheduleHints'];
+  explicitExtension?: boolean;
 }): boolean {
-  const baseRet = input.baselineReturnIso ? Date.parse(input.baselineReturnIso) : NaN;
-  const propRet = Date.parse(input.proposedReturnIso);
-  if (!Number.isFinite(baseRet) || !Number.isFinite(propRet) || propRet <= baseRet) return false;
-
-  const basePick = input.baselinePickupIso ? Date.parse(input.baselinePickupIso) : NaN;
-  const propPick = Date.parse(input.proposedPickupIso);
-  if (!Number.isFinite(basePick) || !Number.isFinite(propPick)) return propRet > baseRet;
-  return Math.abs(propPick - basePick) <= 4 * 60 * 60 * 1000;
+  return isMeetupProposalExtensionRequest({
+    proposedPickupIso: input.proposedPickupIso,
+    proposedReturnIso: input.proposedReturnIso,
+    schedulingMeta: input.schedulingMeta,
+    scheduleHints: input.scheduleHints,
+    explicitExtension: input.explicitExtension,
+  });
 }

@@ -5,7 +5,7 @@ import { type StyleProp, type ViewStyle } from 'react-native';
 import { Pressable } from '@/components/Pressable';
 import { WizardCancellationBannerSlot } from '@/components/rentalCancellation/WizardCancellationBannerSlot';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
-import { GuidedWizardChrome } from '@/components/wizard/GuidedWizardChrome';
+import { GuidedWizardChrome, type WizardFooterInlineAction } from '@/components/wizard/GuidedWizardChrome';
 import { wizardLayout, wizardSectionStackStyle } from '@/constants/wizardLayout';
 import { ui } from '@/constants/appUi';
 
@@ -20,6 +20,11 @@ export type WizardLightShellProps = {
   onPrimary: () => void;
   secondaryLabel?: string;
   onSecondary?: () => void;
+  secondaryDisabled?: boolean;
+  tertiaryLabel?: string;
+  onTertiary?: () => void;
+  footerInlineActions?: WizardFooterInlineAction[];
+  footerCompact?: boolean;
   footerNote?: string;
   children: React.ReactNode;
   contentContainerStyle?: StyleProp<ViewStyle>;
@@ -35,6 +40,11 @@ export function WizardLightShell({
   onPrimary,
   secondaryLabel,
   onSecondary,
+  secondaryDisabled = false,
+  tertiaryLabel,
+  onTertiary,
+  footerInlineActions,
+  footerCompact = false,
   footerNote,
   children,
   contentContainerStyle,
@@ -51,6 +61,11 @@ export function WizardLightShell({
         footerNote={footerNote}
         secondaryFooterLabel={secondaryLabel}
         onSecondaryFooterPress={onSecondary}
+        secondaryFooterDisabled={secondaryDisabled}
+        tertiaryFooterLabel={tertiaryLabel}
+        onTertiaryFooterPress={onTertiary}
+        footerInlineActions={footerInlineActions}
+        footerCompact={footerCompact}
         contentContainerStyle={contentContainerStyle}
         bodyStyle={wizardSectionStackStyle}
         rightAccessory={

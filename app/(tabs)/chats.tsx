@@ -73,7 +73,7 @@ export default function ChatsScreen() {
           .from('offer_messages')
           .select('offer_id,author_id,receiver_id,body,kind,created_at')
           .or(`author_id.eq.${me},receiver_id.eq.${me}`)
-          .in('kind', ['user_chat', 'meetup_proposal'])
+          .in('kind', ['user_chat', 'meetup_proposal', 'meetup_coordination'])
           .order('created_at', { ascending: false })
           .limit(800);
         if (error) {
@@ -164,7 +164,7 @@ export default function ChatsScreen() {
             const row = (payload.new ?? payload.old) as { author_id?: string; receiver_id?: string; kind?: string } | null;
             if (!row) return;
             const k = String(row.kind ?? '').trim();
-            if (k !== 'user_chat' && k !== 'meetup_proposal') return;
+            if (k !== 'user_chat' && k !== 'meetup_proposal' && k !== 'meetup_coordination') return;
             const a = String(row.author_id ?? '').trim();
             const r = String(row.receiver_id ?? '').trim();
             if (a !== me && r !== me) return;

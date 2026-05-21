@@ -57,7 +57,8 @@ function formatPickupBannerWhen(iso: string | null | undefined): string {
 export function computeRentalWorkflowBannerModel(input: {
   lifecyclePhase: 'pickup' | 'active' | 'return' | 'completed';
   termsCompleted: boolean;
-  meetingCompleted: boolean;
+  pickupCoordinationComplete: boolean;
+  meetupCoordinationComplete: boolean;
   hasPendingProposal: boolean;
   iProposedLast: boolean;
   meetupLocation: string;
@@ -85,7 +86,11 @@ export function computeRentalWorkflowBannerModel(input: {
     };
   }
 
-  if (input.meetingCompleted && input.lifecyclePhase === 'pickup') {
+  if (
+    input.pickupCoordinationComplete &&
+    !input.meetupCoordinationComplete &&
+    input.lifecyclePhase === 'pickup'
+  ) {
     const loc = input.meetupLocation.trim() || 'Location not set';
     const when = formatPickupBannerWhen(input.pickupIso);
     return {

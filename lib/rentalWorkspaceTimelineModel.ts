@@ -29,7 +29,8 @@ export type RentalWorkspaceTimelineViewerRole = 'owner' | 'renter';
 export function buildRentalWorkspaceTimelineModel(input: {
   rentalStatus: string;
   termsCompleted: boolean;
-  meetingCompleted: boolean;
+  meetupCoordinationComplete: boolean;
+  pickupCoordinationComplete?: boolean;
   handoffCompleted: boolean;
   returnCompleted: boolean;
   lifecyclePhase: 'pickup' | 'active' | 'return' | 'completed';
@@ -67,7 +68,7 @@ export function buildRentalWorkspaceTimelineModel(input: {
     });
   }
 
-  if (input.meetingCompleted) {
+  if (input.meetupCoordinationComplete) {
     const pIso = isoOrNull(input.pickupIso);
     const rIso = isoOrNull(input.returnIso);
     events.push({
@@ -77,6 +78,16 @@ export function buildRentalWorkspaceTimelineModel(input: {
         .filter(Boolean)
         .join(' · '),
       tone: 'done',
+    });
+  } else if (input.pickupCoordinationComplete && input.termsCompleted) {
+    const pIso = isoOrNull(input.pickupIso);
+    events.push({
+      id: 'meetup',
+      title: 'Meetup coordination',
+      subtitle: pIso
+        ? `Pickup confirmed (${formatCompactDateTime(pIso)}) — coordinate return next.`
+        : 'Pickup confirmed — coordinate return details next.',
+      tone: 'current',
     });
   } else if (input.termsCompleted) {
     events.push({
@@ -101,7 +112,7 @@ export function buildRentalWorkspaceTimelineModel(input: {
       subtitle: input.signedAt ? `Renter sign-off ${formatCompactDateTime(input.signedAt)}` : undefined,
       tone: 'done',
     });
-  } else if (input.meetingCompleted) {
+  } else if (input.meetupCoordinationComplete) {
     const handoffSubtitle =
       role === 'owner'
         ? 'Document the item, then wait for renter receipt confirmation.'

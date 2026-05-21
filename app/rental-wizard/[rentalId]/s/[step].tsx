@@ -7,7 +7,10 @@ import { useRentalWizard } from '@/components/rentalWizard/RentalWizardProvider'
 import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
 import { wizardStepFromSlug } from '@/lib/rentalWizard/wizardStepMeta';
 import { evaluateWizardNavigationWithLifecycleGate } from '@/lib/rentalWizard/wizardLifecyclePromptGate';
-import { logWizardNotificationPrompt } from '@/lib/rentalWizard/wizardLifecyclePromptFromNotification';
+import {
+  logWizardNotificationPrompt,
+  logWizardReturnPrompt,
+} from '@/lib/rentalWizard/wizardLifecyclePromptFromNotification';
 import { ui } from '@/constants/appUi';
 
 export default function RentalWizardStepScreen() {
@@ -27,14 +30,19 @@ export default function RentalWizardStepScreen() {
     });
 
     if (nav.redirectBlockedByPrompt) {
-      logWizardNotificationPrompt(ctx.rentalId, 'notification_prompt_blocking_redirect', {
+      const extra = {
         source: 'wizard_step_screen',
         urlStep: step,
         logicalStep: nav.dest.step,
         path: nav.dest.path,
         promptId: lifecycleGate.id,
         suspendedStep: lifecycleGate.suspendedStep,
-      });
+      };
+      if (lifecycleGate.id === 'return_coordination_accepted') {
+        logWizardReturnPrompt(ctx.rentalId, 'return_prompt_blocking_redirect', extra);
+      } else {
+        logWizardNotificationPrompt(ctx.rentalId, 'notification_prompt_blocking_redirect', extra);
+      }
       return;
     }
 

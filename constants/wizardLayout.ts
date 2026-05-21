@@ -73,11 +73,17 @@ export const wizardLayout = {
   footerPaddingTop: 8,
   footerBottomMin: 10,
   footerGap: 8,
+  footerCompactPaddingTop: 6,
+  footerCompactBottomMin: 6,
+  footerCompactGap: 4,
+  scrollBottomReserveCompact: 72,
   footerNotePaddingVertical: 10,
   footerNotePaddingHorizontal: 14,
   footerNoteRadius: 12,
 
   ctaPaddingVertical: 16,
+  ctaCompactPaddingVertical: 13,
+  inlineFooterPaddingVertical: 4,
   ctaBorderRadius: ui.radiusProminent,
   secondaryMarginTop: 4,
   secondaryPaddingVertical: 6,
@@ -85,6 +91,10 @@ export const wizardLayout = {
 
 export function wizardScrollBottomPadding(safeBottom: number): number {
   return wizardLayout.scrollBottomReserve + safeBottom;
+}
+
+export function wizardScrollBottomPaddingCompact(safeBottom: number): number {
+  return wizardLayout.scrollBottomReserveCompact + safeBottom;
 }
 
 export function wizardScrollBottomPaddingStackedFooter(safeBottom: number): number {
@@ -174,6 +184,51 @@ export const guidedWizardChromeStyles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: ui.primary,
+  },
+  tertiaryFooter: {
+    marginTop: 4,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tertiaryFooterText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: ui.textSecondary,
+    textDecorationLine: 'underline',
+  },
+  footerCompact: {
+    paddingTop: wizardLayout.footerCompactPaddingTop,
+    gap: wizardLayout.footerCompactGap,
+  },
+  ctaCompact: {
+    paddingVertical: wizardLayout.ctaCompactPaddingVertical,
+  },
+  inlineFooterActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: wizardLayout.inlineFooterPaddingVertical,
+    gap: 2,
+  },
+  inlineFooterSep: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: ui.textSecondary,
+    paddingHorizontal: 6,
+  },
+  inlineFooterAction: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: ui.primary,
+    paddingVertical: 4,
+    paddingHorizontal: 2,
+  },
+  inlineFooterActionTertiary: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: ui.textSecondary,
   },
   footerNote: {
     fontSize: 13,

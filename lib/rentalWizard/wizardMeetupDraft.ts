@@ -93,9 +93,8 @@ export function readCoordinateReturnDraft(progress: RentalWizardProgress): Wizar
 
 export function buildDefaultCoordinatePickupDraft(ctx: RentalWizardContext): WizardMeetupProposalDraft {
   const agreedMethod = wizardHandoffFromNegotiation(ctx.agreedDeliveryMethod);
-  const location = ctx.meetingCompleted
-    ? resolveAcceptedMeetupLocation(ctx.rental)
-    : resolveAcceptedMeetupLocation(ctx.rental) || (ctx.rental.return_location ?? '').trim();
+  const location =
+    resolveAcceptedMeetupLocation(ctx.rental) || (ctx.rental.return_location ?? '').trim();
   const meetupTimeIso = resolveAcceptedRentalPickupIso(ctx.rental);
   return {
     method: agreedMethod,
@@ -153,7 +152,7 @@ export function hasReturnChanges(
   const editedFromPickup = hasCoordinateReturnChangesFromPickup(draft, inherited);
   if (!editedFromPickup) return false;
   if (
-    ctx.meetingCompleted &&
+    ctx.returnCoordinationAgreed &&
     !ctx.hasPendingProposal &&
     draftMatchesAgreedReturnOnRental(ctx, draft)
   ) {
@@ -167,7 +166,7 @@ export function mergeCoordinatePickupDraft(
   stored: WizardMeetupProposalDraft | null
 ): WizardMeetupProposalDraft {
   const defaults = buildDefaultCoordinatePickupDraft(ctx);
-  if (ctx.meetingCompleted && ctx.hasPendingProposal === false) {
+  if (ctx.pickupCoordinationComplete && ctx.hasPendingProposal === false) {
     return defaults;
   }
   if (!stored) return defaults;

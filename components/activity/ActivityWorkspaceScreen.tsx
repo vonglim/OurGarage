@@ -29,6 +29,11 @@ import {
   offerCountsForActivityRow,
 } from '@/lib/activityScope';
 import { isRequestExpired } from '@/lib/requestCardStatus';
+import {
+  canonicalMeetupScheduleForRow,
+  recordCanonicalMeetupCoordinationSnapshot,
+  resolveCanonicalMeetupCoordinationState,
+} from '@/lib/canonicalMeetupCoordination';
 import { useAuthUserId } from '@/lib/authUser';
 import {
   fetchPendingRentalRequestsForOwner,
@@ -127,12 +132,16 @@ function isUnifiedRentalActiveRow(row: UnifiedRentalRow): boolean {
   return isRentalActiveForQueues(row);
 }
 
-function formatNextPickupHintForRows(rows: UnifiedRentalRow[]): string {
+function formatNextPickupHintForRows(rows: UnifiedRentalRow[], viewerUserId: string): string {
   const active = rows.filter(isUnifiedRentalActiveRow);
   if (active.length === 0) return 'No active rentals';
   let best: number | null = null;
   for (const r of active) {
-    const iso = r.pickup_datetime ?? r.agreed_pickup_datetime ?? '';
+    const iso =
+      canonicalMeetupScheduleForRow(
+        r as import('@/lib/rentalMeetupProposalLifecycle').RentalMeetupRow,
+        viewerUserId
+      ).pickupIso ?? '';
     const t = iso ? Date.parse(String(iso)) : NaN;
     if (!Number.isFinite(t)) continue;
     if (t > Date.now() - 36 * 60 * 60 * 1000 && (best == null || t < best)) best = t;
@@ -648,6 +657,28 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
     () => approvedAsRenter.filter(isUnifiedRentalActiveRow),
     [approvedAsRenter]
   );
+
+  useEffect(() => {
+    if (typeof __DEV__ === 'undefined' || !__DEV__ || !me) return;
+    const row = rentingActiveRentalRows[0];
+    if (!row) return;
+    recordCanonicalMeetupCoordinationSnapshot({
+      rentalId: row.id,
+      surface: 'activity',
+      state: resolveCanonicalMeetupCoordinationState({
+        rental: row as import('@/lib/rentalMeetupProposalLifecycle').RentalMeetupRow,
+        viewerUserId: me,
+        viewerRole:
+          me === String(row.owner_user_id ?? '').trim()
+            ? 'owner'
+            : me === String(row.renter_user_id ?? '').trim()
+              ? 'renter'
+              : 'renter',
+        presentationSurface:
+          me === String(row.owner_user_id ?? '').trim() ? 'owner_workspace' : 'renter_wizard',
+      }),
+    });
+  }, [rentingActiveRentalRows, me]);
   const rentingCompletedHistoryRows = useMemo(
     () => approvedAsRenter.filter(isRentalCompletedHistory),
     [approvedAsRenter]
@@ -1474,7 +1505,7 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
                   }}
                   goSection={goRentingSection}
                   activeRentalCount={rentingActiveRentalRows.length}
-                  nextPickupHint={formatNextPickupHintForRows(approvedAsRenter)}
+                  nextPickupHint={formatNextPickupHintForRows(approvedAsRenter, me)}
                   listingOfferCount={listingOffersAsRenter.length}
                   requestCount={ownedRequestsSorted.length}
                   savedCount={0}

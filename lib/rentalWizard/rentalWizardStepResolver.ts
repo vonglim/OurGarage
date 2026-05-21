@@ -12,14 +12,21 @@ import {
   isWizardReturnPhase,
 } from '@/lib/rentalWizard/rentalWizardGates';
 import { logPickupCoordinationDiagnostic } from '@/lib/rentalWizard/pickupCoordinationDiagnostics';
+import { recordMeetupCoordinationSurfaceSnapshot } from '@/lib/rentalMeetupCoordinationState';
+import { logRentalStageTransitionAudit } from '@/lib/rentalStageTransitionAudit';
 import { resolveWizardTransitionBefore } from '@/lib/rentalWizard/rentalWizardTransitionResolver';
 import type { RentalWizardContext, RentalWizardDestination, RentalWizardStep } from '@/lib/rentalWizard/types';
 import { WIZARD_STEP_META, wizardPathForStep } from '@/lib/rentalWizard/wizardStepMeta';
 import { getDevLocalWizardProgress, getDevWizardStepOverride } from '@/store/rentalSimulationStore';
 import {
-  isPickupHandoffBilaterallyComplete,
-  isReturnBilaterallyComplete,
-} from '@/lib/rentalOperationalAttention';
+  logPickupHandoffRouting,
+  resolveWizardPickupHandoffStep,
+} from '@/lib/pickupHandoffCompletion';
+import {
+  logRentalActivationSchema,
+  resolveFallbackLogicalWizardStep,
+} from '@/lib/rentalActivationSchema';
+import { isReturnBilaterallyComplete } from '@/lib/rentalOperationalAttention';
 
 /**
  * Core wizard step from workflow gates — never treat booking approval or `rentals.status = active`
@@ -27,7 +34,7 @@ import {
  */
 const CANCELLED_SUMMARY_STEP: RentalWizardStep = 'cancelled';
 
-export function resolveLogicalWizardStep(ctx: RentalWizardContext): RentalWizardStep {
+function resolveLogicalWizardStepInner(ctx: RentalWizardContext): RentalWizardStep {
   if (isRentalCancelled(ctx.rental)) {
     logRentalCancellation('resolver redirected to cancelled_summary', {
       rentalId: ctx.rentalId,
@@ -52,10 +59,6 @@ export function resolveLogicalWizardStep(ctx: RentalWizardContext): RentalWizard
     return 'prepare_return';
   }
 
-  if (canShowWizardActiveRental(ctx)) {
-    return 'active_rental';
-  }
-
   if (!isPickupCoordinationComplete(ctx)) {
     logPickupCoordinationDiagnostic(ctx, 'resolveLogicalWizardStep', {
       resolvedStep: 'coordinate_pickup',
@@ -65,6 +68,26 @@ export function resolveLogicalWizardStep(ctx: RentalWizardContext): RentalWizard
 
   if (!isMeetupCoordinationComplete(ctx)) {
     if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      logRentalStageTransitionAudit({
+        rentalId: ctx.rentalId,
+        triggeredBy: 'resolveLogicalWizardStep',
+        transitionReason: 'pickup_complete_return_incomplete→coordinate_return',
+        resolvedRenterPhase: 'coordinate_return',
+        rental: ctx.rental,
+        pickupComplete: true,
+        returnComplete: false,
+        meetupComplete: false,
+      });
+      recordMeetupCoordinationSurfaceSnapshot({
+        rentalId: ctx.rentalId,
+        surface: 'transition_resolver',
+        resolver: 'resolveLogicalWizardStep→coordinate_return',
+        rental: ctx.rental,
+        requestSchedulingMeta: ctx.requestSchedulingMeta,
+        hasPendingProposal: ctx.hasPendingProposal,
+        wizardCtx: ctx,
+        lifecyclePhase: ctx.lifecyclePhase,
+      });
       console.log('[rental-wizard][resolveLogicalWizardStep] → coordinate_return', {
         rentalId: ctx.rentalId,
         hasReturnSchedule: hasReturnSchedule(ctx),
@@ -76,28 +99,67 @@ export function resolveLogicalWizardStep(ctx: RentalWizardContext): RentalWizard
   }
 
   if (!ctx.pickupHandoffComplete) {
-    const signed = Boolean(ctx.rental.signed_at && String(ctx.rental.signed_at).trim());
-    if (signed || ctx.rental.handoff_approved_by_renter) return 'equipment_confirmation';
-    if (ctx.rental.handoff_approval_started_at && ctx.wizardProgress.renter_pickup_im_here_at) {
-      return 'owner_confirmed_arrival';
-    }
-    if (
-      ctx.wizardProgress.renter_pickup_im_here_at &&
-      (ctx.rental.handoff_approval_started_at || ctx.rental.handoff_approved_by_owner)
-    ) {
-      return 'owner_confirmed_arrival';
-    }
-    if (ctx.wizardProgress.renter_pickup_im_here_at) return 'owner_confirmed_arrival';
-    if (ctx.ownerPickupPhotoCount > 0) {
-      if (ctx.pickupAck.renter || ctx.wizardProgress.renter_approved_pickup_photos_at) {
-        return 'meetup_day';
+    try {
+      const resolved = resolveWizardPickupHandoffStep(ctx);
+      logPickupHandoffRouting({
+        rentalId: ctx.rentalId,
+        logicalStep: resolved.step,
+        completion: resolved.completion,
+        resolverReason: resolved.reason,
+      });
+      if (ctx.schemaDegraded && resolved.step === 'rental_authorization') {
+        return resolveFallbackLogicalWizardStep(ctx);
       }
-      return 'prepare_pickup';
+      return resolved.step;
+    } catch (err) {
+      logRentalActivationSchema({
+        rentalId: ctx.rentalId,
+        wizardBuildPhase: 'routing_resolve',
+        resolverCrashLocation: 'resolveWizardPickupHandoffStep',
+        schemaDegraded: true,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return resolveFallbackLogicalWizardStep(ctx);
     }
-    return 'prepare_pickup';
+  }
+
+  if (canShowWizardActiveRental(ctx)) {
+    return 'active_rental';
   }
 
   return 'prepare_pickup';
+}
+
+/** Never throw — falls back to safe step when schema/resolvers fail. */
+export function safeResolveLogicalWizardStep(ctx: RentalWizardContext): RentalWizardStep {
+  if (ctx.schemaDegraded) {
+    const fallback = resolveFallbackLogicalWizardStep(ctx);
+    logRentalActivationSchema({
+      rentalId: ctx.rentalId,
+      wizardBuildPhase: 'routing_resolve',
+      schemaDegraded: true,
+      missingColumns: ctx.missingActivationColumns,
+      resolverCrashLocation: 'schema_degraded_fallback',
+    });
+    return fallback;
+  }
+  try {
+    return resolveLogicalWizardStepInner(ctx);
+  } catch (err) {
+    const fallback = resolveFallbackLogicalWizardStep(ctx);
+    logRentalActivationSchema({
+      rentalId: ctx.rentalId,
+      wizardBuildPhase: 'routing_resolve',
+      resolverCrashLocation: 'resolveLogicalWizardStep',
+      schemaDegraded: true,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return fallback;
+  }
+}
+
+export function resolveLogicalWizardStep(ctx: RentalWizardContext): RentalWizardStep {
+  return safeResolveLogicalWizardStep(ctx);
 }
 
 function mergeDevWizardContext(ctx: RentalWizardContext): RentalWizardContext {
@@ -107,7 +169,38 @@ function mergeDevWizardContext(ctx: RentalWizardContext): RentalWizardContext {
   return { ...ctx, wizardProgress: { ...ctx.wizardProgress, ...local } };
 }
 
+export function safeResolveRentalWizardDestination(
+  ctx: RentalWizardContext,
+  nowMs = getEffectiveNowMs()
+): RentalWizardDestination {
+  try {
+    return resolveRentalWizardDestinationInner(ctx, nowMs);
+  } catch (err) {
+    const fallbackStep = resolveFallbackLogicalWizardStep(ctx);
+    logRentalActivationSchema({
+      rentalId: ctx.rentalId,
+      wizardBuildPhase: 'destination_resolve',
+      resolverCrashLocation: 'resolveRentalWizardDestination',
+      schemaDegraded: true,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    const meta = WIZARD_STEP_META[fallbackStep];
+    return {
+      step: fallbackStep,
+      ctaLabel: meta?.ctaLabel ?? 'Continue',
+      path: wizardPathForStep(ctx.rentalId, fallbackStep),
+    };
+  }
+}
+
 export function resolveRentalWizardDestination(
+  ctx: RentalWizardContext,
+  nowMs = getEffectiveNowMs()
+): RentalWizardDestination {
+  return safeResolveRentalWizardDestination(ctx, nowMs);
+}
+
+function resolveRentalWizardDestinationInner(
   ctx: RentalWizardContext,
   nowMs = getEffectiveNowMs()
 ): RentalWizardDestination {
@@ -136,9 +229,25 @@ export function resolveRentalWizardDestination(
       path: wizardPathForStep(ctx.rentalId, stepOverride),
     };
   }
-  const logical = resolveLogicalWizardStep(merged);
+  const logical = safeResolveLogicalWizardStep(merged);
   const transition = resolveWizardTransitionBefore(logical, merged, nowMs);
   const step = transition ?? logical;
+  const meta = WIZARD_STEP_META[step];
+  if (!meta) {
+    const fallbackStep = resolveFallbackLogicalWizardStep(merged);
+    const fallbackMeta = WIZARD_STEP_META[fallbackStep];
+    logRentalActivationSchema({
+      rentalId: merged.rentalId,
+      wizardBuildPhase: 'destination_resolve',
+      resolverCrashLocation: 'WIZARD_STEP_META_missing',
+      error: `unknown step: ${step}`,
+    });
+    return {
+      step: fallbackStep,
+      ctaLabel: fallbackMeta.ctaLabel,
+      path: wizardPathForStep(ctx.rentalId, fallbackStep),
+    };
+  }
   logScenario('routing', {
     event: 'wizard_destination_resolved',
     rentalId: merged.rentalId,
@@ -148,7 +257,6 @@ export function resolveRentalWizardDestination(
     step,
     path: wizardPathForStep(ctx.rentalId, step),
   });
-  const meta = WIZARD_STEP_META[step];
   return {
     step,
     ctaLabel: meta.ctaLabel,
@@ -173,4 +281,5 @@ export function estimateWizardCtaLabelFromRentalRow(input: {
 }
 
 export { buildRentalWizardContextFlags } from '@/lib/rentalWizard/rentalWizardContextFlags';
-export { isPickupHandoffBilaterallyComplete, isReturnBilaterallyComplete };
+export { isPickupHandoffBilaterallyComplete } from '@/lib/rentalOperationalAttention';
+export { isReturnBilaterallyComplete };

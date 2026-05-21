@@ -48,11 +48,10 @@ export type AppNotification = {
   listingId?: string | null;
   /** `rental_requests.id` from server `notifications.data`. */
   rentalRequestId?: string | null;
-  /**
-   * If set, this notification is only shown to this user (e.g. incoming chat for recipient).
-   * Omit for broadcast/system rows (offers, etc.).
-   */
+  /** If set, this notification is only shown to this user (e.g. incoming chat for recipient). */
   forUserId: string | null;
+  /** From server `notifications.data` — meetup acceptance phase when type is accepted. */
+  meetupAcceptanceKind?: 'pickup' | 'return' | 'extension' | null;
 };
 
 function normalizeLoaded(raw: unknown): AppNotification[] {
@@ -303,10 +302,32 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
     if (__DEV__) {
       console.log('NOTIFICATION RECEIVED:', row);
     }
+    const isReturnAcceptNotification =
+      row.type === 'accepted' &&
+      typeof row.rentalId === 'string' &&
+      row.rentalId.trim() !== '' &&
+      (row.meetupAcceptanceKind === 'return' ||
+        /return details confirmed|accepted your return|return meetup details were approved/i.test(
+          row.message ?? ''
+        ));
+    if (isReturnAcceptNotification) {
+      try {
+        const { logWizardReturnPrompt } =
+          require('@/lib/rentalWizard/wizardLifecyclePromptFromNotification') as typeof import('@/lib/rentalWizard/wizardLifecyclePromptFromNotification');
+        logWizardReturnPrompt(row.rentalId!.trim(), 'return_prompt_notification_received', {
+          notificationId: row.id,
+          source: 'notifications_store_before_arm',
+          meetupAcceptanceKind: row.meetupAcceptanceKind ?? null,
+        });
+      } catch {
+        /* optional */
+      }
+    }
     try {
-      const { tryArmPickupAcceptedFromNotification } =
+      const { tryArmPickupAcceptedFromNotification, tryArmReturnAcceptedFromNotification } =
         require('@/lib/rentalWizard/wizardLifecyclePromptFromNotification') as typeof import('@/lib/rentalWizard/wizardLifecyclePromptFromNotification');
       tryArmPickupAcceptedFromNotification(row);
+      tryArmReturnAcceptedFromNotification(row);
     } catch {
       /* wizard module optional at startup */
     }

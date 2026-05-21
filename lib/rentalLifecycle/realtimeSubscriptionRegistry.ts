@@ -60,3 +60,18 @@ export function unregisterRentalRealtimeSubscription(rentalId: string, source: s
 export function getActiveRealtimeSubscriptionCount(): number {
   return active.size;
 }
+
+export function isRentalRealtimeSubscriptionActive(rentalId: string, source: string): boolean {
+  return active.has(key(rentalId.trim(), source));
+}
+
+export function getRentalRealtimeSubscription(
+  rentalId: string,
+  source: string
+): SubscriptionRecord | undefined {
+  return active.get(key(rentalId.trim(), source));
+}
+
+export function listActiveRentalRealtimeSubscriptions(): SubscriptionRecord[] {
+  return [...active.values()];
+}

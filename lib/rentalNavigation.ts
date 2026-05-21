@@ -1,7 +1,8 @@
 import type { Router } from 'expo-router';
 
-import { buildRentalWizardContext } from '@/lib/rentalWizard/buildRentalWizardContext';
-import { resolveRentalWizardDestination } from '@/lib/rentalWizard/rentalWizardStepResolver';
+import { buildRentalWizardContextWithDiagnostics } from '@/lib/rentalWizard/buildRentalWizardContext';
+import { logRentalActivationSchema } from '@/lib/rentalActivationSchema';
+import { safeResolveRentalWizardDestination } from '@/lib/rentalWizard/rentalWizardStepResolver';
 import { getAuthUserIdSync } from '@/lib/authUser';
 import { isRentalCancelled } from '@/lib/rentalCancellation';
 import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
@@ -97,12 +98,23 @@ async function pushRenterWizardResolvedStep(router: Router, rentalId: string): P
     router.push(rentalWizardPath(rentalId));
     return;
   }
-  const ctx = await buildRentalWizardContext(getSupabase(), rentalId, me);
-  if (!ctx) {
-    router.push(rentalWizardPath(rentalId));
-    return;
-  }
-  const dest = resolveRentalWizardDestination(ctx);
+  try {
+    const { ctx, buildError } = await buildRentalWizardContextWithDiagnostics(
+      getSupabase(),
+      rentalId,
+      me
+    );
+    if (!ctx) {
+      logRentalActivationSchema({
+        rentalId,
+        wizardBuildPhase: 'notification_nav',
+        resolverCrashLocation: 'pushRenterWizardResolvedStep',
+        error: buildError ?? 'null_context',
+      });
+      router.push(rentalWizardPath(rentalId));
+      return;
+    }
+    const dest = safeResolveRentalWizardDestination(ctx);
   logScenario('routing', {
     event: 'notification_navigate_resolved',
     rentalId,
@@ -111,7 +123,16 @@ async function pushRenterWizardResolvedStep(router: Router, rentalId: string): P
     step: dest.step,
     path: dest.path,
   });
-  router.push(dest.path as `/rental-wizard/${string}/s/${string}`);
+    router.push(dest.path as `/rental-wizard/${string}/s/${string}`);
+  } catch (err) {
+    logRentalActivationSchema({
+      rentalId,
+      wizardBuildPhase: 'notification_nav',
+      resolverCrashLocation: 'pushRenterWizardResolvedStep_uncaught',
+      error: err instanceof Error ? err.message : String(err),
+    });
+    router.push(rentalWizardPath(rentalId));
+  }
 }
 
 /** Notification tap: renters on lifecycle alerts → wizard; owners → workspace. */

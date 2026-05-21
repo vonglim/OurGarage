@@ -3,8 +3,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { getProfileNameForUserId } from '@/lib/profileDisplayName';
 import { insertMeetupProposalOfferMessage } from '@/lib/meetupProposalThreadEvent';
+import { insertMeetupCoordinationTimelineForRental } from '@/lib/meetupCoordinationTimeline';
 import { insertServerNotificationToRecipient } from '@/lib/insertServerNotification';
 import { evaluateMeetupProposalDurationWarning } from '@/lib/rentalDurationValidation';
+import { persistMeetupProposalRow, type MeetupProposalPersistPhase } from '@/lib/rentalMeetupPersist';
 import { isUuidString } from '@/lib/requestOwnership';
 import { clearWizardCoordinateDraftsForRental } from '@/lib/rentalWizard/rentalWizardSeenState';
 import type { RentalWizardRentalRow } from '@/lib/rentalWizard/types';
@@ -30,6 +32,10 @@ export async function submitRentalMeetupProposal(
   input: SubmitRentalMeetupProposalInput,
   options?: {
     requestSchedulingMeta?: unknown;
+    scheduleHints?: {
+      rentalStartDate?: string | null;
+      rentalEndDate?: string | null;
+    } | null;
     rentalTitle?: string;
     skipDurationAlert?: boolean;
   }
@@ -39,6 +45,15 @@ export async function submitRentalMeetupProposal(
   const meetupLocation = input.meetupLocation.trim();
   const returnLocation = (input.returnLocation ?? meetupLocation).trim();
   const isReturnOnly = input.proposalMeta?.phase === 'return';
+  const isPickupOnly = input.proposalMeta?.phase === 'pickup';
+  const isExtension = input.proposalMeta?.extension === true;
+  const persistPhase: MeetupProposalPersistPhase = isExtension
+    ? 'extension'
+    : isReturnOnly
+      ? 'return'
+      : isPickupOnly
+        ? 'pickup'
+        : 'general';
   if (!meetupTimeIso || !returnTimeIso || !meetupLocation || !returnLocation) {
     return { ok: false, reason: 'validation' };
   }
@@ -46,6 +61,7 @@ export async function submitRentalMeetupProposal(
   const durationEval = evaluateMeetupProposalDurationWarning({
     rental,
     requestSchedulingMeta: options?.requestSchedulingMeta,
+    scheduleHints: options?.scheduleHints,
     meetupTimeIso,
     returnTimeIso,
     isReturnOnly,
@@ -56,15 +72,9 @@ export async function submitRentalMeetupProposal(
   if (durationEval.warningTriggered && !options?.skipDurationAlert) {
     const continueProposal = await new Promise<boolean>((resolve) => {
       Alert.alert(
-        'Duration change',
-        [
-          'You are proposing a rental duration different from the original agreement.',
-          '',
-          `Original duration: ${durationEval.originalLabel ?? '—'}`,
-          `Proposed duration: ${durationEval.proposedLabel ?? '—'}`,
-          '',
-          'The other party must approve this change. Pricing and rental terms may change based on the updated duration.',
-        ].join('\n'),
+        durationEval.isExtensionRequest ? 'Extension request' : 'Outside rental dates',
+        durationEval.warningLine ??
+          'You are proposing times outside the agreed rental dates. The other party must approve this change.',
         [
           { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
           { text: 'Continue Proposal', onPress: () => resolve(true) },
@@ -81,31 +91,29 @@ export async function submitRentalMeetupProposal(
     typeof rental.proposal_version === 'number' && Number.isFinite(rental.proposal_version)
       ? rental.proposal_version + 1
       : 2;
-  const hasCol = (k: string) => Object.prototype.hasOwnProperty.call(rental, k);
-  const payload: Record<string, unknown> = {
-    meetup_time: meetupTimeIso,
-    meetup_location: meetupLocation,
-    return_time: returnTimeIso,
-    return_location: returnLocation,
-    confirmed_by_owner: iAmOwner ? true : false,
-    confirmed_by_renter: iAmRenter ? true : false,
-  };
-  if (hasCol('pickup_datetime')) payload.pickup_datetime = meetupTimeIso;
-  if (hasCol('return_datetime')) payload.return_datetime = returnTimeIso;
-  if (hasCol('owner_confirmed')) payload.owner_confirmed = iAmOwner ? true : false;
-  if (hasCol('renter_confirmed')) payload.renter_confirmed = iAmRenter ? true : false;
-  if (hasCol('agreement_status')) payload.agreement_status = 'pending';
-  if (hasCol('confirmed_at')) payload.confirmed_at = null;
-  if (hasCol('last_proposed_by')) payload.last_proposed_by = viewerUserId;
-  if (hasCol('proposal_version')) payload.proposal_version = nextProposalVersion;
-  if (hasCol('proposal_updated_at')) payload.proposal_updated_at = nowIso;
-  if (hasCol('latest_proposal_message_id')) payload.latest_proposal_message_id = null;
 
-  const { error: updateError } = await supabase.from('rentals').update(payload).eq('id', rental.id);
-  if (updateError) {
+  const persistResult = await persistMeetupProposalRow(
+    supabase,
+    rental.id,
+    {
+      meetupTimeIso,
+      returnTimeIso,
+      meetupLocation,
+      returnLocation,
+      viewerUserId,
+      ownerUserId: rental.owner_user_id,
+      renterUserId: rental.renter_user_id,
+      proposalVersion: nextProposalVersion,
+      nowIso,
+    },
+    { phase: persistPhase, source: 'submitRentalMeetupProposal', baseline: rental }
+  );
+  if (!persistResult.ok) {
     Alert.alert('Could not save proposal', 'Please try again.');
     return { ok: false, reason: 'update' };
   }
+
+  const hasCol = (k: string) => Object.prototype.hasOwnProperty.call(rental, k);
 
   const receiverId = iAmOwner ? rental.renter_user_id : rental.owner_user_id;
   const requestRowId =
@@ -129,6 +137,9 @@ export async function submitRentalMeetupProposal(
       returnLocation,
       durationWarningLine: durationEval.warningLine,
       isReturnOnly,
+      isExtension: durationEval.isExtensionRequest,
+      proposalPhase: isPickupOnly ? 'pickup' : isReturnOnly ? 'return' : isExtension ? 'extension' : 'general',
+      proposerUserId: viewerUserId,
     });
     if (!messageId) {
       Alert.alert('Could not post proposal', 'Chat proposal message could not be created.');
@@ -138,21 +149,42 @@ export async function submitRentalMeetupProposal(
       actorId: viewerUserId,
       recipientUserId: receiverId,
       type: 'message',
-      title: durationEval.warningTriggered
-        ? `${getProfileNameForUserId(viewerUserId)} proposed updated meetup times with a changed rental duration`
+      title: durationEval.isExtensionRequest
+        ? `${getProfileNameForUserId(viewerUserId)} requested a rental extension`
+        : durationEval.warningTriggered
+          ? `${getProfileNameForUserId(viewerUserId)} proposed meetup times outside the rental dates`
         : isReturnOnly
           ? `${getProfileNameForUserId(viewerUserId)} proposed return details`
-          : `${getProfileNameForUserId(viewerUserId)} proposed a pickup time`,
+          : isPickupOnly
+            ? `${getProfileNameForUserId(viewerUserId)} proposed pickup details`
+            : `${getProfileNameForUserId(viewerUserId)} proposed a pickup time`,
       body: (() => {
         const title = String(options?.rentalTitle ?? '').trim();
         if (isReturnOnly) {
           return title ? `Return time or location change for ${title}` : 'Return details were proposed.';
+        }
+        if (isPickupOnly) {
+          return title ? `Pickup proposal for ${title}` : 'Pickup details were proposed.';
         }
         return title ? `New meetup proposal for ${title}` : 'A meetup time was proposed.';
       })(),
       offerId,
       requestId: requestRowId,
       rentalId: rental.id,
+    });
+    void insertMeetupCoordinationTimelineForRental({
+      rental,
+      authorId: viewerUserId,
+      event: isExtension
+        ? 'extension_requested'
+        : isReturnOnly
+          ? 'return_proposed'
+          : isPickupOnly
+            ? 'pickup_proposed'
+            : 'pickup_proposed',
+      pickupIso: meetupTimeIso,
+      returnIso: returnTimeIso,
+      location: meetupLocation,
     });
   }
 

@@ -23,13 +23,19 @@ function dataPayload(
   requestId: string | null,
   offerId: string | null,
   rentalId: string | null,
-  listingId: string | null
+  listingId: string | null,
+  extra?: Record<string, string>
 ): Record<string, string> {
   const o: Record<string, string> = {};
   if (requestId) o.requestId = requestId;
   if (offerId) o.offerId = offerId;
   if (rentalId) o.rentalId = rentalId;
   if (listingId) o.listingId = listingId;
+  if (extra) {
+    for (const [k, v] of Object.entries(extra)) {
+      if (v.trim()) o[k] = v.trim();
+    }
+  }
   return o;
 }
 
@@ -49,6 +55,7 @@ export function insertServerNotificationToRecipient(input: {
   rentalId?: string | null;
   /** When set, stored in `data` for listing-offer deep links. */
   listingId?: string | null;
+  meetupAcceptanceKind?: 'pickup' | 'return' | 'extension' | null;
 }): void {
   if (!isSupabaseConfigured()) return;
 
@@ -73,21 +80,10 @@ export function insertServerNotificationToRecipient(input: {
     notificationType: input.type,
     rentalId: input.rentalId ?? null,
     offerId: input.offerId ?? null,
+    meetupAcceptanceKind: input.meetupAcceptanceKind ?? null,
     source: 'insertServerNotificationToRecipient',
   });
 
-  const requestId = input.requestId && isUuidString(input.requestId) ? input.requestId : null;
-  const offerId = input.offerId && isUuidString(input.offerId) ? input.offerId : null;
-  const rentalId =
-    input.rentalId != null && isUuidString(String(input.rentalId).trim())
-      ? String(input.rentalId).trim()
-      : null;
-  const listingIdClean =
-    input.listingId != null && isUuidString(String(input.listingId).trim())
-      ? String(input.listingId).trim()
-      : null;
-  const data = dataPayload(requestId, offerId, rentalId, listingIdClean);
-  const supabase = getSupabase();
   void insertServerNotificationToRecipientAsync(input);
 }
 
@@ -104,6 +100,7 @@ export async function insertServerNotificationToRecipientAsync(input: {
   offerId: string | null;
   rentalId?: string | null;
   listingId?: string | null;
+  meetupAcceptanceKind?: 'pickup' | 'return' | 'extension' | null;
 }): Promise<boolean> {
   if (!isSupabaseConfigured()) return false;
 
@@ -141,7 +138,9 @@ export async function insertServerNotificationToRecipientAsync(input: {
     input.listingId != null && isUuidString(String(input.listingId).trim())
       ? String(input.listingId).trim()
       : null;
-  const data = dataPayload(requestId, offerId, rentalId, listingIdClean);
+  const data = dataPayload(requestId, offerId, rentalId, listingIdClean, {
+    ...(input.meetupAcceptanceKind ? { meetupAcceptanceKind: input.meetupAcceptanceKind } : {}),
+  });
   const supabase = getSupabase();
   const { error } = await supabase.from('notifications').insert({
     user_id: recipientId,

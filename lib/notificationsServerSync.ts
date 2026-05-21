@@ -129,7 +129,17 @@ export function mapSupabaseNotificationToApp(
     listingId,
     rentalRequestId,
     forUserId: (forUserId || '').trim() || null,
+    meetupAcceptanceKind: parseMeetupAcceptanceKind(data),
   };
+}
+
+function parseMeetupAcceptanceKind(
+  data: unknown
+): 'pickup' | 'return' | 'extension' | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const raw = String((data as Record<string, unknown>).meetupAcceptanceKind ?? '').trim();
+  if (raw === 'pickup' || raw === 'return' || raw === 'extension') return raw;
+  return null;
 }
 
 const MAX_INITIAL_ROWS = 100;

@@ -38,4 +38,6 @@ export type RentalDevRegisteredContext = {
   wizardCtx?: RentalWizardContext | null;
   /** DEV: show pickup-accepted lifecycle overlay without realtime. */
   simulatePickupAcceptedOverlay?: () => void;
+  /** DEV: show return-accepted lifecycle overlay without realtime. */
+  simulateReturnAcceptedOverlay?: () => void;
 };

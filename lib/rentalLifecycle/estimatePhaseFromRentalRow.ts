@@ -4,6 +4,10 @@ import {
 } from '@/lib/rentalCancellation/rentalCancellationGates';
 import type { CanonicalRentalPhase } from '@/lib/rentalLifecycle/canonicalPhases';
 import type { RentalCancellationFields } from '@/lib/rentalCancellation/types';
+import {
+  rentalRowHasReturnSchedule,
+  resolveMeetupScheduleFromRow,
+} from '@/lib/rentalMeetupCoordinationState';
 
 /** Lightweight rental row fields for activity cards (no wizard_state). */
 export type RentalRowLifecycleEstimateInput = RentalCancellationFields & {
@@ -34,11 +38,10 @@ export function estimateCanonicalPhaseFromRentalRow(
   const pendingProposal =
     agreementStatus === 'pending' && String(row.last_proposed_by ?? '').trim().length > 0;
   const allConfirmed = row.owner_confirmed === true && row.renter_confirmed === true;
-  const hasPickup = Boolean(row.agreed_pickup_datetime?.trim());
+  const schedule = resolveMeetupScheduleFromRow(row);
+  const hasPickup = Boolean(schedule.pickupIso?.trim() || schedule.acceptedPickupIso?.trim());
   const hasLocation = Boolean(row.meetup_location?.trim());
-  const hasReturn = Boolean(
-    row.agreed_return_datetime?.trim() || (row as { return_datetime?: string }).return_datetime?.trim()
-  );
+  const hasReturn = rentalRowHasReturnSchedule(row, undefined, pendingProposal);
   const signed = Boolean(row.signed_at?.trim());
 
   if (st === 'handed_off' || (st === 'active' && signed)) return 'active_rental';
@@ -53,7 +56,7 @@ export function estimateCanonicalPhaseFromRentalRow(
   if (pendingProposal || !allConfirmed) {
     return hasPickup && hasLocation ? 'coordinate_return' : 'coordinate_pickup';
   }
-  if (st === 'pending' || st === 'approved') {
+  if (st === 'pending' || st === 'approved' || st === 'active') {
     return hasPickup && hasLocation ? 'coordinate_return' : 'coordinate_pickup';
   }
 

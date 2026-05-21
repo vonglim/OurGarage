@@ -1,5 +1,10 @@
 import type { UnifiedRentalRow } from '@/lib/fetchUnifiedRentalsForUser';
 import { unifiedRentalTitle } from '@/lib/fetchUnifiedRentalsForUser';
+import {
+  canonicalMeetupScheduleForRow,
+  recordCanonicalMeetupCoordinationSnapshot,
+  resolveCanonicalMeetupCoordinationState,
+} from '@/lib/canonicalMeetupCoordination';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -37,8 +42,11 @@ function agreementAwaiting(row: UnifiedRentalRow): boolean {
   return a === 'pending' || !allConfirmed(row);
 }
 
-function isEquipmentOut(status: string): boolean {
-  return status === 'active' || status === 'handed_off' || status === 'return_pending';
+function isEquipmentOut(row: UnifiedRentalRow): boolean {
+  const st = normStatus(row);
+  if (st === 'handed_off' || st === 'return_pending') return true;
+  if (st === 'active') return Boolean(row.signed_at?.trim());
+  return false;
 }
 
 function isReturnDueSoonOrOverdue(returnMs: number | null, now: number): boolean {
@@ -117,8 +125,12 @@ function scoreRow(row: UnifiedRentalRow, viewerUserId: string, now: number): Sco
   if (isTerminalRentalRow(row)) return null;
 
   const status = normStatus(row);
-  const pickupMs = parseMs(row.pickup_datetime);
-  const returnMs = parseMs(row.return_datetime);
+  const schedule = canonicalMeetupScheduleForRow(
+    row as import('@/lib/rentalMeetupProposalLifecycle').RentalMeetupRow,
+    viewerUserId
+  );
+  const pickupMs = parseMs(schedule.pickupIso);
+  const returnMs = parseMs(schedule.returnIso ?? schedule.acceptedReturnIso);
   const createdMs = parseMs(row.created_at) ?? 0;
 
   if (agreementAwaiting(row)) {
@@ -128,12 +140,12 @@ function scoreRow(row: UnifiedRentalRow, viewerUserId: string, now: number): Sco
     return { row, bucket: 1, tie1, tie2 };
   }
 
-  if (isEquipmentOut(status) && isReturnDueSoonOrOverdue(returnMs, now)) {
+  if (isEquipmentOut(row) && isReturnDueSoonOrOverdue(returnMs, now)) {
     const tie1 = returnMs != null ? returnMs - now : 0;
     return { row, bucket: 3, tie1, tie2: createdMs };
   }
 
-  if (!isEquipmentOut(status)) {
+  if (!isEquipmentOut(row)) {
     const tie1 = pickupMs != null ? pickupMs : Number.MAX_SAFE_INTEGER;
     return { row, bucket: 2, tie1, tie2: createdMs };
   }
@@ -154,8 +166,12 @@ function compareScored(a: Scored, b: Scored): number {
 
 function buildModel(row: UnifiedRentalRow, viewerUserId: string, bucket: PriorityBucket, now: number): HomeActiveRentalCardModel {
   const equipmentTitle = unifiedRentalTitle(row);
-  const pickupMs = parseMs(row.pickup_datetime);
-  const pickupFmt = formatHomeDateTime(row.pickup_datetime);
+  const schedule = canonicalMeetupScheduleForRow(
+    row as import('@/lib/rentalMeetupProposalLifecycle').RentalMeetupRow,
+    viewerUserId
+  );
+  const pickupMs = parseMs(schedule.pickupIso);
+  const pickupFmt = formatHomeDateTime(schedule.pickupIso);
 
   if (bucket === 1) {
     return {
@@ -180,7 +196,7 @@ function buildModel(row: UnifiedRentalRow, viewerUserId: string, bucket: Priorit
   }
 
   if (bucket === 3) {
-    const retLine = formatReturnPrimaryLine(row.return_datetime, now);
+    const retLine = formatReturnPrimaryLine(schedule.returnIso ?? schedule.acceptedReturnIso, now);
     return {
       rentalId: row.id,
       sectionLabel: 'Rental in progress',
@@ -214,6 +230,26 @@ export function selectHomeActiveRentalCardModel(
 
   const best = scored[0];
   if (!best) return null;
+
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    const uid = viewerUserId.trim();
+    const role =
+      uid === String(best.row.owner_user_id ?? '').trim()
+        ? 'owner'
+        : uid === String(best.row.renter_user_id ?? '').trim()
+          ? 'renter'
+          : 'renter';
+    recordCanonicalMeetupCoordinationSnapshot({
+      rentalId: best.row.id,
+      surface: 'home_card',
+      state: resolveCanonicalMeetupCoordinationState({
+        rental: best.row as import('@/lib/rentalMeetupProposalLifecycle').RentalMeetupRow,
+        viewerUserId: uid,
+        viewerRole: role,
+        presentationSurface: role === 'owner' ? 'owner_workspace' : 'renter_wizard',
+      }),
+    });
+  }
 
   return buildModel(best.row, uid, best.bucket, nowMs);
 }

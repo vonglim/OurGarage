@@ -31,6 +31,11 @@ function yyyyMmDdToAgreedIso(yyyyMmDd: string, role: 'pickup' | 'return'): strin
   return localWallClockToIso(y, mo, d, RETURN_HOUR, RETURN_MINUTE);
 }
 
+/** Contractual calendar day → default meetup ISO (9 AM pickup / 5 PM return local). */
+export function calendarYmdToMeetupIso(ymd: string, role: 'pickup' | 'return'): string | null {
+  return yyyyMmDdToAgreedIso(ymd, role);
+}
+
 function rawToAgreedIso(raw: string, role: 'pickup' | 'return'): string | null {
   const s = String(raw).trim();
   if (!s) return null;

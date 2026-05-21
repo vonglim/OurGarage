@@ -1,5 +1,8 @@
 import type { ListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
 import type { NegotiationDeliveryMethod } from '@/lib/negotiationDelivery';
+import type { PickupEvidencePhoto } from '@/lib/pickupEvidenceDisplay';
+import type { PickupEvidenceReadiness } from '@/lib/pickupEvidenceReadiness';
+import type { CanonicalMeetupCoordinationState } from '@/lib/canonicalMeetupCoordination';
 import type { RentalVerificationRow } from '@/lib/rentalVerification';
 import type { WizardMeetupProposalDraft } from '@/lib/rentalWizard/wizardMeetupDraft';
 
@@ -9,12 +12,14 @@ export type RentalWizardStep =
   | 'coordinate_pickup'
   | 'transition_pickup_confirmed'
   | 'coordinate_return'
+  | 'transition_return_confirmed'
   | 'transition_all_set'
   | 'prepare_pickup'
   | 'transition_pickup_ready'
   | 'meetup_day'
   | 'owner_confirmed_arrival'
   | 'equipment_confirmation'
+  | 'rental_authorization'
   | 'transition_enjoy_rental'
   | 'active_rental'
   | 'transition_return_reminder'
@@ -38,11 +43,19 @@ export type RentalWizardProgress = {
   renter_pickup_im_here_at?: string | null;
   renter_return_im_here_at?: string | null;
   renter_approved_pickup_photos_at?: string | null;
+  renter_confirmed_pickup_receipt_at?: string | null;
+  renter_viewed_timestamp_proof_at?: string | null;
+  /** Set when renter opens the pickup evidence review surface (required before approve). */
+  renter_pickup_evidence_review_opened_at?: string | null;
+  /** Fingerprint of owner pickup evidence when renter last opened review — invalidates review on change. */
+  renter_pickup_evidence_seen_revision?: string | null;
   equipment_ack?: Record<string, boolean>;
   coordinate_pickup_draft?: WizardMeetupProposalDraft;
   coordinate_return_draft?: WizardMeetupProposalDraft;
   /** Set when renter completes the coordinate-return step (Screen 2). */
   pickup_return_coordination_ack_at?: string | null;
+  /** Renter reviewed and acknowledged liability / rental agreement text. */
+  rental_agreement_acknowledged_at?: string | null;
 };
 
 export type RentalWizardRentalRow = {
@@ -68,6 +81,17 @@ export type RentalWizardRentalRow = {
   handoff_approval_started_at?: string | null;
   handoff_approved_by_owner?: boolean | null;
   handoff_approved_by_renter?: boolean | null;
+  owner_arrived_at?: string | null;
+  renter_arrived_at?: string | null;
+  renter_confirmed_receipt_at?: string | null;
+  owner_confirmed_handoff_at?: string | null;
+  possession_transferred_at?: string | null;
+  pickup_handoff_completed_at?: string | null;
+  physical_possession_confirmed_at?: string | null;
+  rental_activated_at?: string | null;
+  agreement_acknowledged_at?: string | null;
+  preauth_status?: string | null;
+  preauth_authorized_at?: string | null;
   signed_at?: string | null;
   signed_name?: string | null;
   owner_pickup_ready?: boolean | null;
@@ -109,18 +133,31 @@ export type RentalWizardContext = {
   rentalCodeLabel: string;
   lifecyclePhase: 'pickup' | 'active' | 'return' | 'completed';
   termsCompleted: boolean;
+  /** Bilateral pickup + return agreed (canonical progression). */
   meetingCompleted: boolean;
+  /** `agreement_status` confirmed with no pending proposal (pickup slice may be done). */
+  meetingAgreementCleared: boolean;
+  pickupCoordinationComplete: boolean;
+  returnCoordinationAgreed: boolean;
+  meetupCoordinationComplete: boolean;
   hasPendingProposal: boolean;
   pickupHandoffComplete: boolean;
   returnHandoffComplete: boolean;
   pickupAck: { owner: boolean; renter: boolean };
   returnAck: { owner: boolean; renter: boolean };
   ownerPickupPhotoCount: number;
+  ownerPickupEvidence: PickupEvidencePhoto[];
+  pickupEvidenceReadiness: PickupEvidenceReadiness;
   pickupIso: string | null;
   returnIso: string | null;
+  /** Canonical meetup coordination — single source for wizard meetup UI. */
+  meetupCoordination: CanonicalMeetupCoordinationState;
   seenTransitions: Set<RentalWizardTransitionKey>;
   wizardProgress: RentalWizardProgress;
   verificationRows: RentalVerificationRow[];
+  /** True when migrations 071–073 columns are absent from the rental row payload. */
+  schemaDegraded?: boolean;
+  missingActivationColumns?: string[];
 };
 
 export type RentalWizardDestination = {

@@ -41,6 +41,13 @@ export function hasCanonicalMeetupLocation(rental: RentalWizardRentalRow): boole
   return Boolean(rental.meetup_location?.trim());
 }
 
+/** Wizard progression: canonical accepted return time (`agreed_return_datetime` only). */
+export function hasCanonicalAgreedReturnDatetime(rental: RentalWizardRentalRow): boolean {
+  const v = rental.agreed_return_datetime?.trim();
+  if (!v) return false;
+  return Number.isFinite(Date.parse(v));
+}
+
 export function diagnosePickupCoordination(ctx: RentalWizardContext): PickupCoordinationDiagnostic {
   const { meetingCompleted, hasPendingProposal, agreementStatus } = buildRentalWizardContextFlags(
     ctx.rental
@@ -73,9 +80,7 @@ export function diagnosePickupCoordination(ctx: RentalWizardContext): PickupCoor
   }
 
   const complete =
-    isAgreementConfirmedOnRental(ctx.rental) &&
-    hasCanonicalAgreedPickupDatetime(ctx.rental) &&
-    hasCanonicalMeetupLocation(ctx.rental);
+    hasCanonicalAgreedPickupDatetime(ctx.rental) && hasCanonicalMeetupLocation(ctx.rental);
 
   return {
     complete,

@@ -35,6 +35,7 @@ import {
   OFFER_MEETUP_PROPOSAL_KIND,
   insertMeetupProposalOfferMessage,
 } from '@/lib/meetupProposalThreadEvent';
+import { OFFER_MEETUP_COORDINATION_KIND } from '@/lib/meetupCoordinationTimeline';
 import { RENTAL_CANCELLATION_SYSTEM_MESSAGE_KIND } from '@/lib/rentalCancellation/rentalCancellationChat';
 import {
   acceptRentalMeetupProposal,
@@ -43,6 +44,12 @@ import {
 import { getProfileNameForUserId } from '@/lib/profileDisplayName';
 import { resolveAgreementBaselineDurationHours } from '@/lib/proposalDurationChange';
 import { evaluateMeetupProposalDurationWarning } from '@/lib/rentalDurationValidation';
+import { insertMeetupCoordinationTimelineForRental } from '@/lib/meetupCoordinationTimeline';
+import { persistMeetupProposalRow } from '@/lib/rentalMeetupPersist';
+import {
+  recordCanonicalMeetupCoordinationSnapshot,
+  resolveCanonicalMeetupCoordinationState,
+} from '@/lib/canonicalMeetupCoordination';
 import { isUuidString } from '@/lib/requestOwnership';
 import { sendOfferThreadUserMessage } from '@/lib/sendOfferThreadMessage';
 import { decodeDescriptionExtras } from '@/lib/supabaseRequests';
@@ -81,14 +88,46 @@ const TOUCH_DEBUG = false;
 const OFFER_MESSAGES_SELECT = 'id, author_id, body, kind, created_at, offer_images';
 const HEADER_SURFACE = '#F7F8FB';
 
-function rentalPickupIso(rental: RentalMeetupDetails | null): string | null {
-  if (!rental) return null;
-  return rental.pickup_datetime ?? rental.meetup_time ?? null;
+function chatMeetupHasPendingProposal(rental: RentalMeetupDetails | null): boolean {
+  if (!rental) return false;
+  const agreementStatus = String(rental.agreement_status ?? '').trim();
+  return agreementStatus === 'pending' && Boolean(String(rental.last_proposed_by ?? '').trim());
 }
 
-function rentalReturnIso(rental: RentalMeetupDetails | null): string | null {
+function resolveChatMeetupSchedule(
+  rental: RentalMeetupDetails | null,
+  requestSchedulingMeta?: unknown,
+  viewerUserId?: string | null
+) {
   if (!rental) return null;
-  return rental.return_datetime ?? rental.return_time ?? null;
+  const uid = viewerUserId ?? '';
+  const role =
+    uid && uid === String(rental.owner_user_id ?? '').trim()
+      ? 'owner'
+      : uid && uid === String(rental.renter_user_id ?? '').trim()
+        ? 'renter'
+        : 'renter';
+  return resolveCanonicalMeetupCoordinationState({
+    rental: rental as import('@/lib/rentalMeetupProposalLifecycle').RentalMeetupRow,
+    viewerUserId: uid || null,
+    viewerRole: role,
+    presentationSurface: role === 'owner' ? 'owner_workspace' : 'renter_wizard',
+    requestSchedulingMeta,
+  }).schedule;
+}
+
+function rentalPickupIso(
+  rental: RentalMeetupDetails | null,
+  requestSchedulingMeta?: unknown
+): string | null {
+  return resolveChatMeetupSchedule(rental, requestSchedulingMeta)?.pickupIso ?? null;
+}
+
+function rentalReturnIso(
+  rental: RentalMeetupDetails | null,
+  requestSchedulingMeta?: unknown
+): string | null {
+  return resolveChatMeetupSchedule(rental, requestSchedulingMeta)?.returnIso ?? null;
 }
 
 function rentalSharedLocation(rental: RentalMeetupDetails | null): string {
@@ -146,14 +185,48 @@ function parseMeetupProposalLines(text: string): {
       .find((line) => /^Pickup time proposed:/i.test(line) || /^Pickup \(unchanged\):/i.test(line))
       ?.replace(/^Pickup time proposed:\s*/i, '')
       .replace(/^Pickup \(unchanged\):\s*/i, '')
-      .trim() ?? '';
+      .trim() ??
+    (() => {
+      const headerIdx = lines.findIndex((line) => /proposed pickup details:/i.test(line));
+      if (headerIdx >= 0 && lines[headerIdx + 1]) return lines[headerIdx + 1].trim();
+      return '';
+    })();
   const returnAt =
     lines
-      .find((line) => /^Return time proposed:/i.test(line))
+      .find((line) => /^Return time proposed:/i.test(line) || /^Return time:/i.test(line))
       ?.replace(/^Return time proposed:\s*/i, '')
-      .trim() ?? '';
+      .replace(/^Return time:\s*/i, '')
+      .trim() ??
+    (() => {
+      const headerIdx = lines.findIndex((line) => /proposed return details:/i.test(line));
+      if (headerIdx >= 0 && lines[headerIdx + 1]) return lines[headerIdx + 1].trim();
+      return '';
+    })();
   const locLine = lines.find((line) => line.startsWith('📍'));
-  const location = locLine?.replace(/^📍\s*/, '').trim() ?? '';
+  const location =
+    locLine?.replace(/^📍\s*/, '').trim() ??
+    (() => {
+      const pickupHeaderIdx = lines.findIndex((line) => /proposed pickup details:/i.test(line));
+      if (pickupHeaderIdx >= 0) {
+        const maybeLoc = lines.slice(pickupHeaderIdx + 1).find((line) => {
+          if (!line) return false;
+          if (/^\w{3,9}, \w{3,3} \d{1,2} at /i.test(line)) return false;
+          if (/^\w{3}, \w{3} \d{1,2} • /i.test(line)) return false;
+          if (/^Pickup /i.test(line)) return false;
+          if (/^Return /i.test(line)) return false;
+          return true;
+        });
+        return maybeLoc?.trim() ?? '';
+      }
+      const returnHeaderIdx = lines.findIndex((line) => /proposed return details:/i.test(line));
+      if (returnHeaderIdx >= 0) {
+        const maybeLoc = lines[returnHeaderIdx + 1];
+        if (maybeLoc && !/^\w{3}/i.test(maybeLoc)) return maybeLoc.trim();
+        if (maybeLoc && / at /i.test(maybeLoc)) return '';
+        return maybeLoc?.trim() ?? '';
+      }
+      return '';
+    })();
   const durationWarning =
     lines
       .find((line) => /^⚠\s*Duration changed/i.test(line))
@@ -375,6 +448,27 @@ export default function ChatDetailScreen() {
     () => resolveAgreementBaselineDurationHours(rental, requestSchedulingMeta),
     [rental, requestSchedulingMeta]
   );
+
+  useEffect(() => {
+    if (!rental?.id || !meId) return;
+    const role =
+      meId === String(rental.owner_user_id ?? '').trim()
+        ? 'owner'
+        : meId === String(rental.renter_user_id ?? '').trim()
+          ? 'renter'
+          : 'renter';
+    recordCanonicalMeetupCoordinationSnapshot({
+      rentalId: rental.id,
+      surface: 'chat',
+      state: resolveCanonicalMeetupCoordinationState({
+        rental: rental as import('@/lib/rentalMeetupProposalLifecycle').RentalMeetupRow,
+        viewerUserId: meId,
+        viewerRole: role,
+        presentationSurface: role === 'owner' ? 'owner_workspace' : 'renter_wizard',
+        requestSchedulingMeta: requestSchedulingMeta ?? undefined,
+      }),
+    });
+  }, [rental, requestSchedulingMeta, meId]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -690,6 +784,7 @@ export default function ChatDetailScreen() {
       meetupTimeIso: string;
       returnTimeIso: string;
       durationWarningLine?: string | null;
+      isExtension?: boolean;
     }) => {
       if (!rental || !meId) return null;
       const offerId = String(rental.offer_id ?? '').trim();
@@ -712,6 +807,7 @@ export default function ChatDetailScreen() {
         returnTimeIso: input.returnTimeIso,
         meetupLocation: input.meetupLocation,
         durationWarningLine: input.durationWarningLine,
+        isExtension: input.isExtension,
       });
     },
     [rental, meId]
@@ -720,11 +816,11 @@ export default function ChatDetailScreen() {
   const onConfirmRentalDetails = useCallback(async () => {
     if (!rental || !meId) return;
     const sharedLoc = rentalSharedLocation(rental);
-    if (!rentalPickupIso(rental) || sharedLoc === '') {
+    if (!rentalPickupIso(rental, requestSchedulingMeta) || sharedLoc === '') {
       showFeedbackToast('Set pickup time and meetup location first.');
       return;
     }
-    if (!rentalReturnIso(rental)) {
+    if (!rentalReturnIso(rental, requestSchedulingMeta)) {
       showFeedbackToast('Set return time first.');
       return;
     }
@@ -783,7 +879,7 @@ export default function ChatDetailScreen() {
     } finally {
       setRentalBusy(false);
     }
-  }, [rental, meId, id, threadOfferId, threadRentalId]);
+  }, [rental, meId, id, threadOfferId, threadRentalId, requestSchedulingMeta]);
 
   const onProposeRentalDetails = useCallback(
     async (input: {
@@ -813,15 +909,9 @@ export default function ChatDetailScreen() {
       if (durationEval.warningTriggered) {
         const continueProposal = await new Promise<boolean>((resolve) => {
           Alert.alert(
-            'Duration change',
-            [
-              'You are proposing a rental duration different from the original agreement.',
-              '',
-              `Original duration: ${durationEval.originalLabel ?? '—'}`,
-              `Proposed duration: ${durationEval.proposedLabel ?? '—'}`,
-              '',
-              'The other party must approve this change. Pricing and rental terms may change based on the updated duration.',
-            ].join('\n'),
+            durationEval.isExtensionRequest ? 'Extension request' : 'Outside rental dates',
+            durationEval.warningLine ??
+              'You are proposing times outside the agreed rental dates. The other party must approve this change.',
             [
               { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
               { text: 'Continue Proposal', onPress: () => resolve(true) },
@@ -833,53 +923,38 @@ export default function ChatDetailScreen() {
       setRentalBusy(true);
       try {
         const supabase = getSupabase();
-        const iAmOwner = rental.owner_user_id === meId;
-        const iAmRenter = rental.renter_user_id === meId;
         const nowIso = new Date().toISOString();
         const nextProposalVersion =
           typeof rental.proposal_version === 'number' && Number.isFinite(rental.proposal_version)
             ? rental.proposal_version + 1
             : 2;
-        const hasCol = (k: string) => Object.prototype.hasOwnProperty.call(rental, k);
-        const payload: Record<string, unknown> = {
-          meetup_time: input.meetupTimeIso,
-          meetup_location: input.meetupLocation,
-          return_time: input.returnTimeIso,
-          return_location: input.meetupLocation,
-          confirmed_by_owner: iAmOwner ? true : false,
-          confirmed_by_renter: iAmRenter ? true : false,
-        };
-        if (hasCol('pickup_datetime')) payload.pickup_datetime = input.meetupTimeIso;
-        if (hasCol('return_datetime')) payload.return_datetime = input.returnTimeIso;
-        if (hasCol('owner_confirmed')) payload.owner_confirmed = iAmOwner ? true : false;
-        if (hasCol('renter_confirmed')) payload.renter_confirmed = iAmRenter ? true : false;
-        if (hasCol('agreement_status')) payload.agreement_status = 'pending';
-        if (hasCol('confirmed_at')) payload.confirmed_at = null;
-        if (hasCol('last_proposed_by')) payload.last_proposed_by = meId;
-        if (hasCol('proposal_version')) payload.proposal_version = nextProposalVersion;
-        if (hasCol('proposal_updated_at')) payload.proposal_updated_at = nowIso;
-        if (hasCol('latest_proposal_message_id')) payload.latest_proposal_message_id = null;
-        if (__DEV__) {
-          console.log('[proposal] rentals update payload keys', {
-            rentalId: rental.id,
-            keys: Object.keys(payload),
-          });
-        }
-        const { error } = await supabase.from('rentals').update(payload).eq('id', rental.id);
-        if (error) {
-          if (__DEV__) {
-            console.warn('[proposal] rentals update failed', {
-              rentalId: rental.id,
-              error: error.message,
-              code: error.code,
-            });
+        const persistResult = await persistMeetupProposalRow(
+          supabase,
+          rental.id,
+          {
+            meetupTimeIso: input.meetupTimeIso,
+            returnTimeIso: input.returnTimeIso,
+            meetupLocation: input.meetupLocation,
+            returnLocation: input.meetupLocation,
+            viewerUserId: meId,
+            ownerUserId: rental.owner_user_id,
+            renterUserId: rental.renter_user_id,
+            proposalVersion: nextProposalVersion,
+            nowIso,
+          },
+          {
+            phase: durationEval.isExtensionRequest ? 'extension' : 'general',
+            source: 'chat_onProposeRentalDetails',
           }
+        );
+        if (!persistResult.ok) {
           showFeedbackToast('Could not update rental details.');
           return false;
         }
         const messageId = await insertMeetupProposalMessage({
           ...input,
           durationWarningLine: durationEval.warningLine,
+          isExtension: durationEval.isExtensionRequest,
         });
         if (__DEV__) {
           console.log('[proposal] insertMeetupProposalMessage result', {
@@ -891,6 +966,14 @@ export default function ChatDetailScreen() {
           showFeedbackToast('Could not post proposal to chat.');
           return false;
         }
+        void insertMeetupCoordinationTimelineForRental({
+          rental,
+          authorId: meId,
+          event: durationEval.isExtensionRequest ? 'extension_requested' : 'pickup_proposed',
+          pickupIso: input.meetupTimeIso,
+          returnIso: input.returnTimeIso,
+          location: input.meetupLocation,
+        });
         const receiverId =
           rental.owner_user_id === meId
             ? String(rental.renter_user_id ?? '').trim()
@@ -908,9 +991,11 @@ export default function ChatDetailScreen() {
             actorId: meId,
             recipientUserId: receiverId,
             type: 'message',
-            title: durationEval.warningTriggered
-              ? `${getProfileNameForUserId(meId)} proposed updated meetup times with a changed rental duration`
-              : `${getProfileNameForUserId(meId)} proposed a pickup time`,
+            title: durationEval.isExtensionRequest
+              ? `${getProfileNameForUserId(meId)} requested a rental extension`
+              : durationEval.warningTriggered
+                ? `${getProfileNameForUserId(meId)} proposed meetup times outside the rental dates`
+                : `${getProfileNameForUserId(meId)} proposed a pickup time`,
             body: rentalTitle.trim()
               ? `New meetup proposal for ${rentalTitle.trim()}`
               : 'New meetup proposal',
@@ -919,7 +1004,7 @@ export default function ChatDetailScreen() {
             rentalId: rental.id,
           });
         }
-        if (messageId && hasCol('latest_proposal_message_id')) {
+        if (messageId) {
           await supabase
             .from('rentals')
             .update({ latest_proposal_message_id: messageId })
@@ -1095,11 +1180,13 @@ export default function ChatDetailScreen() {
                       const parsedLegacy = parseRentalUpdateMessage(message.text);
                       const proposalDetails = parsedProposal ?? parsedLegacy;
                       const isMeetupProposal = message.kind === OFFER_MEETUP_PROPOSAL_KIND;
+                      const isMeetupCoordinationTimeline = message.kind === OFFER_MEETUP_COORDINATION_KIND;
                       const proposerName = getProfileNameForUserId(message.senderId).trim() || 'Someone';
                       const isCancellationSystem =
                         message.kind === RENTAL_CANCELLATION_SYSTEM_MESSAGE_KIND;
                       const isRentalDetailsSystem =
                         message.kind === OFFER_MEETUP_PROPOSAL_KIND ||
+                        message.kind === OFFER_MEETUP_COORDINATION_KIND ||
                         message.kind === 'system_rental_details' ||
                         message.text.startsWith('Rental details updated:');
                     const iAmRenter = rental?.renter_user_id === meId;
@@ -1118,7 +1205,7 @@ export default function ChatDetailScreen() {
                       (myConfirmed || acceptedMessageIds.includes(message.id));
                       const prev = index > 0 ? messages[index - 1] : null;
                       const senderChanged = prev != null && prev.senderId !== message.senderId;
-                      if (isCancellationSystem) {
+                      if (isCancellationSystem || isMeetupCoordinationTimeline) {
                         return (
                           <View style={styles.cancellationSystemRow}>
                             <Text style={styles.cancellationSystemText}>{message.text}</Text>

@@ -51,7 +51,7 @@ export function buildRentalLifecycleStickyModel(input: {
   viewerRole: RentalWorkspaceViewerRole;
   lifecyclePhase: 'pickup' | 'active' | 'return' | 'completed';
   rentalStatus: string;
-  meetingCompleted: boolean;
+  meetupCoordinationComplete: boolean;
   pickupHandoffComplete: boolean;
   returnHandoffComplete: boolean;
   pickupOperationalState: RentalOperationalState | null;
@@ -103,7 +103,7 @@ export function buildRentalLifecycleStickyModel(input: {
       input.viewerRole === 'owner'
         ? 'Extension request waiting for your response'
         : 'Extension pending — waiting on the owner';
-  } else if (!input.meetingCompleted) {
+  } else if (!input.meetupCoordinationComplete) {
     needsAttention = true;
     statusLine = 'Awaiting meetup confirmation';
   } else if (!pickupDone) {

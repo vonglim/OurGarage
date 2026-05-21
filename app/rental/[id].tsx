@@ -38,6 +38,7 @@ import {
 import { AppKeyboardAwareScrollView } from '@/components/AppKeyboardAwareScrollView';
 import { BackHeader } from '@/components/AppHeaders';
 import { RentalExtensionRequestModal } from '@/components/rentalWorkspace/RentalExtensionRequestModal';
+import { MeetupPhaseCoordinationCard } from '@/components/rentalWorkspace/MeetupPhaseCoordinationCard';
 import { RentalCommandCenter } from '@/components/rentalWorkspace/RentalCommandCenter';
 import { RentalMeetupMissedSheet } from '@/components/rentalWorkspace/RentalMeetupMissedSheet';
 import { RentalWorkspaceHero } from '@/components/rentalWorkspace/RentalWorkspaceHero';
@@ -54,11 +55,35 @@ import { negotiatedDeliveryForOffer, type RequestPricingContext } from '@/lib/ne
 import { formatUsd } from '@/lib/money';
 import { getProfileNameForUserId } from '@/lib/profileDisplayName';
 import {
-  DURATION_GRACE_HOURS,
-  durationHoursBetween,
-  evaluateDurationChange,
-  resolveAgreementBaselineDurationHours,
-} from '@/lib/proposalDurationChange';
+  recordCanonicalMeetupCoordinationSnapshot,
+  recomputeCanonicalMeetupCoordination,
+  resolveCanonicalMeetupCoordinationState,
+  type CanonicalMeetupCoordinationState,
+} from '@/lib/canonicalMeetupCoordination';
+import { logMeetupCoordinationUiTree } from '@/lib/meetupCoordinationCardRenderDiagnostics';
+import {
+  extractCoordinationFreshnessMeta,
+  mergeRentalRowFromRealtimeCoordinationPatch,
+  mergeRentalWithCoordinationFreshness,
+  patchContainsMeetupCoordinationFields,
+  type CoordinationFreshnessMeta,
+} from '@/lib/meetupCoordinationFreshness';
+import { resolveMeetupDisplaySchedule } from '@/lib/rentalMeetupCoordinationState';
+import { insertMeetupCoordinationTimelineForRental } from '@/lib/meetupCoordinationTimeline';
+import {
+  buildMeetupProposalPersistPayload,
+  persistMeetupProposalRow,
+} from '@/lib/rentalMeetupPersist';
+import type { RentalMeetupRow } from '@/lib/rentalMeetupProposalLifecycle';
+import {
+  reconcileOperationalPickupIso,
+  reconcileOperationalReturnIso,
+} from '@/lib/rentalWizard/proposedMeetupSchedule';
+import { resolveAgreementBaselineDurationHours } from '@/lib/proposalDurationChange';
+import {
+  evaluateContractualMeetupProposal,
+  isMeetupProposalExtensionRequest,
+} from '@/lib/rentalContractWindow';
 import { evaluateMeetupProposalDurationWarning } from '@/lib/rentalDurationValidation';
 import { isUuidString } from '@/lib/requestOwnership';
 import { normalizeLegalName } from '@/lib/legalName';
@@ -71,7 +96,84 @@ import {
   useRegisterRentalDevContext,
 } from '@/lib/devTools';
 import { fetchLatestOfferThreadMessagePreview, type OfferThreadMessagePreview } from '@/lib/fetchLatestOfferThreadMessage';
-import { deriveLifecyclePhaseFromRentalStatus, deriveRentalWorkspaceStage } from '@/lib/rentalLifecyclePhase';
+import {
+  deriveLifecyclePhaseFromRentalStatus,
+  deriveRentalWorkspaceStage,
+  isRentalPickupHandoffCompleteForWorkspace,
+  isReturnWorkflowEnabledForWorkspace,
+} from '@/lib/rentalLifecyclePhase';
+import {
+  fetchRenterWizardHandoffProgress,
+  markOwnerPickupArrived,
+  markRenterPickupArrived,
+} from '@/lib/pickupHandoffArrival';
+import {
+  persistOwnerConfirmedPickupHandoff,
+  persistRenterConfirmedPickupReceipt,
+} from '@/lib/pickupHandoffMilestones';
+import { evaluatePickupInspectionFlow, logPickupInspectionFlow } from '@/lib/pickupInspectionFlow';
+import { resolveRentalActivationState } from '@/lib/rentalActivation';
+import { RentalAuthorizationSection } from '@/components/rentalWorkspace/RentalAuthorizationSection';
+import {
+  buildPickupHandoffCompletionInputFromWorkspace,
+  logPickupLifecycleDesync,
+} from '@/lib/pickupHandoffCompletion';
+import { finalizeRentalActivation } from '@/lib/pickupHandoffMilestones';
+import {
+  allRequiredPickupItemsDone,
+  buildRenterPickupDoneEffective,
+  pickupAutoRowHelper as renterPickupAutoRowHelper,
+  RENTER_PICKUP_ITEMS,
+  renterPickupManualFromVerificationRows,
+} from '@/lib/rentalPickupChecklist';
+import {
+  logPickupHandoffLive,
+  resolvePickupHandoffPresenceState,
+  type LivePresencePhase,
+} from '@/lib/pickupHandoffLive';
+import { logPickupHandoffPresence } from '@/lib/pickupHandoffPresence';
+import {
+  usePickupHandoffPresenceRealtime,
+  type PickupHandoffPresenceRealtimeMeta,
+} from '@/lib/rentalLifecycle/usePickupHandoffPresenceRealtime';
+import {
+  buildCoordinationHydrationKey,
+  buildLiveUpdateFromRentalRow,
+  logOwnerWorkspaceHydrationCommit,
+  logOwnerWorkspaceRealtimePipeline,
+  resolveOwnerWorkspaceCommitDecision,
+  shouldHydrateOwnerWorkspaceFromUnifiedRow,
+  type OwnerWorkspaceHydrationSource,
+  type QueuedOwnerWorkspaceLivePatch,
+} from '@/lib/ownerWorkspaceRealtimePipeline';
+import { useUnifiedRentalsActivityStore } from '@/store/unifiedRentalsActivityStore';
+import {
+  isRentalRealtimeSubscriptionActive,
+  listActiveRentalRealtimeSubscriptions,
+} from '@/lib/rentalLifecycle/realtimeSubscriptionRegistry';
+import type { RentalsLiveUpdateResult } from '@/lib/rentalLifecycle/rentalRowLivePatch';
+import {
+  buildReturnCoordinationLiveDiagnostics,
+  logMeetupCoordinationRenderInputs,
+  logMeetupCoordinationWorkspacePatch,
+  logPickupCoordinationLive,
+  logPickupCoordinationLiveReturn,
+  coordinationFieldDigest,
+  meetupCoordinationFieldsDiffer,
+  meetupCoordinationPatchFromRow,
+  snapshotMeetupCoordinationStatuses,
+} from '@/lib/rentalMeetupCoordinationLive';
+import {
+  isPickupCoordinationCompleteFromRow,
+  isReturnCoordinationCompleteFromRow,
+  logRentalOwnerPhase,
+  resolveOwnerWorkspacePhase,
+} from '@/lib/rentalOwnerWorkspacePhase';
+import { updateWizardProgress } from '@/lib/rentalWizard';
+import {
+  isMeetupCoordinationCompleteFromRow,
+  logRentalStageTransitionAudit,
+} from '@/lib/rentalStageTransitionAudit';
 import { parseListingIntentSnapshot, type ListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
 import { normalizeListingImages } from '@/lib/normalizeListingImages';
 import { fetchAndMergeProfileNames } from '@/lib/remoteProfileCache';
@@ -190,6 +292,11 @@ import {
   saveRenterPickupViewerFlags,
 } from '@/lib/rentalPickupViewerFlags';
 import { formatSupabaseMutationFailure } from '@/lib/supabaseSchemaMismatchMessage';
+import {
+  fetchRentalContractHydration,
+  logRentalOwnerContractHydration,
+  type RentalContractHydration,
+} from '@/lib/fetchRentalContractHydration';
 import { getSupabase } from '@/lib/supabase';
 import { useMessageUnreadStore } from '@/store/messageUnreadStore';
 import { useDevToolsStore } from '@/store/devToolsStore';
@@ -210,6 +317,7 @@ type RentalRow = {
   request_id: string;
   listing_id?: string | null;
   offer_id: string;
+  rental_request_id?: string | null;
   renter_user_id: string;
   owner_user_id: string;
   status: string | null;
@@ -238,6 +346,15 @@ type RentalRow = {
   handoff_approved_by_owner?: boolean | null;
   handoff_approved_by_renter?: boolean | null;
   handoff_approval_started_at?: string | null;
+  owner_arrived_at?: string | null;
+  renter_arrived_at?: string | null;
+  renter_confirmed_receipt_at?: string | null;
+  owner_confirmed_handoff_at?: string | null;
+  possession_transferred_at?: string | null;
+  pickup_handoff_completed_at?: string | null;
+  physical_possession_confirmed_at?: string | null;
+  rental_activated_at?: string | null;
+  agreement_acknowledged_at?: string | null;
   signed_at?: string | null;
   signed_name?: string | null;
   agreement_version?: number | null;
@@ -376,24 +493,6 @@ const OWNER_PICKUP_ITEMS = [
   },
 ] as const;
 
-const RENTER_PICKUP_ITEMS = [
-  {
-    id: 'rp-review-photos',
-    label: 'Review owner photos',
-    required: true as const,
-    control: 'auto' as const,
-  },
-  { id: 'rp-serial-matches', label: 'Verify serial/model matches', required: true as const, control: 'manual' as const },
-  { id: 'rp-verify-condition', label: 'Verify item condition', required: true as const, control: 'manual' as const },
-  { id: 'rp-accessories', label: 'Confirm accessories are included', required: true as const, control: 'manual' as const },
-  {
-    id: 'rp-verify-note',
-    label: 'Confirm @username + date on the live possession photo',
-    required: true as const,
-    control: 'auto' as const,
-  },
-] as const;
-
 const OWNER_RETURN_ITEMS = [
   { id: 'or-review-return', label: 'Review return photos' },
   { id: 'or-review-ret-notes', label: 'Confirm returned condition' },
@@ -431,22 +530,8 @@ function buildOwnerPickupDoneEffective(
   };
 }
 
-function buildRenterPickupDoneEffective(
-  storedManual: Record<string, boolean>,
-  viewFlags: { reviewedOwnerPhotos: boolean; viewedTimestampProof: boolean },
-  pickupRenterConfirmed: boolean
-): Record<string, boolean> {
-  const freezeAuto = pickupRenterConfirmed;
-  return {
-    'rp-review-photos': freezeAuto || viewFlags.reviewedOwnerPhotos,
-    'rp-serial-matches': Boolean(storedManual['rp-serial-matches']),
-    'rp-verify-condition': Boolean(storedManual['rp-verify-condition']),
-    'rp-accessories': Boolean(storedManual['rp-accessories']),
-    'rp-verify-note': freezeAuto || viewFlags.viewedTimestampProof,
-  };
-}
-
 function pickupAutoRowHelper(itemId: string, role: 'owner' | 'renter'): string | undefined {
+  if (role === 'renter') return renterPickupAutoRowHelper(itemId);
   if (role === 'owner') {
     if (itemId === 'op-upload-verification')
       return "A fresh verification photo for this handoff (listing gallery may be older). Include @username + today's date.";
@@ -545,13 +630,6 @@ function emptyChecklistMaps(
 
 function allItemsDone(items: readonly { id: string }[], done: Record<string, boolean>): boolean {
   return items.every((i) => done[i.id]);
-}
-
-function allRequiredPickupItemsDone(
-  items: readonly ChecklistItemDef[],
-  done: Record<string, boolean>
-): boolean {
-  return items.filter((i) => i.required !== false).every((i) => Boolean(done[i.id]));
 }
 
 function fillDefaults(
@@ -1332,6 +1410,8 @@ export default function RentalScreen() {
     chatUnreadOfferId ? (s.unreadByOfferId[chatUnreadOfferId] ?? 0) : 0
   );
   const [request, setRequest] = useState<any>(null);
+  const [contractHydration, setContractHydration] = useState<RentalContractHydration | null>(null);
+  const [contractHydrationLoading, setContractHydrationLoading] = useState(false);
   const [heroSupplement, setHeroSupplement] = useState<RentalHeroSupplement | null>(null);
   const [extensionModalVisible, setExtensionModalVisible] = useState(false);
   /** Section Y offsets inside scroll content (for lifecycle navigator). */
@@ -1381,12 +1461,19 @@ export default function RentalScreen() {
   const [signatureName, setSignatureName] = useState('');
   const [agreementConsent, setAgreementConsent] = useState(false);
   const [proposalBusy, setProposalBusy] = useState(false);
+  const [proposalEditorPhase, setProposalEditorPhase] = useState<'pickup' | 'return' | 'both'>('both');
   const [chatPreview, setChatPreview] = useState<OfferThreadMessagePreview | null>(null);
   const [rentalNotes, setRentalNotes] = useState<RentalNoteRow[]>([]);
   const [ownerNoteDraft, setOwnerNoteDraft] = useState('');
   const [renterNoteDraft, setRenterNoteDraft] = useState('');
   const [addingOwnerNote, setAddingOwnerNote] = useState(false);
   const [beginHandoffBusy, setBeginHandoffBusy] = useState(false);
+  const [ownerArrivalBusy, setOwnerArrivalBusy] = useState(false);
+  const [renterArrivalBusy, setRenterArrivalBusy] = useState(false);
+  const [renterWizardHandoff, setRenterWizardHandoff] = useState({
+    renterPickupImHereAt: null as string | null,
+    renterApprovedPickupPhotosAt: null as string | null,
+  });
   const [addingRenterNote, setAddingRenterNote] = useState(false);
   const [ownerHandoffNotesExpanded, setOwnerHandoffNotesExpanded] = useState(false);
   const [renterHandoffNotesExpanded, setRenterHandoffNotesExpanded] = useState(false);
@@ -1406,6 +1493,30 @@ export default function RentalScreen() {
   const editingOwnerInstructionIdRef = useRef<string | null>(null);
   const refreshInFlightRef = useRef<Promise<void> | null>(null);
   const refreshQueuedRef = useRef(false);
+  const previousLivePhaseRef = useRef<LivePresencePhase | null>(null);
+  const pickupAckRef = useRef({ owner: false, renter: false });
+  const renterWizardHandoffRef = useRef({
+    renterPickupImHereAt: null as string | null,
+    renterApprovedPickupPhotosAt: null as string | null,
+  });
+  const rentalRowRef = useRef<RentalRow | null>(null);
+  const meRef = useRef<string | null>(null);
+  meRef.current = me ?? null;
+  const pendingOwnerLivePatchQueueRef = useRef<QueuedOwnerWorkspaceLivePatch[]>([]);
+  const lastUnifiedHydrationKeyRef = useRef<string | null>(null);
+  const meetupSchedulingMetaRef = useRef<Record<string, unknown>>({});
+  const pickupHandoffCompleteEarlyRef = useRef(false);
+  const previousPickupCoordStatusRef = useRef<string | null>(null);
+  const previousReturnCoordStatusRef = useRef<string | null>(null);
+  /** Bumped on each meetup coordination live patch so derived lanes recompute. */
+  const [coordinationLiveRevision, setCoordinationLiveRevision] = useState(0);
+  const coordinationLiveRevisionRef = useRef(0);
+  const coordinationFreshnessRef = useRef<CoordinationFreshnessMeta>({
+    proposal_version: 0,
+    proposal_updated_at: null,
+    coordination_revision: 0,
+    source: 'fetch_refresh',
+  });
   const proposalEditorRef = useRef<RentalDetailsCardHandle | null>(null);
   const workflowViewKeyRef = useRef<string>('');
   const offersFromStore = useOffersStore((s) => s.offers);
@@ -1508,13 +1619,25 @@ export default function RentalScreen() {
     return () => clearTimeout(t);
   }, [ownerInstructionsAddedVisible]);
 
-  const pickupHandoffCompleteEarly = useMemo(() => {
-    if (!rental) return false;
-    return isPickupHandoffBilaterallyComplete({
-      pickupAck,
-      signedAt: rental.signed_at ?? null,
-    });
-  }, [rental, pickupAck]);
+  const rentalActivationEarly = useMemo(() => {
+    if (!rental || !me) return null;
+    return resolveRentalActivationState(
+      buildPickupHandoffCompletionInputFromWorkspace({
+        rental,
+        pickupAck,
+        verificationRows,
+        renterPickupImHereAt: renterWizardHandoff.renterPickupImHereAt,
+        renterApprovedPickupPhotosAt: renterWizardHandoff.renterApprovedPickupPhotosAt,
+        renterPickupViewFlags,
+      })
+    );
+  }, [me, rental, pickupAck, verificationRows, renterWizardHandoff, renterPickupViewFlags]);
+
+  const pickupHandoffCompleteEarly = rentalActivationEarly?.rentalActivated ?? false;
+  const physicalPossessionConfirmedEarly =
+    rentalActivationEarly?.physical.physicalPossessionConfirmed ?? false;
+
+  pickupHandoffCompleteEarlyRef.current = pickupHandoffCompleteEarly;
 
   const pickupHydrateAsRenter = useMemo(() => {
     if (!me || !rental) return false;
@@ -1551,6 +1674,12 @@ export default function RentalScreen() {
         .single();
       if (cancelled || rentalData == null) return;
       const r = rentalData as RentalRow;
+      coordinationFreshnessRef.current = extractCoordinationFreshnessMeta(r, {
+        source: 'fetch_refresh',
+        coordination_revision: 0,
+      });
+      coordinationLiveRevisionRef.current = 0;
+      setCoordinationLiveRevision(0);
       setRental(r);
     };
     void load();
@@ -1646,35 +1775,100 @@ export default function RentalScreen() {
     void fetchRequest();
   }, [rental?.request_id, supabase]);
 
-  const refreshVerificationState = useCallback(async () => {
+  const refreshContractHydration = useCallback(async () => {
+    if (!rental?.id) {
+      setContractHydration(null);
+      return null;
+    }
+    setContractHydrationLoading(true);
+    try {
+      const hydration = await fetchRentalContractHydration(supabase, {
+        id: rental.id,
+        offer_id: rental.offer_id,
+        request_id: rental.request_id,
+        rental_request_id: rental.rental_request_id,
+      });
+      setContractHydration(hydration);
+      logRentalOwnerContractHydration(hydration);
+      return hydration;
+    } finally {
+      setContractHydrationLoading(false);
+    }
+  }, [rental?.id, rental?.offer_id, rental?.request_id, rental?.rental_request_id, supabase]);
+
+  useEffect(() => {
+    void refreshContractHydration();
+  }, [refreshContractHydration]);
+
+  const meetupSchedulingMeta = useMemo(() => {
+    const hydrated = contractHydration?.schedulingMeta ?? {};
+    const base =
+      request && typeof request === 'object' ? (request as Record<string, unknown>) : {};
+    return { ...base, ...hydrated };
+  }, [request, contractHydration?.schedulingMeta]);
+
+  meetupSchedulingMetaRef.current = meetupSchedulingMeta;
+
+  const meetupScheduleHints = useMemo(
+    () => ({
+      rentalStartDate: contractHydration?.scheduleHints.rentalStartDate ?? null,
+      rentalEndDate: contractHydration?.scheduleHints.rentalEndDate ?? null,
+    }),
+    [contractHydration?.scheduleHints.rentalEndDate, contractHydration?.scheduleHints.rentalStartDate]
+  );
+
+  const refreshVerificationState = useCallback(async (options?: { fetchRental?: boolean }) => {
     if (refreshInFlightRef.current) {
       refreshQueuedRef.current = true;
       return refreshInFlightRef.current;
     }
+    const fetchRental = options?.fetchRental !== false;
     const run = async () => {
-      if (__DEV__) console.log('[verification refresh] start');
+      if (__DEV__) console.log('[verification refresh] start', { fetchRental });
       if (!rentalId || !me) return;
-      const { data: rentalData } = await supabase.from('rentals').select('*').eq('id', rentalId).single();
-      if (!rentalData) return;
-      const freshRental = { ...(rentalData as RentalRow) };
-      setRental(freshRental);
+      let freshRental = rentalRowRef.current;
+      if (fetchRental) {
+        const { data: rentalData } = await supabase.from('rentals').select('*').eq('id', rentalId).single();
+        if (!rentalData) return;
+        freshRental = { ...(rentalData as RentalRow) };
+        let bumpRevisionTo = coordinationLiveRevisionRef.current;
+        setRental((prev) => {
+          const result = mergeRentalWithCoordinationFreshness({
+            incoming: freshRental as RentalRow,
+            baseline: prev,
+            incomingSource: 'fetch_refresh',
+            baselineMeta: coordinationFreshnessRef.current,
+            coordinationRevision: coordinationLiveRevisionRef.current,
+            surface: 'owner_workspace',
+          });
+          coordinationFreshnessRef.current = result.meta;
+          if (result.shouldBumpRevision) {
+            bumpRevisionTo = result.meta.coordination_revision;
+          }
+          return result.merged as RentalRow;
+        });
+        if (bumpRevisionTo !== coordinationLiveRevisionRef.current) {
+          coordinationLiveRevisionRef.current = bumpRevisionTo;
+          setCoordinationLiveRevision(bumpRevisionTo);
+        }
+      }
 
       const ownerConfirmedRow =
-        typeof freshRental.owner_confirmed === 'boolean'
+        freshRental && typeof freshRental.owner_confirmed === 'boolean'
           ? freshRental.owner_confirmed
-          : typeof freshRental.confirmed_by_owner === 'boolean'
+          : freshRental && typeof freshRental.confirmed_by_owner === 'boolean'
             ? freshRental.confirmed_by_owner
             : false;
       const renterConfirmedRow =
-        typeof freshRental.renter_confirmed === 'boolean'
+        freshRental && typeof freshRental.renter_confirmed === 'boolean'
           ? freshRental.renter_confirmed
-          : typeof freshRental.confirmed_by_renter === 'boolean'
+          : freshRental && typeof freshRental.confirmed_by_renter === 'boolean'
             ? freshRental.confirmed_by_renter
             : false;
       const agr =
-        freshRental.agreement_status === 'confirmed'
+        freshRental?.agreement_status === 'confirmed'
           ? true
-          : freshRental.agreement_status === 'pending'
+          : freshRental?.agreement_status === 'pending'
             ? false
             : ownerConfirmedRow && renterConfirmedRow;
 
@@ -1732,6 +1926,32 @@ export default function RentalScreen() {
       const mergedPickup = mergeOfferEvidenceIntoPickupRows(pickupPhotos, offerForRental);
       setPickupEvidenceDisplay([...mergedPickup]);
       setReturnEvidenceDisplay([...returnPhotos]);
+      if (freshRental?.renter_user_id) {
+        const wiz = await fetchRenterWizardHandoffProgress(
+          supabase,
+          rentalId,
+          freshRental.renter_user_id
+        );
+        setRenterWizardHandoff(wiz);
+        const refreshedPresence = resolvePickupHandoffPresenceState({
+          rental: freshRental,
+          renterPickupImHereAt: wiz.renterPickupImHereAt,
+          renterApprovedPickupPhotosAt: wiz.renterApprovedPickupPhotosAt,
+          pickupAck: pAck,
+          ownerPickupPrepComplete:
+            freshRental.owner_pickup_ready === true ||
+            freshRental.handoff_approved_by_owner === true,
+          handoffApprovalStarted: Boolean(
+            freshRental.handoff_approval_started_at?.trim() ||
+              freshRental.handoff_approved_by_owner
+          ),
+        });
+        logPickupHandoffPresence(rentalId, {
+          presence: refreshedPresence,
+          triggeredBy: 'verification_refresh',
+        });
+        previousLivePhaseRef.current = refreshedPresence.livePresencePhase;
+      }
       if (__DEV__) {
         console.log('[verification refresh applied]', freshRows.length, pickupPhotos.length + returnPhotos.length, Date.now());
       }
@@ -1749,6 +1969,572 @@ export default function RentalScreen() {
   }, [me, rentalId, supabase, offerForRental]);
 
   useRegisterRentalDevContext(rentalId, refreshVerificationState);
+
+  pickupAckRef.current = pickupAck;
+  renterWizardHandoffRef.current = renterWizardHandoff;
+  rentalRowRef.current = rental;
+
+  const logOwnerWorkspaceSubscriptionState = useCallback(
+    (event: string, extra?: Record<string, unknown>) => {
+      if (typeof __DEV__ === 'undefined' || !__DEV__) return;
+      const id = rentalId.trim();
+      console.log('[owner-workspace-subscription-state]', {
+        event,
+        mounted: true,
+        rentalId: id,
+        viewerUserId: me ?? null,
+        hasRealtimeSubscription: id ? isRentalRealtimeSubscriptionActive(id, 'owner_workspace') : false,
+        hasLivePatchHandler: true,
+        rentalRowRefRentalId: rentalRowRef.current?.id ?? null,
+        rentalStateId: rental?.id ?? null,
+        rentalIdParamMatchesRow:
+          Boolean(id && rentalRowRef.current?.id) && id === rentalRowRef.current?.id,
+        subscriptionFilter: id ? `id=eq.${id}` : null,
+        activeSubscriptions: listActiveRentalRealtimeSubscriptions().map((s) => ({
+          rentalId: s.rentalId,
+          source: s.source,
+          channelName: s.channelName,
+        })),
+        ...extra,
+      });
+    },
+    [me, rental?.id, rentalId]
+  );
+
+  const ownerWorkspaceMountedRef = useRef(false);
+  useEffect(() => {
+    ownerWorkspaceMountedRef.current = true;
+    logOwnerWorkspaceSubscriptionState('screen_mounted');
+    return () => {
+      ownerWorkspaceMountedRef.current = false;
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.log('[owner-workspace-subscription-state]', {
+          event: 'screen_unmounted',
+          mounted: false,
+          rentalId: rentalId.trim(),
+          viewerUserId: me ?? null,
+        });
+      }
+    };
+  }, [logOwnerWorkspaceSubscriptionState, me, rentalId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      logOwnerWorkspaceSubscriptionState('screen_focused');
+      return () => {
+        logOwnerWorkspaceSubscriptionState('screen_blurred');
+      };
+    }, [logOwnerWorkspaceSubscriptionState])
+  );
+
+  useEffect(() => {
+    logOwnerWorkspaceSubscriptionState('deps_changed', {
+      coordinationLiveRevision,
+      rentalLoaded: Boolean(rental),
+    });
+  }, [coordinationLiveRevision, logOwnerWorkspaceSubscriptionState, rental, rentalId, me]);
+
+  const applyOwnerWorkspaceLivePatch = useCallback(
+    (
+      live: RentalsLiveUpdateResult,
+      meta: PickupHandoffPresenceRealtimeMeta,
+      hydrationSource: OwnerWorkspaceHydrationSource
+    ) => {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        console.log('[owner-workspace-realtime-patch]', {
+          hydrationSource,
+          triggerSource: meta.triggerSource,
+          coordinationChanged: live.coordinationChanged,
+          coordinationChangedFields: live.coordinationChangedFields,
+          patchHasCoordinationFields: patchContainsMeetupCoordinationFields(live.patch),
+          patchKeys: Object.keys(live.patch),
+          rentalRowRefRentalId: rentalRowRef.current?.id ?? null,
+        });
+      }
+
+      setRental((prev) => {
+        const meNow = meRef.current;
+        logOwnerWorkspaceRealtimePipeline('set_state_updater_enter', {
+          hydrationSource,
+          triggerSource: meta.triggerSource,
+          hasPrev: Boolean(prev),
+          prevRentalId: prev?.id ?? null,
+          rentalRowRefRentalId: rentalRowRef.current?.id ?? null,
+          me: meNow,
+        });
+
+        if (!prev) {
+          pendingOwnerLivePatchQueueRef.current.push({ live, meta, hydrationSource });
+          logOwnerWorkspaceRealtimePipeline('set_state_prev_null_queued', {
+            hydrationSource,
+            queueLength: pendingOwnerLivePatchQueueRef.current.length,
+            triggerSource: meta.triggerSource,
+          });
+          return prev;
+        }
+
+        const viewerRole: 'owner' | 'renter' =
+          meNow === prev.owner_user_id ? 'owner' : 'renter';
+        const prevCoord = snapshotMeetupCoordinationStatuses({
+          rental: prev,
+          viewerUserId: meNow,
+          requestSchedulingMeta: meetupSchedulingMetaRef.current,
+          pickupHandoffComplete: pickupHandoffCompleteEarlyRef.current,
+          presentationSurface: 'owner_workspace',
+        });
+        const shouldMergeCoordination =
+          live.coordinationChanged || patchContainsMeetupCoordinationFields(live.patch);
+        const previousCoordinationDigest = coordinationFieldDigest(
+          prev as Record<string, unknown>
+        );
+        const patchCoordinationDigest = coordinationFieldDigest(live.patch as Record<string, unknown>);
+        const incomingShell = { ...prev, ...live.patch } as RentalRow;
+        const incomingCoordinationDigest = coordinationFieldDigest(
+          incomingShell as Record<string, unknown>
+        );
+
+        let next = incomingShell;
+        let bumpRevisionTo = coordinationLiveRevisionRef.current;
+        let keepBaselineCoordination: boolean | null = null;
+        let mergeAcceptanceReason: string | null = null;
+        let shouldBumpRevision = false;
+
+        if (shouldMergeCoordination && hydrationSource === 'unified_store') {
+          if (!meetupCoordinationFieldsDiffer(prev, incomingShell)) {
+            mergeAcceptanceReason = 'unified_store_no_coordination_delta';
+            keepBaselineCoordination = true;
+            next = prev;
+            logOwnerWorkspaceRealtimePipeline('set_state_merge', {
+              hydrationSource,
+              path: 'unified_store_forced',
+              skipped: true,
+              reason: mergeAcceptanceReason,
+            });
+          } else {
+            const coordinationSnapshot = meetupCoordinationPatchFromRow(
+              incomingShell as Record<string, unknown>
+            );
+            next = { ...prev, ...coordinationSnapshot } as RentalRow;
+            mergeAcceptanceReason = 'unified_store_forced_commit';
+            keepBaselineCoordination = false;
+            shouldBumpRevision = true;
+            const nextRevision = Math.max(coordinationLiveRevisionRef.current + 1, 1);
+            bumpRevisionTo = nextRevision;
+            coordinationFreshnessRef.current = extractCoordinationFreshnessMeta(
+              next as Record<string, unknown>,
+              {
+                source: 'realtime_patch',
+                coordination_revision: nextRevision,
+              }
+            );
+            logOwnerWorkspaceRealtimePipeline('set_state_merge', {
+              hydrationSource,
+              path: 'unified_store_forced',
+              skipped: false,
+              acceptanceReason: mergeAcceptanceReason,
+              proposalVersionBefore: prev.proposal_version ?? null,
+              proposalVersionAfter: next.proposal_version ?? null,
+            });
+          }
+        } else if (shouldMergeCoordination) {
+          const mergeResult = mergeRentalRowFromRealtimeCoordinationPatch({
+            baseline: prev,
+            patch: live.patch,
+            baselineMeta: coordinationFreshnessRef.current,
+            coordinationRevision: coordinationLiveRevisionRef.current,
+            surface: 'owner_workspace',
+          });
+          next = mergeResult.merged as RentalRow;
+          mergeAcceptanceReason = mergeResult.acceptanceReason;
+          keepBaselineCoordination =
+            mergeResult.acceptanceReason.includes('keep') ||
+            mergeResult.acceptanceReason.includes('blocked');
+          coordinationFreshnessRef.current = mergeResult.meta;
+          shouldBumpRevision = mergeResult.shouldBumpRevision;
+          logOwnerWorkspaceRealtimePipeline('set_state_merge', {
+            hydrationSource,
+            path: 'freshness_merge',
+            shouldBumpRevision: mergeResult.shouldBumpRevision,
+            acceptanceReason: mergeResult.acceptanceReason,
+            coordinationChanged: mergeResult.coordinationChanged,
+            proposalVersionBefore: prev.proposal_version ?? null,
+            proposalVersionAfter: next.proposal_version ?? null,
+          });
+          if (mergeResult.shouldBumpRevision) {
+            bumpRevisionTo = mergeResult.meta.coordination_revision;
+          } else if (
+            !mergeResult.acceptanceReason.includes('no_coordination') &&
+            meetupCoordinationFieldsDiffer(prev, next)
+          ) {
+            bumpRevisionTo = Math.max(bumpRevisionTo + 1, mergeResult.meta.coordination_revision);
+            shouldBumpRevision = true;
+          }
+        }
+        if (bumpRevisionTo !== coordinationLiveRevisionRef.current) {
+          coordinationLiveRevisionRef.current = bumpRevisionTo;
+          queueMicrotask(() => setCoordinationLiveRevision(bumpRevisionTo));
+        }
+        const nextCoord = snapshotMeetupCoordinationStatuses({
+          rental: next,
+          viewerUserId: meNow,
+          requestSchedulingMeta: meetupSchedulingMetaRef.current,
+          pickupHandoffComplete: pickupHandoffCompleteEarlyRef.current,
+          presentationSurface: 'owner_workspace',
+        });
+
+        const returnedSameReference = next === prev;
+        const rowFieldsChanged = meetupCoordinationFieldsDiffer(prev, next);
+        const finalCommittedDigest = coordinationFieldDigest(next as Record<string, unknown>);
+        const commitDecision = resolveOwnerWorkspaceCommitDecision({
+          hasPrev: true,
+          returnedSameReference,
+          rowFieldsChanged,
+          keepBaselineCoordination,
+          mergeAcceptanceReason,
+          hydrationSource,
+          previousDigest: previousCoordinationDigest,
+          incomingDigest: incomingCoordinationDigest,
+          finalDigest: finalCommittedDigest,
+        });
+
+        if (
+          hydrationSource === 'unified_store' &&
+          rowFieldsChanged &&
+          !returnedSameReference
+        ) {
+          lastUnifiedHydrationKeyRef.current = buildCoordinationHydrationKey(
+            next as Record<string, unknown>
+          );
+        } else if (
+          hydrationSource === 'unified_store' &&
+          (!rowFieldsChanged || returnedSameReference)
+        ) {
+          logOwnerWorkspaceRealtimePipeline('unified_store_skip', {
+            reason: 'commit_did_not_apply_coordination_delta',
+            mergeAcceptanceReason,
+            returnedSameReference,
+            rowFieldsChanged,
+            previousCoordinationDigest,
+            incomingCoordinationDigest,
+            finalCommittedDigest,
+          });
+        }
+
+        logOwnerWorkspaceHydrationCommit({
+          hydrationSource,
+          triggerSource: meta.triggerSource,
+          previousCoordinationDigest,
+          incomingCoordinationDigest,
+          patchCoordinationDigest,
+          finalCommittedDigest,
+          returnedSameReference,
+          rowFieldsChanged,
+          keepBaselineCoordination,
+          mergeAcceptanceReason,
+          commitDecision,
+          proposalVersionBefore: prev.proposal_version ?? null,
+          proposalVersionAfter: next.proposal_version ?? null,
+          shouldBumpRevision,
+          bumpRevisionTo,
+        });
+
+        logOwnerWorkspaceRealtimePipeline('set_state_commit', {
+          hydrationSource,
+          returnedSameReference,
+          rowFieldsChanged,
+          keepBaselineCoordination,
+          mergeAcceptanceReason,
+          shouldMergeCoordination,
+          bumpRevisionTo,
+          commitReturnValue: commitDecision.returnValue,
+          commitReason: commitDecision.reason,
+          prevPickupStatus: prevCoord.pickupStatus,
+          nextPickupStatus: nextCoord.pickupStatus,
+          digestsEqual: previousCoordinationDigest === finalCommittedDigest,
+        });
+
+        if (returnedSameReference && rowFieldsChanged) {
+          logOwnerWorkspaceRealtimePipeline('set_state_skipped_same_row', {
+            hydrationSource,
+            note: 'unexpected_same_reference_with_field_delta',
+          });
+        }
+
+        if (commitDecision.returnValue === 'prev' && !returnedSameReference) {
+          logOwnerWorkspaceRealtimePipeline('set_state_skipped_same_row', {
+            hydrationSource,
+            note: 'commit_decision_prev_but_new_reference',
+            commitReason: commitDecision.reason,
+          });
+        }
+
+        if (shouldMergeCoordination && typeof __DEV__ !== 'undefined' && __DEV__) {
+          console.log('[coordination-freshness-acceptance-lanes]', {
+            surface: 'owner_workspace',
+            triggerSource: meta.triggerSource,
+            hydrationSource,
+            prevPickupStatus: prevCoord.pickupStatus,
+            nextPickupStatus: nextCoord.pickupStatus,
+            prevReturnStatus: prevCoord.returnStatus,
+            nextReturnStatus: nextCoord.returnStatus,
+          });
+        }
+
+        if (live.coordinationChanged || shouldMergeCoordination) {
+          logMeetupCoordinationWorkspacePatch({
+            rentalId: prev.id,
+            triggerSource: meta.triggerSource,
+            changedFields: live.coordinationChangedFields,
+            before: prev as Record<string, unknown>,
+            after: next as Record<string, unknown>,
+            derivedPickupStatus: nextCoord.pickupStatus,
+            derivedReturnStatus: nextCoord.returnStatus,
+            pendingPhase: recomputeCanonicalMeetupCoordination({
+              rental: next as RentalMeetupRow,
+              viewerUserId: meNow,
+              viewerRole: meNow === prev.owner_user_id ? 'owner' : 'renter',
+              presentationSurface: 'owner_workspace',
+              requestSchedulingMeta: meetupSchedulingMetaRef.current,
+              pickupHandoffComplete: pickupHandoffCompleteEarlyRef.current,
+              previousRevision: coordinationLiveRevision,
+              bumpRevision: false,
+            }).pendingPhase,
+          });
+          const previousReturnStatus =
+            (previousReturnCoordStatusRef.current as typeof nextCoord.returnStatus) ??
+            prevCoord.returnStatus;
+          logPickupCoordinationLive({
+            rentalId: prev.id,
+            triggerSource: meta.triggerSource,
+            triggeredBy: String(next.last_proposed_by ?? live.patch.last_proposed_by ?? ''),
+            changedFields: live.coordinationChangedFields,
+            previousPickupStatus:
+              (previousPickupCoordStatusRef.current as typeof nextCoord.pickupStatus) ??
+              prevCoord.pickupStatus,
+            nextPickupStatus: nextCoord.pickupStatus,
+            previousReturnStatus,
+            nextReturnStatus: nextCoord.returnStatus,
+            latencyMs: Date.now() - meta.receivedAt,
+            surface: 'owner_workspace',
+          });
+          logPickupCoordinationLiveReturn({
+            rentalId: prev.id,
+            triggerSource: meta.triggerSource,
+            triggeredBy: String(next.last_proposed_by ?? live.patch.last_proposed_by ?? ''),
+            changedFields: live.coordinationChangedFields,
+            latencyMs: Date.now() - meta.receivedAt,
+            surface: 'owner_workspace',
+            diagnostics: buildReturnCoordinationLiveDiagnostics({
+              rental: next,
+              viewerUserId: meNow,
+              requestSchedulingMeta: meetupSchedulingMetaRef.current,
+              pickupHandoffComplete: pickupHandoffCompleteEarlyRef.current,
+              previousReturnStatus,
+            }),
+          });
+          previousPickupCoordStatusRef.current = nextCoord.pickupStatus;
+          previousReturnCoordStatusRef.current = nextCoord.returnStatus;
+        }
+
+        if (live.presenceChanged) {
+          const prevPresence = resolvePickupHandoffPresenceState({
+            rental: prev,
+            renterPickupImHereAt: renterWizardHandoffRef.current.renterPickupImHereAt,
+            renterApprovedPickupPhotosAt:
+              renterWizardHandoffRef.current.renterApprovedPickupPhotosAt,
+            pickupAck: pickupAckRef.current,
+            ownerPickupPrepComplete:
+              prev.owner_pickup_ready === true || prev.handoff_approved_by_owner === true,
+            handoffApprovalStarted: Boolean(
+              prev.handoff_approval_started_at?.trim() || prev.handoff_approved_by_owner
+            ),
+            viewerRole,
+          });
+          const nextPresence = resolvePickupHandoffPresenceState({
+            rental: next,
+            renterPickupImHereAt:
+              typeof live.patch.renter_arrived_at === 'string'
+                ? live.patch.renter_arrived_at
+                : renterWizardHandoffRef.current.renterPickupImHereAt,
+            renterApprovedPickupPhotosAt:
+              renterWizardHandoffRef.current.renterApprovedPickupPhotosAt,
+            pickupAck: pickupAckRef.current,
+            ownerPickupPrepComplete:
+              next.owner_pickup_ready === true || next.handoff_approved_by_owner === true,
+            handoffApprovalStarted: Boolean(
+              next.handoff_approval_started_at?.trim() || next.handoff_approved_by_owner
+            ),
+            viewerRole,
+          });
+          logPickupHandoffLive({
+            rentalId: prev.id,
+            triggerSource: meta.triggerSource,
+            rerenderedSurface: 'owner_workspace',
+            ownerArrived: nextPresence.ownerArrived,
+            renterArrived: nextPresence.renterArrived,
+            bothPresent: nextPresence.bothPresent,
+            previousPresenceState:
+              previousLivePhaseRef.current ?? prevPresence.livePresencePhase,
+            nextPresenceState: nextPresence.livePresencePhase,
+            latencyMs: Date.now() - meta.receivedAt,
+          });
+          previousLivePhaseRef.current = nextPresence.livePresencePhase;
+        }
+
+        return commitDecision.returnValue === 'prev' ? prev : next;
+      });
+
+      if (typeof live.patch.renter_arrived_at === 'string') {
+        setRenterWizardHandoff((w) => ({
+          ...w,
+          renterPickupImHereAt: live.patch.renter_arrived_at ?? w.renterPickupImHereAt,
+        }));
+      }
+    },
+    [coordinationLiveRevision]
+  );
+
+  useEffect(() => {
+    if (!rental?.id) return;
+    const queued = pendingOwnerLivePatchQueueRef.current.splice(0);
+    if (queued.length === 0) return;
+    logOwnerWorkspaceRealtimePipeline('queued_patch_flush', {
+      rentalId: rental.id,
+      count: queued.length,
+      items: queued.map((item) => ({
+        hydrationSource: item.hydrationSource,
+        triggerSource: item.meta.triggerSource,
+        patchDigest: coordinationFieldDigest(item.live.patch as Record<string, unknown>),
+        currentDigest: coordinationFieldDigest(rental as Record<string, unknown>),
+      })),
+    });
+    for (const item of queued) {
+      applyOwnerWorkspaceLivePatch(item.live, item.meta, item.hydrationSource);
+    }
+  }, [applyOwnerWorkspaceLivePatch, rental?.id, rental]);
+
+  const unifiedRentalsRows = useUnifiedRentalsActivityStore((s) => s.rows);
+
+  useEffect(() => {
+    const id = rentalId.trim();
+    if (!id || !rental) return;
+    const unified = unifiedRentalsRows.find((r) => r.id === id);
+    if (!unified) {
+      logOwnerWorkspaceRealtimePipeline('unified_store_skip', {
+        reason: 'row_not_in_unified_store',
+        rentalId: id,
+      });
+      return;
+    }
+    const decision = shouldHydrateOwnerWorkspaceFromUnifiedRow(
+      rental as Record<string, unknown>,
+      unified as Record<string, unknown>
+    );
+    logOwnerWorkspaceRealtimePipeline('unified_store_candidate', {
+      rentalId: id,
+      apply: decision.apply,
+      reason: decision.reason,
+      currentProposalVersion: rental.proposal_version ?? null,
+      unifiedProposalVersion: unified.proposal_version ?? null,
+      currentLastProposedBy: rental.last_proposed_by ?? null,
+      unifiedLastProposedBy: unified.last_proposed_by ?? null,
+    });
+    if (!decision.apply) return;
+
+    const unifiedRow = unified as Record<string, unknown>;
+    const hydrationKey = buildCoordinationHydrationKey(unifiedRow);
+    if (lastUnifiedHydrationKeyRef.current === hydrationKey) {
+      logOwnerWorkspaceRealtimePipeline('unified_store_skip', {
+        reason: 'hydration_key_already_committed',
+        hydrationKey,
+      });
+      return;
+    }
+
+    const live = buildLiveUpdateFromRentalRow(unifiedRow, ['unified_store_hydration']);
+    logOwnerWorkspaceRealtimePipeline('unified_store_apply', {
+      rentalId: id,
+      hydrationKey,
+      proposal_version: unified.proposal_version ?? null,
+      unifiedCoordinationDigest: coordinationFieldDigest(unifiedRow),
+      currentCoordinationDigest: coordinationFieldDigest(rental as Record<string, unknown>),
+    });
+    applyOwnerWorkspaceLivePatch(
+      live,
+      {
+        triggerSource: 'unified_store_hydration',
+        table: 'rentals',
+        receivedAt: Date.now(),
+      },
+      'unified_store'
+    );
+  }, [
+    applyOwnerWorkspaceLivePatch,
+    rental,
+    rentalId,
+    unifiedRentalsRows,
+  ]);
+
+  usePickupHandoffPresenceRealtime(rentalId, {
+    surface: 'owner_workspace',
+    viewerUserId: me,
+    ownerWorkspaceDevDiagnostics: true,
+    getCoordinationBaseline: () =>
+      rentalRowRef.current ? (rentalRowRef.current as Record<string, unknown>) : null,
+    onRentalRowLivePatch: (live: RentalsLiveUpdateResult, meta) => {
+      applyOwnerWorkspaceLivePatch(live, meta, 'realtime_patch');
+    },
+    onRenterWizardHandoffPatch: (patch, meta) => {
+      setRenterWizardHandoff((prev) => ({ ...prev, ...patch }));
+      const row = rentalRowRef.current;
+      if (!row || !me) return;
+      const viewerRole: 'owner' | 'renter' =
+        me === row.owner_user_id ? 'owner' : 'renter';
+      const prevPresence = resolvePickupHandoffPresenceState({
+        rental: row,
+        renterPickupImHereAt: renterWizardHandoffRef.current.renterPickupImHereAt,
+        renterApprovedPickupPhotosAt: renterWizardHandoffRef.current.renterApprovedPickupPhotosAt,
+        pickupAck: pickupAckRef.current,
+        ownerPickupPrepComplete:
+          row.owner_pickup_ready === true || row.handoff_approved_by_owner === true,
+        handoffApprovalStarted: Boolean(
+          row.handoff_approval_started_at?.trim() || row.handoff_approved_by_owner
+        ),
+        viewerRole,
+      });
+      const nextWiz = { ...renterWizardHandoffRef.current, ...patch };
+      const nextPresence = resolvePickupHandoffPresenceState({
+        rental: row,
+        renterPickupImHereAt: nextWiz.renterPickupImHereAt,
+        renterApprovedPickupPhotosAt: nextWiz.renterApprovedPickupPhotosAt,
+        pickupAck: pickupAckRef.current,
+        ownerPickupPrepComplete:
+          row.owner_pickup_ready === true || row.handoff_approved_by_owner === true,
+        handoffApprovalStarted: Boolean(
+          row.handoff_approval_started_at?.trim() || row.handoff_approved_by_owner
+        ),
+        viewerRole,
+      });
+      logPickupHandoffLive({
+        rentalId: row.id,
+        triggerSource: meta.triggerSource,
+        rerenderedSurface: 'rental_workspace',
+        ownerArrived: nextPresence.ownerArrived,
+        renterArrived: nextPresence.renterArrived,
+        bothPresent: nextPresence.bothPresent,
+        previousPresenceState: previousLivePhaseRef.current ?? prevPresence.livePresencePhase,
+        nextPresenceState: nextPresence.livePresencePhase,
+        latencyMs: Date.now() - meta.receivedAt,
+      });
+      previousLivePhaseRef.current = nextPresence.livePresencePhase;
+    },
+    onPresenceRefresh: () => {
+      void refreshVerificationState();
+    },
+    onDebouncedRefresh: () => {
+      void refreshVerificationState();
+    },
+  });
 
   useEffect(() => {
     if (!rental?.id || !me) return;
@@ -1785,16 +2571,6 @@ export default function RentalScreen() {
         async (payload) => {
           if (__DEV__) {
             console.log('[verification realtime]', 'rental_verification_photos', payload.eventType, payload.new);
-          }
-          await refreshVerificationState();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'rentals', filter: `id=eq.${currentRentalId}` },
-        async (payload) => {
-          if (__DEV__) {
-            console.log('[verification realtime]', 'rentals', payload.eventType, payload.new);
           }
           await refreshVerificationState();
         }
@@ -2006,19 +2782,25 @@ export default function RentalScreen() {
       meetupLocation: string;
       extensionNote?: string;
       isExtension?: boolean;
+      phase?: 'pickup' | 'return' | 'both';
     }): Promise<boolean> => {
       if (!rental || !me) return false;
+      const proposalPhase =
+        input.isExtension === true
+          ? 'extension'
+          : input.phase === 'pickup' || input.phase === 'return'
+            ? input.phase
+            : 'general';
       const isExtension =
         input.isExtension === true ||
         isReturnExtensionProposal({
-          baselinePickupIso: rental.agreed_pickup_datetime ?? resolveRentalPickupIso(rental),
-          baselineReturnIso: rental.agreed_return_datetime ?? resolveRentalReturnIso(rental),
           proposedPickupIso: input.meetupTimeIso,
           proposedReturnIso: input.returnTimeIso,
+          schedulingMeta: meetupSchedulingMeta,
         });
       const durationEval = evaluateMeetupProposalDurationWarning({
         rental,
-        requestSchedulingMeta: request,
+        requestSchedulingMeta: meetupSchedulingMeta,
         meetupTimeIso: input.meetupTimeIso,
         returnTimeIso: input.returnTimeIso,
         isExtension,
@@ -2027,15 +2809,9 @@ export default function RentalScreen() {
       if (durationEval.warningTriggered) {
         const continueProposal = await new Promise<boolean>((resolve) => {
           Alert.alert(
-            'Duration change',
-            [
-              'You are proposing a rental duration different from the original agreement.',
-              '',
-              `Original duration: ${durationEval.originalLabel ?? '—'}`,
-              `Proposed duration: ${durationEval.proposedLabel ?? '—'}`,
-              '',
-              'The other party must approve this change. Pricing and rental terms may change based on the updated duration.',
-            ].join('\n'),
+            durationEval.isExtensionRequest ? 'Extension request' : 'Outside rental dates',
+            durationEval.warningLine ??
+              'You are proposing times outside the agreed rental dates. The other party must approve this change.',
             [
               { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
               { text: 'Continue Proposal', onPress: () => resolve(true) },
@@ -2053,32 +2829,69 @@ export default function RentalScreen() {
           typeof rental.proposal_version === 'number' && Number.isFinite(rental.proposal_version)
             ? rental.proposal_version + 1
             : 2;
-        const hasCol = (k: string) => Object.prototype.hasOwnProperty.call(rental, k);
-        const payload: Record<string, unknown> = {
-          meetup_time: input.meetupTimeIso,
-          meetup_location: input.meetupLocation,
-          return_time: input.returnTimeIso,
-          return_location: input.meetupLocation,
-          confirmed_by_owner: iAmOwner ? true : false,
-          confirmed_by_renter: iAmRenter ? true : false,
-        };
-        if (hasCol('pickup_datetime')) payload.pickup_datetime = input.meetupTimeIso;
-        if (hasCol('return_datetime')) payload.return_datetime = input.returnTimeIso;
-        if (hasCol('owner_confirmed')) payload.owner_confirmed = iAmOwner ? true : false;
-        if (hasCol('renter_confirmed')) payload.renter_confirmed = iAmRenter ? true : false;
-        if (hasCol('agreement_status')) payload.agreement_status = 'pending';
-        if (hasCol('confirmed_at')) payload.confirmed_at = null;
-        if (hasCol('last_proposed_by')) payload.last_proposed_by = me;
-        if (hasCol('proposal_version')) payload.proposal_version = nextProposalVersion;
-        if (hasCol('proposal_updated_at')) payload.proposal_updated_at = nowIso;
-        if (hasCol('latest_proposal_message_id')) payload.latest_proposal_message_id = null;
-
-        const { error: updateError } = await supabase.from('rentals').update(payload).eq('id', rental.id);
-        if (updateError) {
+        const persistResult = await persistMeetupProposalRow(
+          supabase,
+          rental.id,
+          {
+            meetupTimeIso: input.meetupTimeIso,
+            returnTimeIso: input.returnTimeIso,
+            meetupLocation: input.meetupLocation,
+            returnLocation: input.meetupLocation,
+            viewerUserId: me,
+            ownerUserId: rental.owner_user_id,
+            renterUserId: rental.renter_user_id,
+            proposalVersion: nextProposalVersion,
+            nowIso,
+          },
+          {
+            phase: isExtension ? 'extension' : proposalPhase === 'pickup' || proposalPhase === 'return' ? proposalPhase : 'general',
+            source: 'rental_workspace_onProposeRentalDetails',
+            baseline: rental,
+          }
+        );
+        if (!persistResult.ok) {
           Alert.alert('Could not save proposal', 'Please try again.');
           return false;
         }
 
+        const optimisticPayload = buildMeetupProposalPersistPayload(
+          {
+            meetupTimeIso: input.meetupTimeIso,
+            returnTimeIso: input.returnTimeIso,
+            meetupLocation: input.meetupLocation,
+            returnLocation: input.meetupLocation,
+            viewerUserId: me,
+            ownerUserId: rental.owner_user_id,
+            renterUserId: rental.renter_user_id,
+            proposalVersion: nextProposalVersion,
+            nowIso,
+          },
+          {
+            phase: isExtension ? 'extension' : proposalPhase === 'pickup' || proposalPhase === 'return' ? proposalPhase : 'general',
+            baseline: rental,
+          }
+        );
+        let bumpRevisionTo = coordinationLiveRevisionRef.current;
+        setRental((prev) => {
+          if (!prev) return prev;
+          const mergeResult = mergeRentalWithCoordinationFreshness({
+            incoming: { ...prev, ...optimisticPayload } as RentalRow,
+            baseline: prev,
+            incomingSource: 'optimistic_local',
+            baselineMeta: coordinationFreshnessRef.current,
+            coordinationRevision: coordinationLiveRevisionRef.current,
+            surface: 'owner_workspace',
+          });
+          coordinationFreshnessRef.current = mergeResult.meta;
+          if (mergeResult.shouldBumpRevision) {
+            bumpRevisionTo = mergeResult.meta.coordination_revision;
+          }
+          return mergeResult.merged as RentalRow;
+        });
+        coordinationLiveRevisionRef.current = bumpRevisionTo;
+        setCoordinationLiveRevision(bumpRevisionTo);
+
+        const hasCol = (k: string) => Object.prototype.hasOwnProperty.call(rental, k);
         const receiverId = iAmOwner ? rental.renter_user_id : rental.owner_user_id;
         const requestRowId =
           rental.request_id != null && isUuidString(String(rental.request_id)) ? String(rental.request_id) : null;
@@ -2097,25 +2910,50 @@ export default function RentalScreen() {
             durationWarningLine: isExtension ? null : durationEval.warningLine,
             isExtension,
             extensionNote: input.extensionNote,
+            proposerUserId: me,
+            proposalPhase: isExtension
+              ? 'extension'
+              : proposalPhase === 'pickup' || proposalPhase === 'return'
+                ? proposalPhase
+                : 'general',
           });
           if (!messageId) {
             Alert.alert('Could not post proposal', 'Chat proposal message could not be created.');
             return false;
           }
+          const timelineEvent =
+            isExtension
+              ? 'extension_requested'
+              : proposalPhase === 'return'
+                ? 'return_proposed'
+                : 'pickup_proposed';
+          void insertMeetupCoordinationTimelineForRental({
+            rental,
+            authorId: me,
+            event: timelineEvent,
+            pickupIso: input.meetupTimeIso,
+            returnIso: input.returnTimeIso,
+            location: input.meetupLocation,
+            note: input.extensionNote,
+          });
           insertServerNotificationToRecipient({
             actorId: me,
             recipientUserId: receiverId,
             type: 'message',
             title: isExtension
               ? `${getProfileNameForUserId(me)} requested a rental extension`
-              : durationEval.warningTriggered
-                ? `${getProfileNameForUserId(me)} proposed updated meetup times with a changed rental duration`
-                : `${getProfileNameForUserId(me)} proposed a pickup time`,
+              : proposalPhase === 'return'
+                ? `${getProfileNameForUserId(me)} proposed return details`
+                : durationEval.warningTriggered
+                  ? `${getProfileNameForUserId(me)} proposed updated meetup times with a changed rental duration`
+                  : `${getProfileNameForUserId(me)} proposed pickup details`,
             body: isExtension
               ? 'Review the new return date and approve or decline in Messages.'
               : String(request?.title ?? '').trim()
-                ? `New meetup proposal for ${String(request?.title).trim()}`
-                : 'A meetup time was proposed.',
+                ? `${proposalPhase === 'return' ? 'Return' : 'Pickup'} proposal for ${String(request?.title).trim()}`
+                : proposalPhase === 'return'
+                  ? 'Return details were proposed.'
+                  : 'Pickup details were proposed.',
             offerId,
             requestId: requestRowId,
             rentalId: rental.id,
@@ -2124,8 +2962,11 @@ export default function RentalScreen() {
 
         if (messageId && Object.prototype.hasOwnProperty.call(rental, 'latest_proposal_message_id')) {
           await supabase.from('rentals').update({ latest_proposal_message_id: messageId }).eq('id', rental.id);
+          setRental((prev) =>
+            prev ? ({ ...prev, latest_proposal_message_id: messageId } as RentalRow) : prev
+          );
         }
-        await refreshVerificationState();
+        await refreshVerificationState({ fetchRental: false });
         return true;
       } finally {
         setProposalBusy(false);
@@ -2187,9 +3028,22 @@ export default function RentalScreen() {
     }
   }, [me, refreshVerificationState, rental, request, supabase]);
 
-  const openMeetingProposalEditor = useCallback(() => {
-    proposalEditorRef.current?.openProposeModal();
-  }, []);
+  const openMeetingProposalEditor = useCallback(
+    async (phase: 'pickup' | 'return' | 'both' = 'both') => {
+      const hydration = await refreshContractHydration();
+      if (!hydration?.hydratedContractualWindow) {
+        showFeedbackToast(
+          contractHydrationLoading
+            ? 'Loading rental dates…'
+            : 'Could not load the agreed rental dates. Try again shortly.'
+        );
+        return;
+      }
+      setProposalEditorPhase(phase);
+      proposalEditorRef.current?.openProposeModal(phase);
+    },
+    [contractHydrationLoading, refreshContractHydration]
+  );
 
   useEffect(() => {
     if (!rental) return;
@@ -2217,16 +3071,19 @@ export default function RentalScreen() {
             : 'pending';
     const proposalActorNow = String(rental.last_proposed_by ?? '').trim();
     const hasPendingNow = agreementNow === 'pending' && proposalActorNow.length > 0;
-    const meetingCompletedNow = agreementNow === 'confirmed' && !hasPendingNow;
+    const meetupCoordinationCompleteNow = isMeetupCoordinationCompleteFromRow(rental);
     const statusNow = String(rental.status ?? 'pending').trim().toLowerCase();
-    const returnEnabledNow = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
-      statusNow
-    );
+    const returnEnabledNow = isReturnWorkflowEnabledForWorkspace({
+      rentalStatus: statusNow,
+      pickupHandoffComplete: pickupHandoffCompleteEarly,
+    });
     const returnDoneNow = ['returned', 'completed', 'cancelled'].includes(statusNow);
     const lifecyclePhaseNow =
       DEV_TOOLS_ENABLED && devLifecycleOverride != null
         ? devLifecycleOverride
-        : deriveLifecyclePhaseFromRentalStatus(rental.status);
+        : deriveLifecyclePhaseFromRentalStatus(rental.status, {
+            pickupHandoffComplete: pickupHandoffCompleteEarly,
+          });
     const workflowKey = `${agreementNow}:${hasPendingNow ? 1 : 0}:${returnEnabledNow ? 1 : 0}:${returnDoneNow ? 1 : 0}:${returnEnabledNow ? lifecyclePhaseNow : 'pre'}`;
 
     if (workflowViewKeyRef.current === workflowKey) return;
@@ -2239,7 +3096,7 @@ export default function RentalScreen() {
       setReturnExpanded(false);
       return;
     }
-    if (!meetingCompletedNow) {
+    if (!meetupCoordinationCompleteNow) {
       setTermsExpanded(false);
       setMeetingExpanded(true);
       setPickupExpanded(false);
@@ -2265,7 +3122,7 @@ export default function RentalScreen() {
     } else {
       setReturnExpanded(false);
     }
-  }, [me, rental, request?.accepted_price, request?.acceptedPrice, devLifecycleOverride]);
+  }, [me, rental, request?.accepted_price, request?.acceptedPrice, devLifecycleOverride, pickupHandoffCompleteEarly]);
 
   const viewerRoleForHooks: 'owner' | 'renter' | null =
     me && rental
@@ -2397,10 +3254,12 @@ export default function RentalScreen() {
 
   useEffect(() => {
     if (!rentalId || !rental || !me) return;
-    const lifecyclePhaseNow = deriveLifecyclePhaseFromRentalStatus(String(rental.status ?? 'pending'));
     const pickupHandoffNow = isPickupHandoffBilaterallyComplete({
       pickupAck,
       signedAt: rental.signed_at ?? null,
+    });
+    const lifecyclePhaseNow = deriveLifecyclePhaseFromRentalStatus(String(rental.status ?? 'pending'), {
+      pickupHandoffComplete: pickupHandoffNow,
     });
     const returnHandoffNow = isReturnBilaterallyComplete(returnAck);
     const ownerConfirmedNow =
@@ -2421,16 +3280,19 @@ export default function RentalScreen() {
             : 'pending';
     const hasPendingNow =
       agreementNow === 'pending' && String(rental.last_proposed_by ?? '').trim().length > 0;
-    const meetingCompletedNow = agreementNow === 'confirmed' && !hasPendingNow;
-    const pickupIso =
-      rental.agreed_pickup_datetime ?? rental.pickup_datetime ?? rental.meetup_time ?? null;
-    const returnIso =
-      rental.agreed_return_datetime ?? rental.return_datetime ?? rental.return_time ?? null;
+    const meetupCoordinationCompleteNow = isMeetupCoordinationCompleteFromRow(rental);
+    const missedSchedule = resolveMeetupDisplaySchedule({
+      rental,
+      requestSchedulingMeta: meetupSchedulingMeta,
+      hasPendingProposal: hasPendingNow,
+    });
+    const pickupIso = missedSchedule.pickupIso;
+    const returnIso = missedSchedule.returnIso;
     const pickupOp = (rental.pickup_operational_state ?? null) as RentalOperationalState | null;
     const returnOp = (rental.return_operational_state ?? null) as RentalOperationalState | null;
 
     const flagPickup = shouldFlagPickupMissedConfirmation({
-      meetingCompleted: meetingCompletedNow,
+      meetupCoordinationComplete: meetupCoordinationCompleteNow,
       lifecyclePhase: lifecyclePhaseNow,
       pickupHandoffComplete: pickupHandoffNow,
       pickupIso,
@@ -2466,7 +3328,7 @@ export default function RentalScreen() {
     if (
       pickupOp === 'missed_confirmation' &&
       lifecyclePhaseNow === 'pickup' &&
-      meetingCompletedNow &&
+      meetupCoordinationCompleteNow &&
       !missedMeetupDismissedRef.current.pickup
     ) {
       setMissedMeetupSheet({ visible: true, phase: 'pickup' });
@@ -2477,7 +3339,7 @@ export default function RentalScreen() {
     ) {
       setMissedMeetupSheet({ visible: true, phase: 'return' });
     }
-  }, [rentalId, rental, me, pickupAck, returnAck, supabase]);
+  }, [rentalId, rental, me, pickupAck, returnAck, supabase, request]);
 
   const onCommandCenterScroll = useCallback(
     (e: { nativeEvent: { contentOffset: { y: number } } }) => {
@@ -2492,6 +3354,122 @@ export default function RentalScreen() {
     },
     []
   );
+
+  const meetupCoordination = useMemo(() => {
+    if (!rental || !me) return null;
+    const viewerRole: 'owner' | 'renter' =
+      me === rental.owner_user_id ? 'owner' : me === rental.renter_user_id ? 'renter' : 'renter';
+    return resolveCanonicalMeetupCoordinationState({
+      rental: rental as RentalMeetupRow,
+      viewerUserId: me,
+      viewerRole,
+      presentationSurface: 'owner_workspace',
+      requestSchedulingMeta: meetupSchedulingMeta,
+      pickupHandoffComplete: pickupHandoffCompleteEarly,
+      revision: coordinationLiveRevision,
+    });
+  }, [rental, me, meetupSchedulingMeta, pickupHandoffCompleteEarly, coordinationLiveRevision]);
+
+  const meetupCoordinationLanePropRef = useRef<{
+    pickup: CanonicalMeetupCoordinationState['pickup'];
+    return: CanonicalMeetupCoordinationState['return'];
+  } | null>(null);
+
+  useEffect(() => {
+    if (typeof __DEV__ === 'undefined' || !__DEV__ || !meetupCoordination) return;
+    const prev = meetupCoordinationLanePropRef.current;
+    console.log('[owner-workspace-lane-prop-identity]', {
+      coordinationLiveRevision,
+      pickupLaneReferenceChanged:
+        prev != null ? prev.pickup !== meetupCoordination.pickup : null,
+      returnLaneReferenceChanged:
+        prev != null ? prev.return !== meetupCoordination.return : null,
+      pickupStatus: meetupCoordination.pickup.status,
+      previousPickupStatus: prev?.pickup.status ?? null,
+    });
+    meetupCoordinationLanePropRef.current = {
+      pickup: meetupCoordination.pickup,
+      return: meetupCoordination.return,
+    };
+  }, [meetupCoordination, coordinationLiveRevision]);
+
+  useEffect(() => {
+    if (!meetupCoordination || !rental) return;
+    logMeetupCoordinationRenderInputs({
+      rentalId: meetupCoordination.rentalId,
+      rental,
+      viewerUserId: me,
+      coordinationRevision: coordinationLiveRevision,
+      meetupPhaseCoordination: {
+        pickup: { status: meetupCoordination.pickup.status },
+        return: { status: meetupCoordination.return.status },
+        pendingPhase: meetupCoordination.pendingPhase,
+      },
+    });
+    recordCanonicalMeetupCoordinationSnapshot({
+      rentalId: meetupCoordination.rentalId,
+      surface: 'owner_workspace',
+      state: meetupCoordination,
+    });
+  }, [meetupCoordination, rental, me, coordinationLiveRevision]);
+
+  useEffect(() => {
+    if (typeof __DEV__ === 'undefined' || !__DEV__ || !rental || !meetupCoordination) return;
+    const termsCompletedNow =
+      rental.price != null || request?.accepted_price != null || request?.acceptedPrice != null;
+    const meetupLocationNow = (meetupCoordination.schedule.location ?? '').trim();
+    const meetingHasRichMeetupContentNow =
+      meetupCoordination.hasPendingProposal ||
+      meetupCoordination.meetupCoordinationComplete ||
+      meetupCoordination.pickupCoordinationComplete ||
+      meetupCoordination.pickup.coordinationComplete ||
+      meetupCoordination.return.coordinationComplete ||
+      meetupLocationNow.length > 0;
+    const meetingShowFullCardNow =
+      termsCompletedNow && (meetingHasRichMeetupContentNow || meetingExpanded);
+    const meetupCardsMountedNow = meetingShowFullCardNow && meetingExpanded;
+    logMeetupCoordinationUiTree({
+      rentalId: rental.id,
+      coordinationLiveRevision,
+      meetingShowFullCard: meetingShowFullCardNow,
+      meetingExpanded,
+      cardsMounted: meetupCardsMountedNow,
+      pendingPhase: meetupCoordination.pendingPhase,
+      pickupLane: {
+        status: meetupCoordination.pickup.status,
+        viewerCanAccept: meetupCoordination.pickup.viewerCanAccept,
+        isPendingThisPhase: meetupCoordination.pickup.isPendingThisPhase,
+        dateTimeIso: meetupCoordination.pickup.dateTimeIso,
+        location: meetupCoordination.pickup.location,
+        statusLabel: meetupCoordination.pickup.statusLabel,
+        viewerCanPropose: meetupCoordination.pickup.viewerCanPropose,
+        viewerCanModify: meetupCoordination.pickup.viewerCanModify,
+        coordinationComplete: meetupCoordination.pickup.coordinationComplete,
+        unlocked: meetupCoordination.pickup.unlocked,
+      },
+      returnLane: {
+        status: meetupCoordination.return.status,
+        viewerCanAccept: meetupCoordination.return.viewerCanAccept,
+        isPendingThisPhase: meetupCoordination.return.isPendingThisPhase,
+        dateTimeIso: meetupCoordination.return.dateTimeIso,
+        location: meetupCoordination.return.location,
+        statusLabel: meetupCoordination.return.statusLabel,
+        viewerCanPropose: meetupCoordination.return.viewerCanPropose,
+        viewerCanModify: meetupCoordination.return.viewerCanModify,
+        coordinationComplete: meetupCoordination.return.coordinationComplete,
+        unlocked: meetupCoordination.return.unlocked,
+      },
+      meetingStatusText: meetupCoordination.presentation.meetingStatusText,
+      meetingInlineTitle: meetupCoordination.presentation.meetingInlineTitle,
+    });
+  }, [
+    rental,
+    meetupCoordination,
+    request?.accepted_price,
+    request?.acceptedPrice,
+    coordinationLiveRevision,
+    meetingExpanded,
+  ]);
 
   if (!rentalId) {
     return (
@@ -2551,22 +3529,26 @@ export default function RentalScreen() {
     listingImages: heroSupplement?.listingImages ?? cachedListingForHero?.images ?? null,
     offerImages: offerForRental?.offer_images ?? null,
   });
-  const proposalActorId = String(rental.last_proposed_by ?? '').trim();
-  const hasPendingProposal = agreementStatus === 'pending' && proposalActorId.length > 0;
-  const iProposedLast = Boolean(me && proposalActorId === me);
-  const proposalByLabel =
-    proposalActorId === rental.owner_user_id ? 'owner' : proposalActorId === rental.renter_user_id ? 'renter' : null;
-  const meetingStatusText =
-    agreementStatus === 'confirmed'
-      ? 'Accepted meetup details'
-      : hasPendingProposal
-        ? proposalByLabel
-          ? `Pending approval · Proposed by ${proposalByLabel}`
-          : 'Pending approval'
-        : 'No active proposal';
-  const showMeetingAccept = hasPendingProposal && !iProposedLast;
-  const showMeetingPrimaryAction = agreementStatus !== 'confirmed' && (!hasPendingProposal || iProposedLast);
-  const showMeetingPendingPill = hasPendingProposal && iProposedLast;
+  if (!meetupCoordination) return null;
+  const {
+    pickup: pickupCoordinationLane,
+    return: returnCoordinationLane,
+    presentation: meetupPresentation,
+    schedule: meetupDisplaySchedule,
+    pickupCoordinationComplete,
+    returnCoordinationComplete,
+    meetupCoordinationComplete,
+    hasPendingProposal,
+    iProposedLast,
+  } = meetupCoordination;
+  const showPickupAccept = meetupPresentation.showPickupAccept;
+  const showReturnAccept = meetupPresentation.showReturnAccept;
+  const showMeetingAccept = meetupPresentation.showMeetingAccept;
+  const showPickupPendingPill = meetupPresentation.showPickupPendingPill;
+  const showReturnPendingPill = meetupPresentation.showReturnPendingPill;
+  const showMeetingPendingPill = meetupPresentation.showMeetingPendingPill;
+  const showMeetingPrimaryAction = meetupPresentation.showMeetingPrimaryAction;
+  const meetingStatusText = meetupPresentation.meetingStatusText;
   const pickupAtIso = rental.pickup_datetime ?? rental.meetup_time;
   const pickupAtMs = pickupAtIso ? Date.parse(pickupAtIso) : NaN;
   const editLockedByPickupWindow =
@@ -2578,31 +3560,25 @@ export default function RentalScreen() {
     termsCompleted &&
     !proposalBusy &&
     (showMeetingAccept || showMeetingPrimaryAction || (showMeetingConfirmedActions && canEditConfirmed));
-  const meetingCompleted = agreementStatus === 'confirmed' && !hasPendingProposal;
   const lifecyclePhase =
     DEV_TOOLS_ENABLED && devLifecycleOverride != null
       ? devLifecycleOverride
-      : deriveLifecyclePhaseFromRentalStatus(rental.status);
+      : deriveLifecyclePhaseFromRentalStatus(rental.status, {
+          pickupHandoffComplete: pickupHandoffCompleteEarly,
+        });
   const lifecycleStatusForLayout = String(rental.status ?? 'pending').trim().toLowerCase();
-  const returnWorkflowEnabledForLayout = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
-    lifecycleStatusForLayout
-  );
+  const returnWorkflowEnabledForLayout = isReturnWorkflowEnabledForWorkspace({
+    rentalStatus: lifecycleStatusForLayout,
+    pickupHandoffComplete: pickupHandoffCompleteEarly,
+  });
   const returnCompletedForCard = ['returned', 'completed', 'cancelled'].includes(lifecycleStatusForLayout);
   const termsReplacementValue = Number(rental.replacement_value ?? Math.max(finalPrice * 3, 150));
 
   const { pickupMs: requestPickupFallbackMs, returnMs: requestReturnFallbackMs } =
     requestPickupReturnFallbackMs(request);
-  const requestDerivedAgreed = request ? agreedScheduleIsoPairFromRequest(request) : { pickupIso: null, returnIso: null };
-  const meetingPickupIso =
-    rental.agreed_pickup_datetime ??
-    rental.pickup_datetime ??
-    rental.meetup_time ??
-    requestDerivedAgreed.pickupIso;
-  const meetingReturnIso =
-    rental.agreed_return_datetime ??
-    rental.return_datetime ??
-    rental.return_time ??
-    requestDerivedAgreed.returnIso;
+  const meetingPickupIso = meetupDisplaySchedule.pickupIso;
+  const meetingReturnIso = meetupDisplaySchedule.returnIso;
+  const meetupLocationTrimmed = meetupDisplaySchedule.location;
   const meetingPickupDisplay =
     meetingPickupIso != null &&
     String(meetingPickupIso).trim() !== '' &&
@@ -2623,21 +3599,35 @@ export default function RentalScreen() {
           null,
           requestReturnFallbackMs
         );
-  const meetupLocationTrimmed = (rental.meetup_location || rental.return_location || '').trim();
-
-  const workspaceStage = deriveRentalWorkspaceStage({
-    lifecyclePhase,
-    termsCompleted,
-    meetingCompleted,
-  });
+  if (__DEV__) {
+    const ownerPhase = resolveOwnerWorkspacePhase({
+      rental,
+      pickupHandoffComplete: pickupHandoffCompleteEarly,
+      returnHandoffComplete: isReturnBilaterallyComplete(returnAck),
+      requestSchedulingMeta: meetupSchedulingMeta,
+    });
+    logRentalOwnerPhase(rental.id, ownerPhase, {
+      viewerRole,
+      trigger: 'rental_workspace_render',
+      rental,
+    });
+    logRentalStageTransitionAudit({
+      rentalId: rental.id,
+      triggeredBy: 'rental_workspace_render',
+      transitionReason: `owner=${ownerPhase.resolvedOwnerPhase}; ${ownerPhase.resolverReasoning.join(' ')}`,
+      resolvedOwnerPhase: ownerPhase.resolvedOwnerPhase,
+      resolvedRenterPhase: null,
+      rental,
+      pickupComplete: pickupCoordinationComplete,
+      returnComplete: returnCoordinationComplete,
+      meetupComplete: meetupCoordinationComplete,
+    });
+  }
 
   const agreementBaselineDurationHoursForProposals = resolveAgreementBaselineDurationHours(rental, request);
 
   let computedDurationLabel =
-    formatDurationDays(
-      rental.agreed_pickup_datetime ?? rental.pickup_datetime ?? rental.meetup_time,
-      rental.agreed_return_datetime ?? rental.return_datetime ?? rental.return_time
-    ) ?? null;
+    formatDurationDays(meetingPickupIso, meetingReturnIso) ?? null;
   if (!computedDurationLabel && request) {
     const fd = formatDurationDisplay({
       durationType: (request as { durationType?: string }).durationType,
@@ -2657,25 +3647,41 @@ export default function RentalScreen() {
     if (fd !== '—') computedDurationLabel = fd;
   }
   computedDurationLabel = computedDurationLabel ?? '—';
-  const durationWarningEval = evaluateDurationChange({
-    baselineDurationHours: resolveAgreementBaselineDurationHours(rental, request),
-    proposedDurationHours: durationHoursBetween(
-      String(rental.pickup_datetime ?? rental.meetup_time ?? ''),
-      String(rental.return_datetime ?? rental.return_time ?? '')
+  const durationWarningEval = evaluateContractualMeetupProposal({
+    proposedPickupIso: String(
+      meetupDisplaySchedule.pendingPickupProposalIso ?? meetingPickupIso ?? ''
     ),
-    graceHours: DURATION_GRACE_HOURS,
+    proposedReturnIso: String(
+      meetupDisplaySchedule.pendingReturnProposalIso ?? meetingReturnIso ?? ''
+    ),
+    schedulingMeta: meetupSchedulingMeta,
+    phase: 'general',
   });
   const durationWarningVisible = durationWarningEval.warningTriggered;
   const proposalEditorRental: RentalMeetupDetails = {
-    ...rental,
+    id: rental.id,
+    offer_id: rental.offer_id,
+    request_id: rental.request_id,
+    renter_user_id: rental.renter_user_id,
+    owner_user_id: rental.owner_user_id,
     meetup_time: rental.meetup_time ?? rental.pickup_datetime ?? null,
+    pickup_datetime: rental.pickup_datetime ?? null,
     return_time: rental.return_time ?? rental.return_datetime ?? null,
+    return_datetime: rental.return_datetime ?? null,
     meetup_location: rental.meetup_location ?? null,
     return_location: rental.return_location ?? null,
+    confirmed_by_renter: Boolean(rental.confirmed_by_renter ?? rental.renter_confirmed),
+    confirmed_by_owner: Boolean(rental.confirmed_by_owner ?? rental.owner_confirmed),
     owner_confirmed: rental.owner_confirmed ?? undefined,
     renter_confirmed: rental.renter_confirmed ?? undefined,
-    confirmed_by_owner: Boolean(rental.confirmed_by_owner ?? rental.owner_confirmed),
-    confirmed_by_renter: Boolean(rental.confirmed_by_renter ?? rental.renter_confirmed),
+    agreement_status: rental.agreement_status ?? null,
+    confirmed_at: rental.confirmed_at ?? null,
+    last_proposed_by: rental.last_proposed_by ?? null,
+    proposal_version: rental.proposal_version ?? null,
+    proposal_updated_at: rental.proposal_updated_at ?? null,
+    latest_proposal_message_id: rental.latest_proposal_message_id ?? null,
+    agreed_pickup_datetime: rental.agreed_pickup_datetime ?? null,
+    agreed_return_datetime: rental.agreed_return_datetime ?? null,
   };
   const pickupItems = viewerRole === 'owner' ? OWNER_PICKUP_ITEMS : RENTER_PICKUP_ITEMS;
   const returnItems = viewerRole === 'owner' ? OWNER_RETURN_ITEMS : RENTER_RETURN_ITEMS;
@@ -2688,23 +3694,47 @@ export default function RentalScreen() {
     returnItems as readonly ChecklistItemDef[]
   );
   const rentalStatus = String(rental.status ?? 'pending').trim().toLowerCase();
-  const handoffCompleted = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
-    rentalStatus
-  );
-  const pickupHandoffComplete = isPickupHandoffBilaterallyComplete({
-    pickupAck,
-    signedAt: rental.signed_at ?? null,
+  const rentalActivation =
+    rentalActivationEarly ??
+    resolveRentalActivationState(
+      buildPickupHandoffCompletionInputFromWorkspace({
+        rental,
+        pickupAck,
+        verificationRows,
+        renterPickupImHereAt: renterWizardHandoff.renterPickupImHereAt,
+        renterApprovedPickupPhotosAt: renterWizardHandoff.renterApprovedPickupPhotosAt,
+        renterPickupViewFlags,
+      })
+    );
+  const canonicalPickupHandoff = rentalActivation.physical;
+  const pickupHandoffComplete = rentalActivation.rentalActivated;
+  const physicalPossessionConfirmed = rentalActivation.physical.physicalPossessionConfirmed;
+  const workspaceStage = deriveRentalWorkspaceStage({
+    lifecyclePhase,
+    termsCompleted,
+    meetupCoordinationComplete,
+    physicalPossessionConfirmed,
+    rentalActivated: pickupHandoffComplete,
+  });
+  const handoffCompleted = isRentalPickupHandoffCompleteForWorkspace({
+    rentalStatus,
+    pickupHandoffComplete,
   });
   const returnHandoffComplete = isReturnBilaterallyComplete(returnAck);
-  const returnWorkflowEnabled = pickupHandoffComplete || handoffCompleted;
+  const returnWorkflowEnabled = isReturnWorkflowEnabledForWorkspace({
+    rentalStatus,
+    pickupHandoffComplete,
+  });
   const pickupOperationalState = (rental.pickup_operational_state ?? null) as RentalOperationalState | null;
   const returnOperationalState = (rental.return_operational_state ?? null) as RentalOperationalState | null;
 
   const returnCompleted = ['returned', 'completed', 'cancelled'].includes(rentalStatus);
-  const ownerNotesLocked = ['handed_off', 'active', 'return_pending', 'returned', 'completed', 'cancelled'].includes(
-    rentalStatus
-  );
-  const renterNotesEnabled = ['handed_off', 'active', 'return_pending'].includes(rentalStatus);
+  const ownerNotesLocked =
+    pickupHandoffComplete ||
+    rentalStatus === 'handed_off' ||
+    ['return_pending', 'returned', 'completed', 'cancelled'].includes(rentalStatus);
+  const renterNotesEnabled =
+    pickupHandoffComplete || rentalStatus === 'handed_off' || rentalStatus === 'return_pending';
   const renterNotesLocked = ['returned', 'completed', 'cancelled'].includes(rentalStatus);
   const ownerInputDisabled = viewerRole !== 'owner' || ownerNotesLocked;
   const renterInputDisabled = viewerRole !== 'renter' || !renterNotesEnabled || renterNotesLocked;
@@ -2767,26 +3797,87 @@ export default function RentalScreen() {
   );
   const ownerPickupPhotoRequirementMet = ownerPickupPhotoTargetsMet(ownerPickupPhotos);
   const renterReturnPhotoRequirementMet = renterReturnPhotos.length >= REQUIRED_RETURN_PHOTOS;
+  const ownerPickupPrepComplete =
+    ownerPickupChecklistRequiredDone && ownerPickupPhotoRequirementMet;
   const bilateralPickupReady =
-    ownerPickupChecklistRequiredDone &&
-    renterPickupChecklistRequiredDone &&
-    ownerPickupPhotoRequirementMet;
+    ownerPickupPrepComplete && renterPickupChecklistRequiredDone;
   const returnReady = renterReturnChecklistDone && renterReturnPhotoRequirementMet && ownerReturnChecklistDone;
   const handoffApprovalStarted = Boolean(rental.handoff_approval_started_at || rental.handoff_approved_by_owner);
   const handoffApprovedByRenter = Boolean(rental.handoff_approved_by_renter);
-  /** Single source of truth: owner may tap "Confirm Item Ready" (starts handoff approval for renter). Renter must not be required to confirm first. */
+  const pickupHandoffCompletion = canonicalPickupHandoff;
+
+  if (__DEV__ && viewerRole === 'renter') {
+    logPickupLifecycleDesync({
+      rentalId: rental.id,
+      surface: 'rental_workspace',
+      workspaceStage,
+      lifecyclePhase,
+      completion: canonicalPickupHandoff,
+      rentalActivated: pickupHandoffComplete,
+      transitionReason: `workspaceStage=${workspaceStage}; auth=${rentalActivation.authorization.phase}`,
+    });
+  }
+
+  const pickupHandoffPresenceState = resolvePickupHandoffPresenceState({
+    rental,
+    renterPickupImHereAt: renterWizardHandoff.renterPickupImHereAt,
+    renterApprovedPickupPhotosAt: renterWizardHandoff.renterApprovedPickupPhotosAt,
+    pickupAck,
+    ownerPickupPrepComplete,
+    handoffApprovalStarted,
+    handoffCompleted,
+    renterConfirmedReceipt: pickupHandoffCompletion.renterConfirmedReceipt,
+    ownerConfirmedHandoff: pickupHandoffCompletion.ownerConfirmedHandoff,
+    viewerRole,
+  });
+  const renterEvidenceReviewed =
+    viewerRole === 'renter' &&
+    Boolean(
+      renterWizardHandoff.renterApprovedPickupPhotosAt?.trim() || renterPickupViewFlags.reviewedOwnerPhotos
+    );
+  const renterInspection =
+    viewerRole === 'renter'
+      ? evaluatePickupInspectionFlow({
+          bothPresent: pickupHandoffPresenceState.bothPresent,
+          handoffApprovalStarted,
+          handoffCompleted,
+          renterArrived: pickupHandoffPresenceState.renterArrived,
+          evidenceReviewed: renterEvidenceReviewed,
+          renterConfirmedReceipt: pickupHandoffCompletion.renterConfirmedReceipt,
+          manualChecklist: renterPickupManualFromVerificationRows(verificationRows, rental.renter_user_id),
+          viewerFlags: renterPickupViewFlags,
+          pickupRenterConfirmed: pickupAck.renter,
+        })
+      : null;
+  const renterMeetupInspectionActive = Boolean(renterInspection?.meetupInspectionCanonical);
+  if (__DEV__ && renterInspection) {
+    logPickupInspectionFlow(rental.id, {
+      triggerSource: 'workspace_render',
+      state: renterInspection,
+      surface: 'owner_workspace',
+    });
+  }
+  /** Owner lane: prep complete only — renter checklist is not required. */
   const canOwnerConfirmPickupReady =
     viewerRole === 'owner' &&
-    bilateralPickupReady &&
-    lifecyclePhase === 'pickup' &&
-    !handoffApprovalStarted &&
-    !handoffCompleted;
+    pickupHandoffPresenceState.ownerLivePhase === 'confirm_ready' &&
+    lifecyclePhase === 'pickup';
+  const canOwnerMarkImHere =
+    viewerRole === 'owner' &&
+    pickupHandoffPresenceState.ownerLivePhase === 'renter_arrived';
+  const canOwnerConfirmHandoff =
+    viewerRole === 'owner' && pickupHandoffPresenceState.canConfirmHandoff;
+  const canRenterMarkImHere =
+    viewerRole === 'renter' && pickupHandoffPresenceState.renterLivePhase === 'mark_arrival';
   const canRenterFinalizeHandoff =
     viewerRole === 'renter' &&
-    lifecyclePhase === 'pickup' &&
-    handoffApprovalStarted &&
-    !handoffApprovedByRenter &&
-    bilateralPickupReady;
+    physicalPossessionConfirmed &&
+    !pickupHandoffComplete &&
+    (rentalActivation.authorization.phase === 'pending_signature' ||
+      rentalActivation.authorization.phase === 'pending_preauthorization' ||
+      pickupHandoffPresenceState.renterLivePhase === 'sign_and_authorize');
+  const canRenterConfirmPickupReceived =
+    viewerRole === 'renter' && Boolean(renterInspection?.receiptButtonEnabled);
   const pickupWindow = isPhotoUploadWindowOpen('pickup', rental.pickup_datetime, rental.return_datetime);
   const returnWindow = isPhotoUploadWindowOpen('return', rental.pickup_datetime, rental.return_datetime);
   const canUploadPickup = viewerRole === 'owner' && !handoffCompleted && pickupWindow.allowed;
@@ -2803,9 +3894,15 @@ export default function RentalScreen() {
 
   const lifecycleTransactionComplete = lifecyclePhase === 'completed';
   let lifecycleAttentionIndex: number | null = null;
-  if (!termsCompleted || !meetingCompleted) {
+  if (!termsCompleted || !meetupCoordinationComplete) {
     lifecycleAttentionIndex = 1;
-  } else if (!handoffCompleted && (bilateralPickupReady || canRenterFinalizeHandoff || canOwnerConfirmPickupReady)) {
+  } else if (
+    !handoffCompleted &&
+    (ownerPickupPrepComplete ||
+      canRenterFinalizeHandoff ||
+      canOwnerConfirmPickupReady ||
+      pickupHandoffPresenceState.bothPresent)
+  ) {
     lifecycleAttentionIndex = 2;
   } else if (returnWorkflowEnabled && !returnCompleted && lifecyclePhase === 'return') {
     lifecycleAttentionIndex = 4;
@@ -3127,47 +4224,146 @@ export default function RentalScreen() {
 
   const onConfirmPickup = () => {
     if (!me) return;
+    if (!pickupHandoffPresenceState.bothPresent) {
+      Alert.alert(
+        'Meet at the location first',
+        'Both you and the other party need to mark that you are at the meetup before confirming handoff.'
+      );
+      return;
+    }
+    if (viewerRole === 'owner' && !canOwnerConfirmHandoff) return;
+    if (viewerRole === 'renter' && !canRenterConfirmPickupReceived) return;
     if (!allRequiredPickupItemsDone(pickupItems, pickupDoneEffectiveForViewer)) return;
-    Alert.alert(
-      'Record pickup confirmation',
-      'This records your side of pickup. The rental advances once both parties have confirmed.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm',
-          onPress: async () => {
-            await ensureVerificationRows(
-              supabase,
-              rental.id,
-              rental.owner_user_id,
-              rental.renter_user_id,
-              'pickup'
-            );
-            const ok = await persistConfirmation(supabase, rental.id, 'pickup', me, true);
-            if (!ok) {
-              if (__DEV__) console.warn('[verification mutation] pickup confirmation failed', { rentalId: rental.id });
-              Alert.alert('Could not save', 'Check your connection and try again.');
-              return;
+    const ownerHandoffCopy =
+      viewerRole === 'owner'
+        ? 'This records that you handed the item to the renter. The rental becomes active once they confirm receipt.'
+        : 'This records that you received the item. The rental becomes active once both sides have confirmed.';
+    Alert.alert('Record pickup handoff', ownerHandoffCopy, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Confirm',
+        onPress: async () => {
+          const milestone =
+            viewerRole === 'owner'
+              ? await persistOwnerConfirmedPickupHandoff(
+                  supabase,
+                  rental.id,
+                  rental.owner_user_id,
+                  rental.renter_user_id
+                )
+              : await persistRenterConfirmedPickupReceipt(
+                  supabase,
+                  rental.id,
+                  rental.owner_user_id,
+                  rental.renter_user_id
+                );
+          if (!milestone.ok) {
+            if (__DEV__) {
+              console.warn('[verification mutation] pickup milestone failed', {
+                rentalId: rental.id,
+                error: milestone.error,
+              });
             }
-            if (__DEV__) console.log('[verification mutation] pickup confirmation ok', { rentalId: rental.id });
-            const rows = await fetchVerificationRows(supabase, rental.id);
-            const ack = deriveDualConfirmation(rows, 'pickup');
-            setPickupAck(ack);
-            if (viewerRole === 'owner') {
-              const { data: updatedRental } = await supabase
-                .from('rentals')
-                .update({ status: 'handed_off' })
-                .eq('id', rental.id)
-                .select('*')
-                .single();
-              if (__DEV__) console.log('[verification mutation] rental status update ok', { rentalId: rental.id, status: 'handed_off' });
-              if (updatedRental) setRental(updatedRental as RentalRow);
-            }
-            await refreshVerificationState();
-          },
+            Alert.alert('Could not save', milestone.error);
+            return;
+          }
+          if (__DEV__) {
+            console.log('[verification mutation] pickup milestone ok', {
+              rentalId: rental.id,
+              pickupAck: milestone.pickupAck,
+            });
+          }
+          setPickupAck(milestone.pickupAck);
+          logPickupHandoffPresence(rental.id, {
+            presence: resolvePickupHandoffPresenceState({
+              rental,
+              renterPickupImHereAt: renterWizardHandoff.renterPickupImHereAt,
+              renterApprovedPickupPhotosAt: renterWizardHandoff.renterApprovedPickupPhotosAt,
+              pickupAck: milestone.pickupAck,
+              ownerPickupPrepComplete,
+              handoffApprovalStarted,
+              handoffCompleted,
+              renterConfirmedReceipt: milestone.pickupAck.renter,
+              ownerConfirmedHandoff: milestone.pickupAck.owner,
+              viewerRole,
+            }),
+            triggeredBy: viewerRole === 'owner' ? 'owner_confirm_handoff' : 'renter_confirm_received',
+            workspaceStage,
+            lifecyclePhase,
+            viewerRole,
+          });
+          await refreshVerificationState();
         },
-      ]
-    );
+      },
+    ]);
+  };
+
+  const onOwnerMarkImHere = async () => {
+    if (!me || viewerRole !== 'owner' || !canOwnerMarkImHere || ownerArrivalBusy) return;
+    setOwnerArrivalBusy(true);
+    const at = new Date().toISOString();
+    setRental((prev) => (prev ? { ...prev, owner_arrived_at: at } : prev));
+    try {
+      const result = await markOwnerPickupArrived(supabase, rental.id, at);
+      if (!result.ok) {
+        Alert.alert('Could not save arrival', result.error ?? 'Try again.');
+        return;
+      }
+      logPickupHandoffPresence(rental.id, {
+        presence: resolvePickupHandoffPresenceState({
+          rental: { ...rental, owner_arrived_at: new Date().toISOString() },
+          renterPickupImHereAt: renterWizardHandoff.renterPickupImHereAt,
+          renterApprovedPickupPhotosAt: renterWizardHandoff.renterApprovedPickupPhotosAt,
+          pickupAck,
+          ownerPickupPrepComplete,
+          handoffApprovalStarted,
+          handoffCompleted,
+          viewerRole,
+        }),
+        triggeredBy: 'owner_mark_im_here',
+        workspaceStage,
+        lifecyclePhase,
+        viewerRole,
+      });
+      await refreshVerificationState();
+    } finally {
+      setOwnerArrivalBusy(false);
+    }
+  };
+
+  const onRenterMarkImHere = async () => {
+    if (!me || viewerRole !== 'renter' || !canRenterMarkImHere || renterArrivalBusy) return;
+    setRenterArrivalBusy(true);
+    const at = new Date().toISOString();
+    setRental((prev) => (prev ? { ...prev, renter_arrived_at: at } : prev));
+    setRenterWizardHandoff((prev) => ({ ...prev, renterPickupImHereAt: at }));
+    try {
+      await updateWizardProgress(rental.id, me, { renter_pickup_im_here_at: at });
+      const result = await markRenterPickupArrived(supabase, rental.id, at);
+      if (!result.ok) {
+        Alert.alert('Could not save arrival', result.error ?? 'Try again.');
+        return;
+      }
+      logPickupHandoffPresence(rental.id, {
+        presence: resolvePickupHandoffPresenceState({
+          rental: { ...rental, renter_arrived_at: new Date().toISOString() },
+          renterPickupImHereAt: new Date().toISOString(),
+          renterApprovedPickupPhotosAt: renterWizardHandoff.renterApprovedPickupPhotosAt,
+          pickupAck,
+          ownerPickupPrepComplete,
+          handoffApprovalStarted,
+          handoffCompleted,
+          viewerRole,
+        }),
+        triggeredBy: 'renter_mark_im_here',
+        workspaceStage,
+        lifecyclePhase,
+        viewerRole,
+      });
+      await refreshVerificationState();
+    } finally {
+      setRenterArrivalBusy(false);
+    }
   };
 
   const onBeginHandoffApproval = async () => {
@@ -3194,6 +4390,7 @@ export default function RentalScreen() {
       const holdLateFee = rental.daily_late_fee ?? Math.max(10, Math.round(finalPrice * 0.1));
       const holdMaxLateFeeCap = rental.max_late_fee_cap ?? Math.max(holdLateFee, holdLateFee * 7);
       const result = await persistReadinessFlags({
+        owner_pickup_ready: true,
         handoff_approved_by_owner: true,
         handoff_approval_started_at: new Date().toISOString(),
         replacement_value: holdReplacementValue,
@@ -3210,6 +4407,23 @@ export default function RentalScreen() {
         });
         if (__DEV__) console.warn(fmt.devLog);
         Alert.alert('Could not confirm item ready', fmt.userBody);
+      } else {
+        logPickupHandoffPresence(rental.id, {
+          presence: resolvePickupHandoffPresenceState({
+            rental: { ...rental, owner_pickup_ready: true, handoff_approved_by_owner: true },
+            renterPickupImHereAt: renterWizardHandoff.renterPickupImHereAt,
+            renterApprovedPickupPhotosAt: renterWizardHandoff.renterApprovedPickupPhotosAt,
+            pickupAck,
+            ownerPickupPrepComplete: true,
+            handoffApprovalStarted: true,
+            handoffCompleted,
+            viewerRole,
+          }),
+          triggeredBy: 'owner_confirm_item_ready',
+          workspaceStage,
+          lifecyclePhase,
+          viewerRole,
+        });
       }
     } finally {
       setBeginHandoffBusy(false);
@@ -3265,14 +4479,15 @@ export default function RentalScreen() {
         }
         return;
       }
+      const ackAt = signedAt;
       const handoffResult = await persistReadinessFlags({
         handoff_approved_by_renter: true,
         signed_name: typedNorm,
         signed_at: signedAt,
         agreement_version: agreementVersion,
+        agreement_acknowledged_at: ackAt,
         preauth_status: 'authorized',
         preauth_authorized_at: signedAt,
-        status: 'handed_off',
       });
       if (!handoffResult.ok) {
         const fmt = formatSupabaseMutationFailure(handoffResult.error, {
@@ -3283,6 +4498,14 @@ export default function RentalScreen() {
         Alert.alert('Could not finalize handoff', fmt.userBody);
         return;
       }
+      const activationResult = await finalizeRentalActivation(supabase, rental.id, signedAt);
+      if (!activationResult.ok) {
+        Alert.alert('Could not activate rental', activationResult.error ?? 'Please try again.');
+        return;
+      }
+      await updateWizardProgress(rental.id, me, {
+        rental_agreement_acknowledged_at: ackAt,
+      });
       if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
         UIManager.setLayoutAnimationEnabledExperimental(true);
       }
@@ -3459,40 +4682,90 @@ export default function RentalScreen() {
   let pickupPrimaryOnPress: (() => void) | undefined;
 
   if (viewerRole === 'owner') {
-    pickupPrimaryLabel = beginHandoffBusy ? 'Saving…' : 'Confirm Item Ready';
-    pickupPrimaryDisabled = !canOwnerConfirmPickupReady || beginHandoffBusy;
-    pickupPrimaryOnPress = () => void onBeginHandoffApproval();
-    const ownerPickupPrepComplete =
-      ownerPickupChecklistRequiredDone && ownerPickupPhotoRequirementMet;
-    pickupPrimaryFootnote = pickupPrimaryDisabled
-      ? !ownerPickupPrepComplete
-        ? 'Capture condition, serial, and your live possession check photo, finish your prep checklist, then wait for the renter to confirm receipt.'
-        : !bilateralPickupReady
-          ? 'Both you and the renter must finish the pickup checklists before you can confirm.'
+    switch (pickupHandoffPresenceState.ownerLivePhase) {
+      case 'confirm_ready':
+        pickupPrimaryLabel = beginHandoffBusy ? 'Saving…' : 'Confirm Item Ready';
+        pickupPrimaryDisabled = beginHandoffBusy;
+        pickupPrimaryOnPress = () => void onBeginHandoffApproval();
+        break;
+      case 'renter_arrived':
+        pickupPrimaryLabel = ownerArrivalBusy ? 'Saving…' : "Renter is here · I'm here too";
+        pickupPrimaryDisabled = ownerArrivalBusy;
+        pickupPrimaryOnPress = () => void onOwnerMarkImHere();
+        pickupPrimaryFootnote =
+          'The renter is at the meetup. Mark your arrival to unlock handoff confirmation.';
+        break;
+      case 'handoff_ready':
+        pickupPrimaryLabel = 'Item handed off';
+        pickupPrimaryDisabled = false;
+        pickupPrimaryOnPress = () => onConfirmPickup();
+        pickupPrimaryFootnote = 'Confirm you physically handed the item to the renter.';
+        break;
+      case 'waiting_for_renter':
+        pickupPrimaryLabel = 'Waiting for renter';
+        pickupPrimaryDisabled = true;
+        pickupPrimaryFootnote =
+          'Item is marked ready. The renter will review evidence, approve photos, and mark arrival at the meetup.';
+        break;
+      case 'waiting_receipt':
+        pickupPrimaryLabel = 'Waiting for renter receipt';
+        pickupPrimaryDisabled = true;
+        pickupPrimaryFootnote =
+          'You confirmed handoff — waiting for the renter to confirm they received the item.';
+        break;
+      default:
+        pickupPrimaryLabel = 'Confirm Item Ready';
+        pickupPrimaryDisabled = true;
+        pickupPrimaryFootnote = !ownerPickupPrepComplete
+          ? 'Capture condition, serial, and your live possession check photo, then finish your prep checklist.'
           : handoffCompleted
             ? 'Pickup is already complete for this rental.'
-            : handoffApprovalStarted
-              ? 'Handoff approval has already started — continue in chat or refresh if this looks wrong.'
-              : ''
-      : '';
-  } else if (canRenterFinalizeHandoff) {
-    pickupPrimaryLabel = 'Sign & authorize';
-    pickupPrimaryDisabled = false;
-    pickupPrimaryOnPress = () => setAgreementModalVisible(true);
-    pickupPrimaryFootnote = '';
-  } else if (!pickupAck.renter) {
-    pickupPrimaryLabel = 'Confirm Item Received';
-    const reqDone = allRequiredPickupItemsDone(pickupItems, pickupDoneEffectiveForViewer);
-    pickupPrimaryDisabled = !reqDone;
-    pickupPrimaryOnPress = () => onConfirmPickup();
-    pickupPrimaryFootnote = pickupPrimaryDisabled
-      ? 'Complete your checklist after reviewing the owner’s photos and any optional note they left.'
-      : '';
+            : '';
+    }
   } else {
-    pickupPrimaryLabel = 'Waiting for owner approval';
-    pickupPrimaryDisabled = true;
-    pickupPrimaryFootnote = 'The owner will confirm that the item is ready next.';
-    pickupPrimaryOnPress = undefined;
+    switch (pickupHandoffPresenceState.renterLivePhase) {
+      case 'mark_arrival':
+        pickupPrimaryLabel = renterArrivalBusy ? 'Saving…' : "I'm here";
+        pickupPrimaryDisabled = renterArrivalBusy;
+        pickupPrimaryOnPress = () => void onRenterMarkImHere();
+        break;
+      case 'waiting_for_owner':
+        pickupPrimaryLabel = 'Waiting for owner';
+        pickupPrimaryDisabled = true;
+        pickupPrimaryFootnote =
+          'You’re at the meetup — we’ll notify you when the owner marks arrival.';
+        break;
+      case 'sign_and_authorize':
+        pickupPrimaryLabel = 'Sign & authorize';
+        pickupPrimaryDisabled = false;
+        pickupPrimaryOnPress = () => setAgreementModalVisible(true);
+        pickupPrimaryFootnote =
+          'Both parties are at the meetup — sign to authorize the rental agreement.';
+        break;
+      case 'confirm_receipt': {
+        pickupPrimaryLabel = 'I received the item';
+        pickupPrimaryDisabled = !Boolean(renterInspection?.receiptButtonEnabled);
+        pickupPrimaryOnPress = () => onConfirmPickup();
+        pickupPrimaryFootnote = pickupPrimaryDisabled
+          ? !renterEvidenceReviewed
+            ? 'Review owner photos in the guided pickup flow first.'
+            : `Complete your in-person inspection (${RENTER_PICKUP_ITEMS.filter((i) => i.required !== false).filter((i) => renterInspection?.checklistCompletionState[i.id]).length}/${RENTER_PICKUP_ITEMS.filter((i) => i.required !== false).length}) in the pickup wizard.`
+          : 'Confirm you physically received the item at the meetup.';
+        break;
+      }
+      case 'prepare':
+        pickupPrimaryLabel = 'Waiting for owner';
+        pickupPrimaryDisabled = true;
+        pickupPrimaryFootnote =
+          'The owner will confirm that the item is ready after finishing pickup prep.';
+        break;
+      default:
+        pickupPrimaryLabel = 'Prepare for pickup';
+        pickupPrimaryDisabled = true;
+        pickupPrimaryFootnote = !pickupHandoffPresenceState.renterReady
+          ? 'Review and approve the owner’s pickup photos in the rental wizard, then head to the meetup.'
+          : 'Head to the meetup and tap I’m here when you arrive.';
+    }
   }
 
   const showPickupEvidenceExamplePanel = !handoffCompleted && !pickupConfirmedForViewer;
@@ -3502,21 +4775,25 @@ export default function RentalScreen() {
 
   const pickupRequirementsBannerText =
     viewerRole === 'renter'
-      ? 'Skim the photos, then confirm pickup when everything looks right.'
-      : 'Capture condition, serial, and your live possession check photo, finish your prep checklist, then wait for the renter to confirm receipt.';
+      ? 'Review owner photos, approve evidence, mark arrival at the meetup, then confirm receipt when both parties are present.'
+      : 'Capture condition, serial, and your live possession check photo, finish your prep checklist, then confirm when the item is ready.';
 
   let workspaceGuidanceLine: string | null = null;
   if (workspaceStage === 'agreement') {
     if (!termsCompleted) {
       workspaceGuidanceLine = 'Confirm the agreed terms to unlock meetup planning.';
-    } else if (!meetingCompleted) {
-      workspaceGuidanceLine = showMeetingAccept
-        ? 'Review the proposed meetup and accept or suggest changes.'
-        : hasPendingProposal && iProposedLast
-          ? 'Waiting for the other party to respond to your meetup proposal.'
-          : viewerRole === 'owner'
-            ? 'Propose pickup, return, and meetup location so both parties can confirm.'
-            : 'Suggest pickup, return, and meetup location that work for you.';
+    } else if (!meetupCoordinationComplete) {
+      workspaceGuidanceLine = showReturnAccept
+        ? 'Review the proposed return details and accept or suggest changes.'
+        : showPickupAccept
+          ? 'Review the proposed pickup details and accept or suggest changes.'
+          : showReturnPendingPill
+            ? 'Waiting for the renter to respond to your return proposal.'
+            : showPickupPendingPill
+              ? 'Waiting for the renter to respond to your pickup proposal.'
+              : viewerRole === 'owner'
+                ? 'Propose pickup and return details independently so both parties can confirm.'
+                : 'Suggest pickup and return times that work for you.';
     }
   } else if (workspaceStage === 'pickup_prep') {
     workspaceGuidanceLine =
@@ -3537,10 +4814,8 @@ export default function RentalScreen() {
   const counterpartyParts = counterpartyDisplayName.trim().split(/\s+/).filter(Boolean);
   const counterpartyFirstName = (counterpartyParts[0] ?? counterpartyDisplayName.trim()) || 'Match';
 
-  const meetingPickupForHero =
-    meetingPickupIso ?? rental.pickup_datetime ?? rental.meetup_time ?? null;
-  const meetingReturnForHero =
-    meetingReturnIso ?? rental.return_datetime ?? rental.return_time ?? null;
+  const meetingPickupForHero = meetingPickupIso;
+  const meetingReturnForHero = meetingReturnIso;
 
   const heroDateRangeLine = (() => {
     const p =
@@ -3558,12 +4833,22 @@ export default function RentalScreen() {
   })();
 
   const hasPendingExtensionProposal =
-    workspaceStage === 'active' && hasPendingProposal;
+    workspaceStage === 'active' &&
+    hasPendingProposal &&
+    isMeetupProposalExtensionRequest({
+      proposedPickupIso: meetupDisplaySchedule.pendingPickupProposalIso ?? meetingPickupIso,
+      proposedReturnIso: meetupDisplaySchedule.pendingReturnProposalIso ?? meetingReturnIso,
+      schedulingMeta: meetupSchedulingMeta,
+    });
+
+  const showExtensionAccept =
+    workspaceStage === 'active' && hasPendingProposal && !iProposedLast && hasPendingExtensionProposal;
 
   const workspaceTimelineEvents = buildRentalWorkspaceTimelineModel({
     rentalStatus,
     termsCompleted,
-    meetingCompleted,
+    meetupCoordinationComplete,
+    pickupCoordinationComplete,
     handoffCompleted,
     returnCompleted,
     lifecyclePhase,
@@ -3592,7 +4877,7 @@ export default function RentalScreen() {
   const rentalWorkbenchContextLine = (() => {
     if (workspaceStage === 'active') {
       const parts: string[] = [];
-      const retIso = rental.return_datetime ?? rental.return_time ?? rental.agreed_return_datetime;
+      const retIso = meetingReturnIso;
       if (retIso) {
         const t = Date.parse(String(retIso));
         if (Number.isFinite(t)) {
@@ -3624,7 +4909,7 @@ export default function RentalScreen() {
     if (workspaceStage === 'pickup_prep') {
       return `Checklist ${pickupRequiredDoneCount}/${pickupRequiredEntries.length} required rows`;
     }
-    if (workspaceStage === 'agreement' && termsCompleted && !meetingCompleted) {
+    if (workspaceStage === 'agreement' && termsCompleted && !meetupCoordinationComplete) {
       return hasPendingProposal ? 'A meetup proposal is waiting for a response.' : 'Meetup still needs to be scheduled.';
     }
     return null;
@@ -3636,8 +4921,9 @@ export default function RentalScreen() {
     viewerRole,
     workspaceGuidanceLine,
     termsCompleted,
-    meetingCompleted,
+    meetupCoordinationComplete,
     showMeetingAccept,
+    showExtensionAccept,
     showMeetingPrimaryAction,
     showMeetingPendingPill,
     proposalBusy,
@@ -3698,7 +4984,7 @@ export default function RentalScreen() {
     viewerRole,
     lifecyclePhase,
     rentalStatus,
-    meetingCompleted,
+    meetupCoordinationComplete,
     pickupHandoffComplete,
     returnHandoffComplete,
     pickupOperationalState,
@@ -3717,8 +5003,23 @@ export default function RentalScreen() {
   );
 
   const meetingHasRichMeetupContent =
-    hasPendingProposal || meetingCompleted || meetupLocationTrimmed.length > 0;
+    hasPendingProposal ||
+    meetupCoordinationComplete ||
+    pickupCoordinationComplete ||
+    pickupCoordinationLane.coordinationComplete ||
+    returnCoordinationLane.coordinationComplete ||
+    meetupLocationTrimmed.length > 0;
   const meetingShowFullCard = termsCompleted && (meetingHasRichMeetupContent || meetingExpanded);
+  const meetupCardsMounted = meetingShowFullCard && meetingExpanded;
+
+  const rentalCoordinationFieldAudit = {
+    agreement_status: rental.agreement_status ?? null,
+    pickup_datetime: rental.pickup_datetime ?? null,
+    return_datetime: rental.return_datetime ?? null,
+    meetup_time: rental.meetup_time ?? null,
+    return_time: rental.return_time ?? null,
+    last_proposed_by: rental.last_proposed_by ?? null,
+  };
 
   const actionFooter = (
     <>
@@ -3777,7 +5078,7 @@ export default function RentalScreen() {
   const onMissedMeetupReschedule = () => {
     const phase = missedMeetupSheet.phase;
     dismissMissedMeetupSheet(phase);
-    openMeetingProposalEditor();
+    openMeetingProposalEditor(phase === 'pickup' ? 'pickup' : 'return');
     scrollToLifecycleStep(phase === 'pickup' ? 2 : 2);
   };
 
@@ -4312,7 +5613,7 @@ export default function RentalScreen() {
                         >
                           <Text style={styles.pickupChecklistCompleteTitle}>✅ Pickup prep complete</Text>
                           <Text style={styles.pickupChecklistCompleteSub}>
-                            Your photos and checklist are ready for renter confirmation.
+                            Your photos and checklist are ready — confirm item ready when you are set.
                           </Text>
                         </Pressable>
                       ) : (
@@ -4543,7 +5844,25 @@ export default function RentalScreen() {
                     </View>
 
                     <View style={styles.handoffSection}>
-                      {pickupPrepOrVerificationComplete && !pickupChecklistPanelExpanded ? (
+                      {renterMeetupInspectionActive ? (
+                        <View style={styles.pickupChecklistCompleteCard}>
+                          <Text style={styles.pickupChecklistCompleteTitle}>In-person inspection</Text>
+                          <Text style={styles.pickupChecklistCompleteSub}>
+                            {renterInspection?.allChecklistComplete
+                              ? 'Inspection checklist complete in the pickup wizard. Confirm receipt there when ready.'
+                              : `Complete the inspection checklist in the pickup wizard (${RENTER_PICKUP_ITEMS.filter((i) => i.required !== false).filter((i) => renterInspection?.checklistCompletionState[i.id]).length}/${RENTER_PICKUP_ITEMS.filter((i) => i.required !== false).length} done).`}
+                          </Text>
+                          {renterInspection ? (
+                            <Text style={styles.handoffInspectionSummary}>
+                              {RENTER_PICKUP_ITEMS.map((item) => (
+                                <Text key={item.id} style={styles.handoffInspectionLine}>
+                                  {renterInspection.checklistCompletionState[item.id] ? '✓' : '○'} {item.label}
+                                </Text>
+                              ))}
+                            </Text>
+                          ) : null}
+                        </View>
+                      ) : pickupPrepOrVerificationComplete && !pickupChecklistPanelExpanded ? (
                         <Pressable
                           pressOpacityFeedback={false}
                           onPress={() => {
@@ -5190,12 +6509,20 @@ export default function RentalScreen() {
                 </Text>
               ) : !meetingShowFullCard ? (
                 <View style={[styles.meetingInlineStrip, !isTabletMargins && styles.cardPadPhone]}>
-                  <Text style={styles.meetingInlineTitle}>
-                    {showMeetingPendingPill
-                      ? 'Waiting on the other party to respond to your meetup proposal.'
-                      : 'Pickup meetup not scheduled yet.'}
-                  </Text>
-                  {showMeetingPendingPill ? (
+                  <Text style={styles.meetingInlineTitle}>{meetupPresentation.meetingInlineTitle}</Text>
+                  {showPickupAccept || showReturnAccept ? (
+                    <Pressable
+                      pressOpacityFeedback={false}
+                      haptic
+                      onPress={() => {
+                        setMeetingExpanded(true);
+                        onFocusMeetingSection();
+                      }}
+                      style={({ pressed }) => [styles.meetingInlineCtaHit, pressed && { opacity: 0.88 }]}
+                    >
+                      <Text style={styles.meetingInlineCta}>Review proposal</Text>
+                    </Pressable>
+                  ) : showMeetingPendingPill ? (
                     <Pressable
                       pressOpacityFeedback={false}
                       haptic
@@ -5211,7 +6538,7 @@ export default function RentalScreen() {
                       disabled={!canOpenMeetingProposal}
                       onPress={() => {
                         setMeetingExpanded(true);
-                        openMeetingProposalEditor();
+                        openMeetingProposalEditor('pickup');
                       }}
                       style={({ pressed }) => [
                         styles.meetingInlineCtaHit,
@@ -5219,7 +6546,7 @@ export default function RentalScreen() {
                         pressed && canOpenMeetingProposal && { opacity: 0.88 },
                       ]}
                     >
-                      <Text style={styles.meetingInlineCta}>Schedule meetup</Text>
+                      <Text style={styles.meetingInlineCta}>Schedule pickup</Text>
                     </Pressable>
                   )}
                 </View>
@@ -5232,7 +6559,7 @@ export default function RentalScreen() {
                   style={({ pressed }) => [
                     styles.agreementCard,
                     !isTabletMargins && styles.cardPadPhone,
-                    meetingCompleted && !meetingExpanded ? styles.completedCollapsedCard : null,
+                    meetupCoordinationComplete && !meetingExpanded ? styles.completedCollapsedCard : null,
                     !termsCompleted ? styles.phaseCardDisabled : null,
                     !meetingExpanded && termsCompleted && pressed ? styles.collapsedCardPressed : null,
                   ]}
@@ -5244,8 +6571,10 @@ export default function RentalScreen() {
                     style={({ pressed }) => [styles.sectionHeaderRow, pressed && { opacity: 0.9 }]}
                   >
                     <View style={styles.sectionTitleWithCheck}>
-                      <Text style={styles.sectionTitleInline}>Meeting Details</Text>
-                      {meetingCompleted ? <Text style={styles.sectionCompleteCheck}>✓</Text> : null}
+                      <Text style={styles.sectionTitleInline}>Meetup coordination</Text>
+                      {meetupCoordinationComplete ? (
+                        <Text style={styles.sectionCompleteCheck}>✓</Text>
+                      ) : null}
                     </View>
                     <View style={styles.sectionHeaderRight}>
                       <Text style={styles.inlineRoleLabel}>{meetingExpanded ? 'Collapse' : 'Expand'}</Text>
@@ -5254,167 +6583,92 @@ export default function RentalScreen() {
                   {!meetingExpanded ? (
                     <Text style={styles.verificationCollapsedMeta}>
                       {!termsCompleted
-                        ? 'Meeting details unlock after agreed terms confirmation.'
-                        : meetingCompleted
-                          ? 'Confirmed pickup/return schedule and meetup location.'
-                          : 'Review or respond to pending meetup proposal.'}
+                        ? 'Meetup coordination unlocks after agreed terms confirmation.'
+                        : meetupCoordinationComplete
+                          ? 'Pickup and return schedules are confirmed.'
+                          : pickupCoordinationComplete && !returnCoordinationComplete
+                            ? 'Pickup confirmed — coordinate return details next.'
+                            : meetingStatusText}
                     </Text>
                   ) : (
                     <>
-                      <Text style={styles.meetingProposalStateText}>{meetingStatusText}</Text>
                       {durationWarningVisible ? (
                         <Text style={styles.durationWarningBanner}>
-                          ⚠ Duration changed ({durationWarningEval.originalLabel} to {durationWarningEval.proposedLabel}).
-                          Final price may require adjustment before acceptance.
+                          ⚠{' '}
+                          {durationWarningEval.warningLine ??
+                            'Proposed meetup times fall outside the agreed rental dates. Approval required before acceptance.'}
                         </Text>
                       ) : null}
-                      <View style={styles.agreementGridRow}>
-                        <View style={styles.agreementGridCell}>
-                          <Text style={styles.metaLabel}>Meetup location</Text>
-                          {meetupLocationTrimmed ? (
-                            <Text style={styles.agreementLocationValue}>{meetupLocationTrimmed}</Text>
-                          ) : (
-                            <Pressable
-                              pressOpacityFeedback={false}
-                              disabled={!canOpenMeetingProposal}
-                              onPress={openMeetingProposalEditor}
-                              accessibilityRole="button"
-                              accessibilityLabel="Propose meetup location"
-                              style={({ pressed }) => [
-                                styles.meetingProposeLinkHit,
-                                pressed && canOpenMeetingProposal && styles.meetingProposeLinkPressed,
-                              ]}
-                            >
-                              <Text
-                                style={[
-                                  styles.meetingProposeLink,
-                                  !canOpenMeetingProposal && styles.meetingProposeLinkDisabled,
-                                ]}
-                              >
-                                Propose
-                              </Text>
-                            </Pressable>
-                          )}
-                        </View>
-                        <View style={styles.agreementGridCell}>
-                          <Text style={styles.metaLabel}>Duration</Text>
-                          <Text style={styles.agreementSecondaryValue}>
-                            {computedDurationLabel}
-                            {durationWarningVisible ? '  ⚠' : ''}
-                          </Text>
-                        </View>
-                      </View>
-                      <View style={styles.agreementGridRow}>
-                        <View style={styles.agreementGridCell}>
-                          <Text style={styles.metaLabel}>Pickup</Text>
-                          <Text style={styles.agreementDatetimeValue}>{meetingPickupDisplay}</Text>
-                        </View>
-                        <View style={styles.agreementGridCell} />
-                      </View>
-                      <View style={[styles.agreementGridRow, styles.agreementGridRowLast]}>
-                        <View style={styles.agreementGridCell}>
-                          <Text style={styles.metaLabel}>Return</Text>
-                          <Text style={styles.agreementDatetimeValue}>{meetingReturnDisplay}</Text>
-                        </View>
-                        <View style={[styles.agreementGridCell, styles.agreementGridCellTimestamp]}>
-                          {showMeetingAccept ? (
-                            <View style={styles.meetingActionsRow}>
-                              <Pressable
-                                pressOpacityFeedback={false}
-                                haptic
-                                disabled={proposalBusy}
-                                onPress={() => void onAcceptMeetingProposal()}
-                                style={({ pressed }) => [
-                                  styles.meetingPrimaryBtn,
-                                  pressed && styles.meetingPrimaryBtnPressed,
-                                  proposalBusy && styles.meetingBtnDisabled,
-                                ]}
-                              >
-                                <Text style={styles.meetingPrimaryBtnText}>Accept</Text>
-                              </Pressable>
-                              <Pressable
-                                pressOpacityFeedback={false}
-                                haptic
-                                disabled={proposalBusy}
-                                onPress={openMeetingProposalEditor}
-                                style={({ pressed }) => [
-                                  styles.meetingSecondaryBtn,
-                                  pressed && styles.meetingSecondaryBtnPressed,
-                                  proposalBusy && styles.meetingBtnDisabled,
-                                ]}
-                              >
-                                <Text style={styles.meetingSecondaryBtnText}>Modify</Text>
-                              </Pressable>
-                            </View>
-                          ) : null}
-                          {showMeetingPrimaryAction ? (
-                            <View style={styles.meetingActionsRow}>
-                              {showMeetingPendingPill ? (
-                                <View style={[styles.meetingPrimaryBtn, styles.meetingPendingBtn]}>
-                                  <Text style={styles.meetingPrimaryBtnText}>Pending</Text>
-                                </View>
-                              ) : null}
-                              <Pressable
-                                pressOpacityFeedback={false}
-                                haptic
-                                disabled={proposalBusy}
-                                onPress={openMeetingProposalEditor}
-                                style={({ pressed }) => [
-                                  styles.meetingPrimaryBtn,
-                                  pressed && styles.meetingPrimaryBtnPressed,
-                                  proposalBusy && styles.meetingBtnDisabled,
-                                ]}
-                              >
-                                <Text style={styles.meetingPrimaryBtnText}>
-                                  {hasPendingProposal ? 'Modify' : 'Propose Changes'}
-                                </Text>
-                              </Pressable>
-                            </View>
-                          ) : null}
-                          {showMeetingConfirmedActions ? (
-                            <View style={styles.meetingActionsRow}>
-                              <View style={[styles.meetingPrimaryBtn, styles.meetingConfirmedBtn]}>
-                                <Text style={styles.meetingPrimaryBtnText}>Confirmed</Text>
-                              </View>
-                              <Pressable
-                                pressOpacityFeedback={false}
-                                haptic
-                                disabled={proposalBusy}
-                                onPress={() => {
-                                  if (editLockedByPickupWindow) {
-                                    Alert.alert(
-                                      'Meetup edit locked',
-                                      `The confirmed meetup can’t be edited within ${RENTAL_PHOTO_WINDOW_HOURS_BEFORE_EVENT} hours of pickup.`
-                                    );
-                                    return;
-                                  }
-                                  openMeetingProposalEditor();
-                                }}
-                                style={({ pressed }) => [
-                                  styles.meetingSecondaryBtn,
-                                  pressed && styles.meetingSecondaryBtnPressed,
-                                  !canEditConfirmed && styles.meetingBtnDisabled,
-                                ]}
-                              >
-                                <Text style={styles.meetingSecondaryBtnText}>Edit</Text>
-                              </Pressable>
-                            </View>
-                          ) : null}
-                          {showMeetingConfirmedActions && editLockedByPickupWindow ? (
-                            <Text style={styles.confirmedAtText}>
-                              Edit locked {RENTAL_PHOTO_WINDOW_HOURS_BEFORE_EVENT}h before pickup
-                            </Text>
-                          ) : null}
-                          {rental.confirmed_at ? (
-                            <Text style={styles.confirmedAtText}>Confirmed {formatDateTime(rental.confirmed_at)}</Text>
-                          ) : null}
-                        </View>
-                      </View>
+                      <MeetupPhaseCoordinationCard
+                        key={`owner-pickup-coordination-${coordinationLiveRevision}`}
+                        title="Pickup coordination"
+                        lane={meetupCoordination.pickup}
+                        busy={proposalBusy}
+                        diagnostics={{
+                          coordinationLiveRevision,
+                          pendingPhase: meetupCoordination.pendingPhase,
+                          surface: 'owner_workspace',
+                          componentKey: `owner_workspace:pickup:${coordinationLiveRevision}`,
+                          meetingExpanded,
+                          meetingShowFullCard,
+                          cardsVisible: meetupCardsMounted,
+                        }}
+                        rentalAudit={rentalCoordinationFieldAudit}
+                        onPropose={() => openMeetingProposalEditor('pickup')}
+                        onModify={() => openMeetingProposalEditor('pickup')}
+                        onAccept={() => void onAcceptMeetingProposal()}
+                        onDecline={() => void onDeclineMeetingProposal()}
+                      />
+                      <MeetupPhaseCoordinationCard
+                        key={`owner-return-coordination-${coordinationLiveRevision}`}
+                        title="Return coordination"
+                        lane={meetupCoordination.return}
+                        busy={proposalBusy}
+                        diagnostics={{
+                          coordinationLiveRevision,
+                          pendingPhase: meetupCoordination.pendingPhase,
+                          surface: 'owner_workspace',
+                          componentKey: `owner_workspace:return:${coordinationLiveRevision}`,
+                          meetingExpanded,
+                          meetingShowFullCard,
+                          cardsVisible: meetupCardsMounted,
+                        }}
+                        rentalAudit={rentalCoordinationFieldAudit}
+                        onPropose={() => openMeetingProposalEditor('return')}
+                        onModify={() => openMeetingProposalEditor('return')}
+                        onAccept={() => void onAcceptMeetingProposal()}
+                        onDecline={() => void onDeclineMeetingProposal()}
+                      />
+                      {showMeetingConfirmedActions && editLockedByPickupWindow ? (
+                        <Text style={styles.confirmedAtText}>
+                          Edit locked {RENTAL_PHOTO_WINDOW_HOURS_BEFORE_EVENT}h before pickup
+                        </Text>
+                      ) : null}
+                      {rental.confirmed_at ? (
+                        <Text style={styles.confirmedAtText}>Confirmed {formatDateTime(rental.confirmed_at)}</Text>
+                      ) : null}
                     </>
                   )}
                 </Pressable>
               )}
             </View>
+
+            {agreementStatus === 'confirmed' &&
+            physicalPossessionConfirmed &&
+            !pickupHandoffComplete ? (
+              <View onLayout={onLifecycleSectionLayout('pickup')}>
+                <RentalAuthorizationSection
+                  authorization={rentalActivation.authorization}
+                  viewerRole={viewerRole}
+                  busy={signHandoffBusy}
+                  onOpenAuthorization={() => {
+                    setAgreementModalVisible(true);
+                    setPickupExpanded(true);
+                    scrollToLifecycleStep(3);
+                  }}
+                />
+              </View>
+            ) : null}
 
             {agreementStatus === 'confirmed' ? (
               <View onLayout={onLifecycleSectionLayout('pickup')}>
@@ -5422,14 +6676,14 @@ export default function RentalScreen() {
               </View>
             ) : null}
 
-            {agreementStatus === 'confirmed' && lifecyclePhase === 'active' ? (
+            {agreementStatus === 'confirmed' && lifecyclePhase === 'active' && pickupHandoffComplete ? (
               <View onLayout={onLifecycleSectionLayout('active')}>
               <View style={[styles.prepareForReturnCard, !isTabletMargins && styles.cardPadPhone]}>
                 <Text style={styles.prepareForReturnTitle}>{activePrepareCardTitle(viewerRole)}</Text>
                 <View style={styles.prepareForReturnRow}>
                   <Text style={styles.metaLabel}>Return time</Text>
                   <Text style={styles.prepareForReturnValue}>
-                    {formatCompactDateTime(rental.return_datetime ?? rental.return_time)}
+                    {formatCompactDateTime(meetingReturnIso)}
                   </Text>
                 </View>
                 <View style={styles.prepareForReturnRow}>
@@ -5497,9 +6751,12 @@ export default function RentalScreen() {
             itemName={rentalWorkspaceHero.title}
             durationLabel={computedDurationLabel}
             agreementBaselineDurationHours={agreementBaselineDurationHoursForProposals}
+            requestSchedulingMeta={meetupSchedulingMeta}
+            scheduleHints={meetupScheduleHints}
             isRenter={viewerRole === 'renter'}
             isOwner={viewerRole === 'owner'}
             busy={proposalBusy}
+            proposalPhase={proposalEditorPhase}
             onConfirm={onAcceptMeetingProposal}
             onProposeChange={onProposeRentalDetails}
           />
@@ -8030,6 +9287,8 @@ const styles = StyleSheet.create({
     color: ui.textPrimary,
     marginBottom: 4,
   },
+  handoffInspectionSummary: { marginTop: 10, gap: 4 },
+  handoffInspectionLine: { fontSize: 13, color: ui.textSecondary, lineHeight: 18 },
   pickupChecklistCompleteSub: {
     fontSize: 12,
     color: ui.textSecondary,

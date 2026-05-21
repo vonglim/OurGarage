@@ -1,6 +1,6 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
-import React, { forwardRef, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
@@ -24,11 +24,13 @@ import {
   SCHEDULING_QUARTER_HOUR_INTERVAL,
   snapDateTimeToQuarterHour,
 } from '@/lib/dateTimeScheduling';
+import { evaluateContractualMeetupProposal } from '@/lib/rentalContractWindow';
+import type { ContractualRentalWindowInput } from '@/lib/rentalContractWindow';
 import {
-  DURATION_GRACE_HOURS,
-  durationHoursBetween,
-  evaluateDurationChange,
-} from '@/lib/proposalDurationChange';
+  logRentalOwnerMeetupDefaults,
+  resolveMeetupProposalModalDefaults,
+} from '@/lib/rentalMeetupProposalModalDefaults';
+import { resolveMeetupDisplaySchedule } from '@/lib/rentalMeetupCoordinationState';
 
 export type RentalMeetupDetails = {
   id: string;
@@ -64,22 +66,27 @@ type Props = {
   showHeaderEditAction?: boolean;
   itemName: string;
   durationLabel: string;
-  /** Agreed rental span (hours); drives non-blocking duration change hint in the proposal modal. */
+  /** @deprecated Contract window uses requestSchedulingMeta — kept for display only. */
   agreementBaselineDurationHours?: number | null;
+  requestSchedulingMeta?: unknown;
+  scheduleHints?: ContractualRentalWindowInput['scheduleHints'];
   isRenter: boolean;
   isOwner: boolean;
   busy?: boolean;
+  /** Which coordination lane the hidden proposal modal should edit. */
+  proposalPhase?: 'pickup' | 'return' | 'both';
   onConfirm: () => Promise<void>;
   onProposeChange: (input: {
     meetupTimeIso: string;
     returnTimeIso: string;
     meetupLocation: string;
+    phase?: 'pickup' | 'return' | 'both';
   }) => Promise<boolean>;
   onPrepareMeetup?: () => void;
 };
 
 export type RentalDetailsCardHandle = {
-  openProposeModal: () => void;
+  openProposeModal: (phase?: 'pickup' | 'return' | 'both') => void;
 };
 
 type PickerField = 'pickupDate' | 'pickupTime' | 'returnDate' | 'returnTime';
@@ -118,22 +125,6 @@ function formatPickedTime(d: Date): string {
   return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
-function initialDraftDate(iso: string | null): Date {
-  if (iso) {
-    const t = Date.parse(iso);
-    if (Number.isFinite(t)) return snapDateTimeToQuarterHour(new Date(t));
-  }
-  return snapDateTimeToQuarterHour(new Date());
-}
-
-function initialReturnDraft(iso: string | null, pickup: Date): Date {
-  if (iso) {
-    const t = Date.parse(iso);
-    if (Number.isFinite(t)) return snapDateTimeToQuarterHour(new Date(t));
-  }
-  return mergeCalendarDayKeepingClock(pickup, 1, pickup);
-}
-
 /** Android uses system dialogs; iOS (and web) use embedded spinners + Done. */
 const useEmbeddedPickers = Platform.OS === 'ios' || Platform.OS === 'web';
 
@@ -146,9 +137,12 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
     itemName: _itemName,
     durationLabel,
     agreementBaselineDurationHours = null,
+    requestSchedulingMeta,
+    scheduleHints,
     isRenter,
     isOwner,
     busy = false,
+    proposalPhase: proposalPhaseProp = 'both',
     onConfirm,
     onProposeChange,
     onPrepareMeetup,
@@ -156,17 +150,33 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
   ref
 ) {
   const [proposeOpen, setProposeOpen] = useState(false);
-  const pickupSeedIso =
-    rental.agreed_pickup_datetime ?? rental.pickup_datetime ?? rental.meetup_time ?? null;
-  const returnSeedIso =
-    rental.agreed_return_datetime ?? rental.return_datetime ?? rental.return_time ?? null;
-  const [meetupDraft, setMeetupDraft] = useState<Date>(() =>
-    snapDateTimeToQuarterHour(initialDraftDate(pickupSeedIso))
+  const [activeProposalPhase, setActiveProposalPhase] = useState<'pickup' | 'return' | 'both'>('both');
+  const effectiveProposalPhase = proposeOpen ? activeProposalPhase : proposalPhaseProp;
+  const meetupDisplaySchedule = useMemo(
+    () =>
+      resolveMeetupDisplaySchedule({
+        rental,
+        requestSchedulingMeta,
+      }),
+    [rental, requestSchedulingMeta]
   );
-  const [returnDraft, setReturnDraft] = useState<Date>(() => {
-    const pickup = snapDateTimeToQuarterHour(initialDraftDate(pickupSeedIso));
-    return snapDateTimeToQuarterHour(initialReturnDraft(returnSeedIso ?? null, pickup));
-  });
+  const modalDefaults = useMemo(
+    () =>
+      resolveMeetupProposalModalDefaults({
+        rental,
+        requestSchedulingMeta,
+        scheduleHints,
+        hasPendingProposal: meetupDisplaySchedule.hasPendingProposal,
+      }),
+    [rental, requestSchedulingMeta, scheduleHints, meetupDisplaySchedule.hasPendingProposal]
+  );
+  const draftFromModalDefaults = useCallback(() => {
+    const pickup = snapDateTimeToQuarterHour(new Date(Date.parse(modalDefaults.pickupIso)));
+    const ret = snapDateTimeToQuarterHour(new Date(Date.parse(modalDefaults.returnIso)));
+    return { pickup, ret };
+  }, [modalDefaults.pickupIso, modalDefaults.returnIso]);
+  const [meetupDraft, setMeetupDraft] = useState<Date>(() => draftFromModalDefaults().pickup);
+  const [returnDraft, setReturnDraft] = useState<Date>(() => draftFromModalDefaults().ret);
   const [meetupLocation, setMeetupLocation] = useState(
     (rental.meetup_location || rental.return_location || '').trim() || ''
   );
@@ -184,39 +194,28 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
   const bothConfirmed =
     rental.agreement_status === 'confirmed' || (isOwnerConfirmed && isRenterConfirmed);
   const confirmAnim = useRef(new Animated.Value(bothConfirmed ? 1 : 0)).current;
-  const sharedRentalLocation = (rental.meetup_location || rental.return_location || '').trim();
-  const pickupIso =
-    rental.agreed_pickup_datetime ?? rental.pickup_datetime ?? rental.meetup_time ?? null;
-  const returnIso =
-    rental.agreed_return_datetime ?? rental.return_datetime ?? rental.return_time ?? null;
-  const canConfirm = Boolean(
-    rental.meetup_time && sharedRentalLocation !== '' && rental.return_time
-  );
+  const sharedRentalLocation = meetupDisplaySchedule.location;
+  const pickupIso = meetupDisplaySchedule.pickupIso;
+  const returnIso = meetupDisplaySchedule.returnIso;
+  const canConfirm = Boolean(pickupIso && sharedRentalLocation !== '' && returnIso);
   React.useEffect(() => {
     setMeetupLocation((rental.meetup_location || rental.return_location || '').trim() || '');
   }, [rental]);
 
   React.useEffect(() => {
     if (proposeOpen) return;
-    const pIso = rental.agreed_pickup_datetime ?? rental.pickup_datetime ?? rental.meetup_time;
-    const rIso = rental.agreed_return_datetime ?? rental.return_datetime ?? rental.return_time;
-    const pickup = snapDateTimeToQuarterHour(initialDraftDate(pIso));
-    const ret = snapDateTimeToQuarterHour(initialReturnDraft(rIso ?? null, pickup));
+    const { pickup, ret } = draftFromModalDefaults();
     pickupReturnDateLinkedRef.current = isReturnDefaultNextCalendarDayAfterPickup(pickup, ret);
     setMeetupDraft(pickup);
     setReturnDraft(ret);
   }, [
     proposeOpen,
     rental.id,
-    rental.agreed_pickup_datetime,
-    rental.agreed_return_datetime,
-    rental.pickup_datetime,
-    rental.meetup_time,
-    rental.return_datetime,
-    rental.return_time,
+    draftFromModalDefaults,
+    meetupDisplaySchedule.hasPendingProposal,
   ]);
 
-  const openPropose = () => {
+  const openPropose = (phase: 'pickup' | 'return' | 'both' = 'both') => {
     if (__DEV__) {
       console.log('[proposal] openPropose attempt', {
         rentalId: rental.id,
@@ -226,18 +225,25 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
         isRenter,
         busy,
         showHeaderEditAction,
+        phase,
       });
     }
-    const pickup = snapDateTimeToQuarterHour(
-      initialDraftDate(rental.pickup_datetime ?? rental.meetup_time)
-    );
-    const ret = snapDateTimeToQuarterHour(
-      initialReturnDraft(rental.return_datetime ?? rental.return_time ?? null, pickup)
-    );
+    if (__DEV__ && isOwner) {
+      logRentalOwnerMeetupDefaults(rental.id, modalDefaults, {
+        surface: 'meetup_proposal_modal_open',
+        isOwner: true,
+      });
+    }
+    setActiveProposalPhase(phase);
+    const { pickup, ret } = draftFromModalDefaults();
     pickupReturnDateLinkedRef.current = isReturnDefaultNextCalendarDayAfterPickup(pickup, ret);
     setMeetupDraft(pickup);
     setReturnDraft(ret);
-    setMeetupLocation((rental?.meetup_location || rental?.return_location || '').trim() || '');
+    const loc =
+      phase === 'return'
+        ? (rental.return_location || rental.meetup_location || '').trim()
+        : (rental.meetup_location || rental.return_location || '').trim();
+    setMeetupLocation(loc || '');
     pickerTargetRef.current = null;
     setActivePicker(null);
     setProposeOpen(true);
@@ -252,7 +258,7 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
     () => ({
       openProposeModal: openPropose,
     }),
-    [rental]
+    [rental, modalDefaults]
   );
 
   const closePicker = () => {
@@ -340,35 +346,58 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
   const handleSubmit = async () => {
     const meetupSnap = snapDateTimeToQuarterHour(meetupDraft);
     const returnSnap = snapDateTimeToQuarterHour(returnDraft);
+    const phase = effectiveProposalPhase;
+    const submitPickupIso =
+      phase === 'return'
+        ? modalDefaults.pickupIso
+        : meetupSnap.toISOString();
+    const submitReturnIso =
+      phase === 'pickup'
+        ? modalDefaults.returnIso
+        : returnSnap.toISOString();
     if (__DEV__) {
       console.log('[proposal] submit attempt', {
         rentalId: rental.id,
         offerId: rental.offer_id,
         requestId: rental.request_id,
-        meetupIso: meetupSnap.toISOString(),
-        returnIso: returnSnap.toISOString(),
+        phase,
+        meetupIso: submitPickupIso,
+        returnIso: submitReturnIso,
         meetupLocation: meetupLocation.trim(),
       });
     }
     const loc = meetupLocation.trim();
     if (!loc) {
-      alert('Enter meetup location');
+      alert(phase === 'return' ? 'Enter return location' : 'Enter meetup location');
       return;
     }
-    if (Number.isNaN(meetupSnap.getTime()) || Number.isNaN(returnSnap.getTime())) {
-      alert('Select valid pickup and return times');
-      return;
+    if (phase !== 'return') {
+      if (Number.isNaN(meetupSnap.getTime())) {
+        alert('Select a valid pickup time');
+        return;
+      }
     }
-    if (returnSnap.getTime() <= meetupSnap.getTime()) {
-      alert('Return must be after pickup');
-      return;
+    if (phase !== 'pickup') {
+      if (Number.isNaN(returnSnap.getTime())) {
+        alert('Select a valid return time');
+        return;
+      }
+    }
+    if (phase === 'both' || phase === 'return') {
+      const pickupMs = Date.parse(submitPickupIso);
+      const returnMs = Date.parse(submitReturnIso);
+      if (Number.isFinite(pickupMs) && Number.isFinite(returnMs) && returnMs <= pickupMs) {
+        alert('Return must be after pickup');
+        return;
+      }
     }
     setSubmitting(true);
     try {
       const ok = await onProposeChange({
-        meetupTimeIso: meetupSnap.toISOString(),
-        returnTimeIso: returnSnap.toISOString(),
+        meetupTimeIso: submitPickupIso,
+        returnTimeIso: submitReturnIso,
         meetupLocation: loc,
+        phase,
       });
       if (!ok) {
         if (__DEV__) {
@@ -417,12 +446,13 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
   const durationChangeDraftEval = useMemo(() => {
     const meet = snapDateTimeToQuarterHour(meetupDraft);
     const ret = snapDateTimeToQuarterHour(returnDraft);
-    return evaluateDurationChange({
-      baselineDurationHours: agreementBaselineDurationHours,
-      proposedDurationHours: durationHoursBetween(meet.toISOString(), ret.toISOString()),
-      graceHours: DURATION_GRACE_HOURS,
+    return evaluateContractualMeetupProposal({
+      proposedPickupIso: meet.toISOString(),
+      proposedReturnIso: ret.toISOString(),
+      schedulingMeta: requestSchedulingMeta,
+      phase: 'general',
     });
-  }, [agreementBaselineDurationHours, meetupDraft, returnDraft]);
+  }, [meetupDraft, requestSchedulingMeta, returnDraft]);
 
   return (
     <View style={styles.card}>
@@ -547,7 +577,13 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
         <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
           <View style={styles.modalBackdrop}>
             <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Coordinate meetup</Text>
+              <Text style={styles.modalTitle}>
+                {effectiveProposalPhase === 'pickup'
+                  ? 'Propose pickup details'
+                  : effectiveProposalPhase === 'return'
+                    ? 'Propose return details'
+                    : 'Coordinate meetup'}
+              </Text>
               <ScrollView
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator={false}
@@ -556,17 +592,25 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
                 <View style={styles.modalMeetupSection}>
                   <View style={styles.modalSectionHeaderRow}>
                     <Ionicons name="location-outline" size={17} color={ui.textSecondary} />
-                    <Text style={styles.modalSectionTitleText}>Meetup location</Text>
+                    <Text style={styles.modalSectionTitleText}>
+                      {effectiveProposalPhase === 'return' ? 'Return location' : 'Meetup location'}
+                    </Text>
                   </View>
                   <TextInput
                     value={meetupLocation}
                     onChangeText={setMeetupLocation}
-                    placeholder="Where you’ll meet"
+                    placeholder={
+                      effectiveProposalPhase === 'return' ? 'Where you’ll return the item' : 'Where you’ll meet'
+                    }
                     placeholderTextColor={ui.textSecondary}
                     style={styles.modalMeetupInput}
                   />
                   <Text style={styles.modalMeetupHelper}>
-                    Shared meetup location for pickup and return.
+                    {effectiveProposalPhase === 'return'
+                      ? 'Where the item will be returned.'
+                      : effectiveProposalPhase === 'pickup'
+                        ? 'Shared meetup location for pickup.'
+                        : 'Shared meetup location for pickup and return.'}
                   </Text>
                   {meetupSuggestions.length > 0 ? (
                     <View style={styles.suggestionsWrap}>
@@ -584,60 +628,68 @@ export const RentalDetailsCard = forwardRef<RentalDetailsCardHandle, Props>(func
                   ) : null}
                 </View>
 
-                <View style={styles.modalSectionDivider} />
+                {effectiveProposalPhase !== 'return' ? (
+                  <>
+                    <View style={styles.modalSectionDivider} />
 
-                <Text style={styles.modalSectionTitle}>Pickup</Text>
-                <View style={styles.pickerRow}>
-                  <Pressable
-                    pressOpacityFeedback={false}
-                    onPress={() => openPicker('pickupDate')}
-                    style={({ pressed }) => [styles.pickerValueCell, pressed && styles.secondaryBtnPressed]}
-                  >
-                    <Text style={styles.pickerValueText}>{formatPickedDateCompact(meetupDraft)}</Text>
-                  </Pressable>
-                  <Pressable
-                    pressOpacityFeedback={false}
-                    onPress={() => openPicker('pickupTime')}
-                    style={({ pressed }) => [styles.pickerValueCell, pressed && styles.secondaryBtnPressed]}
-                  >
-                    <Text style={styles.pickerValueText}>{formatPickedTime(meetupDraft)}</Text>
-                  </Pressable>
-                </View>
-
-                <Text style={[styles.modalSectionTitle, styles.modalSectionTitleReturn]}>Return</Text>
-                <View style={styles.pickerRow}>
-                  <Pressable
-                    pressOpacityFeedback={false}
-                    onPress={() => openPicker('returnDate')}
-                    style={({ pressed }) => [styles.pickerValueCell, pressed && styles.secondaryBtnPressed]}
-                  >
-                    <Text style={styles.pickerValueText}>{formatPickedDateCompact(returnDraft)}</Text>
-                  </Pressable>
-                  <Pressable
-                    pressOpacityFeedback={false}
-                    onPress={() => openPicker('returnTime')}
-                    style={({ pressed }) => [
-                      styles.pickerValueCell,
-                      durationChangeDraftEval.warningTriggered ? styles.pickerValueCellWarning : null,
-                      pressed && styles.secondaryBtnPressed,
-                    ]}
-                  >
-                    <View style={styles.pickerValueInnerRow}>
-                      <Text style={styles.pickerValueText}>{formatPickedTime(returnDraft)}</Text>
-                      {durationChangeDraftEval.warningTriggered ? (
-                        <Ionicons name="warning-outline" size={18} color="#B45309" />
-                      ) : null}
+                    <Text style={styles.modalSectionTitle}>Pickup</Text>
+                    <View style={styles.pickerRow}>
+                      <Pressable
+                        pressOpacityFeedback={false}
+                        onPress={() => openPicker('pickupDate')}
+                        style={({ pressed }) => [styles.pickerValueCell, pressed && styles.secondaryBtnPressed]}
+                      >
+                        <Text style={styles.pickerValueText}>{formatPickedDateCompact(meetupDraft)}</Text>
+                      </Pressable>
+                      <Pressable
+                        pressOpacityFeedback={false}
+                        onPress={() => openPicker('pickupTime')}
+                        style={({ pressed }) => [styles.pickerValueCell, pressed && styles.secondaryBtnPressed]}
+                      >
+                        <Text style={styles.pickerValueText}>{formatPickedTime(meetupDraft)}</Text>
+                      </Pressable>
                     </View>
-                  </Pressable>
-                </View>
-                {durationChangeDraftEval.warningTriggered ? (
-                  <View style={styles.durationWarningBanner}>
-                    <Ionicons name="warning-outline" size={18} color="#B45309" />
-                    <Text style={styles.durationWarningBannerText}>
-                      You are proposing a rental duration different from the original agreement. The other party must
-                      approve this change. Pricing and rental terms may change based on the updated duration.
-                    </Text>
-                  </View>
+                  </>
+                ) : null}
+
+                {effectiveProposalPhase !== 'pickup' ? (
+                  <>
+                    <Text style={[styles.modalSectionTitle, styles.modalSectionTitleReturn]}>Return</Text>
+                    <View style={styles.pickerRow}>
+                      <Pressable
+                        pressOpacityFeedback={false}
+                        onPress={() => openPicker('returnDate')}
+                        style={({ pressed }) => [styles.pickerValueCell, pressed && styles.secondaryBtnPressed]}
+                      >
+                        <Text style={styles.pickerValueText}>{formatPickedDateCompact(returnDraft)}</Text>
+                      </Pressable>
+                      <Pressable
+                        pressOpacityFeedback={false}
+                        onPress={() => openPicker('returnTime')}
+                        style={({ pressed }) => [
+                          styles.pickerValueCell,
+                          durationChangeDraftEval.warningTriggered ? styles.pickerValueCellWarning : null,
+                          pressed && styles.secondaryBtnPressed,
+                        ]}
+                      >
+                        <View style={styles.pickerValueInnerRow}>
+                          <Text style={styles.pickerValueText}>{formatPickedTime(returnDraft)}</Text>
+                          {durationChangeDraftEval.warningTriggered ? (
+                            <Ionicons name="warning-outline" size={18} color="#B45309" />
+                          ) : null}
+                        </View>
+                      </Pressable>
+                    </View>
+                    {durationChangeDraftEval.warningTriggered ? (
+                      <View style={styles.durationWarningBanner}>
+                        <Ionicons name="warning-outline" size={18} color="#B45309" />
+                        <Text style={styles.durationWarningBannerText}>
+                          {durationChangeDraftEval.warningLine ??
+                            'You are proposing times outside the agreed rental dates. The other party must approve this change.'}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </>
                 ) : null}
               </ScrollView>
 

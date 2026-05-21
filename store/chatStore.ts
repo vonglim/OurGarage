@@ -10,6 +10,7 @@ import { getRequestOwnerId, getRequestSupabaseRowId } from '@/lib/requestOwnersh
 import {
   OFFER_MEETUP_PROPOSAL_KIND,
 } from '@/lib/meetupProposalThreadEvent';
+import { OFFER_MEETUP_COORDINATION_KIND } from '@/lib/meetupCoordinationTimeline';
 import {
   fetchRequestChatMessagesFromSupabase,
   OFFER_USER_CHAT_MESSAGE_KIND,
@@ -74,7 +75,7 @@ function offerMessageRowVisibleInThread(row: Record<string, unknown>): boolean {
   const imgs = parseOfferImageUrls(row);
   const hasContent = b !== '' || imgs.length > 0;
   if (!hasContent) return false;
-  if (k === OFFER_USER_CHAT_MESSAGE_KIND || k === OFFER_MEETUP_PROPOSAL_KIND) return true;
+  if (k === OFFER_USER_CHAT_MESSAGE_KIND || k === OFFER_MEETUP_PROPOSAL_KIND || k === OFFER_MEETUP_COORDINATION_KIND) return true;
   return (
     k === 'initial' ||
     k === 'renter_update' ||

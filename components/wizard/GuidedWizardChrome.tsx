@@ -9,7 +9,15 @@ import {
   guidedWizardChromeStyles as styles,
   wizardLayout,
   wizardScrollBottomPadding,
+  wizardScrollBottomPaddingCompact,
 } from '@/constants/wizardLayout';
+
+export type WizardFooterInlineAction = {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  emphasis?: 'secondary' | 'tertiary';
+};
 
 export type GuidedWizardChromeProps = {
   title: string;
@@ -28,6 +36,13 @@ export type GuidedWizardChromeProps = {
   publishCta?: boolean;
   secondaryFooterLabel?: string;
   onSecondaryFooterPress?: () => void;
+  secondaryFooterDisabled?: boolean;
+  tertiaryFooterLabel?: string;
+  onTertiaryFooterPress?: () => void;
+  /** Compact inline row beneath primary CTA (e.g. "Suggest changes · Open messages"). */
+  footerInlineActions?: WizardFooterInlineAction[];
+  /** Lighter sticky footer — reduced padding and scroll reserve. */
+  footerCompact?: boolean;
   children: React.ReactNode;
   scrollStyle?: StyleProp<ViewStyle>;
   contentContainerStyle?: StyleProp<ViewStyle>;
@@ -52,12 +67,23 @@ export function GuidedWizardChrome({
   publishCta = false,
   secondaryFooterLabel,
   onSecondaryFooterPress,
+  secondaryFooterDisabled = false,
+  tertiaryFooterLabel,
+  onTertiaryFooterPress,
+  footerInlineActions,
+  footerCompact = false,
   children,
   scrollStyle,
   contentContainerStyle,
   bodyStyle,
 }: GuidedWizardChromeProps) {
   const insets = useSafeAreaInsets();
+  const scrollBottomPad = footerCompact
+    ? wizardScrollBottomPaddingCompact(insets.bottom)
+    : wizardScrollBottomPadding(insets.bottom);
+  const footerBottomPad = footerCompact
+    ? Math.max(insets.bottom, wizardLayout.footerCompactBottomMin)
+    : Math.max(insets.bottom, wizardLayout.footerBottomMin);
 
   return (
     <View style={styles.flex}>
@@ -76,7 +102,7 @@ export function GuidedWizardChrome({
         style={[styles.scroll, scrollStyle]}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingBottom: wizardScrollBottomPadding(insets.bottom) },
+          { paddingBottom: scrollBottomPad },
           contentContainerStyle,
         ]}
         keyboardShouldPersistTaps="handled"
@@ -88,13 +114,20 @@ export function GuidedWizardChrome({
         <View style={[styles.body, bodyStyle]}>{children}</View>
       </AppKeyboardAwareScrollView>
 
-      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, wizardLayout.footerBottomMin) }]}>
+      <View
+        style={[
+          styles.footer,
+          footerCompact && styles.footerCompact,
+          { paddingBottom: footerBottomPad },
+        ]}
+      >
         {footerNote ? <Text style={styles.footerNote}>{footerNote}</Text> : null}
         <Pressable
           onPress={onFooterPress}
           disabled={footerDisabled}
           style={({ pressed }) => [
             styles.cta,
+            footerCompact && styles.ctaCompact,
             publishCta && styles.ctaPublish,
             footerDisabled && styles.ctaDisabled,
             pressed && !footerDisabled && { opacity: 0.92 },
@@ -103,13 +136,52 @@ export function GuidedWizardChrome({
         >
           <Text style={[styles.ctaText, publishCta && styles.ctaTextPublish]}>{footerLabel}</Text>
         </Pressable>
-        {secondaryFooterLabel && onSecondaryFooterPress ? (
+        {footerInlineActions && footerInlineActions.length > 0 ? (
+          <View style={styles.inlineFooterActions}>
+            {footerInlineActions.map((action, index) => (
+              <React.Fragment key={`${action.label}-${index}`}>
+                {index > 0 ? <Text style={styles.inlineFooterSep}>·</Text> : null}
+                <Pressable
+                  onPress={action.onPress}
+                  disabled={action.disabled}
+                  style={({ pressed }) => [pressed && !action.disabled && { opacity: 0.85 }]}
+                  pressOpacityFeedback={false}
+                >
+                  <Text
+                    style={[
+                      styles.inlineFooterAction,
+                      action.emphasis === 'tertiary' && styles.inlineFooterActionTertiary,
+                      action.disabled && styles.ctaDisabled,
+                    ]}
+                  >
+                    {action.label}
+                  </Text>
+                </Pressable>
+              </React.Fragment>
+            ))}
+          </View>
+        ) : null}
+        {!footerInlineActions?.length && secondaryFooterLabel && onSecondaryFooterPress ? (
           <Pressable
             onPress={onSecondaryFooterPress}
-            style={({ pressed }) => [styles.secondaryFooter, pressed && { opacity: 0.85 }]}
+            disabled={secondaryFooterDisabled}
+            style={({ pressed }) => [
+              styles.secondaryFooter,
+              secondaryFooterDisabled && styles.ctaDisabled,
+              pressed && !secondaryFooterDisabled && { opacity: 0.85 },
+            ]}
             pressOpacityFeedback={false}
           >
             <Text style={styles.secondaryFooterText}>{secondaryFooterLabel}</Text>
+          </Pressable>
+        ) : null}
+        {!footerInlineActions?.length && tertiaryFooterLabel && onTertiaryFooterPress ? (
+          <Pressable
+            onPress={onTertiaryFooterPress}
+            style={({ pressed }) => [styles.tertiaryFooter, pressed && { opacity: 0.85 }]}
+            pressOpacityFeedback={false}
+          >
+            <Text style={styles.tertiaryFooterText}>{tertiaryFooterLabel}</Text>
           </Pressable>
         ) : null}
       </View>

@@ -20,7 +20,7 @@ export async function fetchLatestOfferThreadMessagePreview(
     .from('offer_messages')
     .select('body,created_at,author_id,kind')
     .eq('offer_id', oid)
-    .in('kind', ['user_chat', 'meetup_proposal'])
+    .in('kind', ['user_chat', 'meetup_proposal', 'meetup_coordination'])
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -30,9 +30,15 @@ export async function fetchLatestOfferThreadMessagePreview(
   const createdAt = String(row.created_at ?? '');
   const authorId = String(row.author_id ?? '').trim();
   const kind = String(row.kind ?? '');
-  if (!body && kind !== 'meetup_proposal') return null;
+  if (!body && kind !== 'meetup_proposal' && kind !== 'meetup_coordination') return null;
   return {
-    body: body || (kind === 'meetup_proposal' ? 'Meetup proposal' : ''),
+    body:
+      body ||
+      (kind === 'meetup_proposal'
+        ? 'Meetup proposal'
+        : kind === 'meetup_coordination'
+          ? 'Meetup coordination update'
+          : ''),
     createdAt,
     authorId,
     kind,

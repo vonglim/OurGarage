@@ -30,6 +30,8 @@ export type RentalNoteInsertDebugRow = {
   role_matches_owner: boolean;
   role_matches_renter: boolean;
   status_phase_allows_note: boolean;
+  pickup_handoff_complete?: boolean;
+  owner_pre_handoff_allowed?: boolean;
   final_insert_eligible: boolean;
 };
 
@@ -99,6 +101,34 @@ export async function insertRentalNote(
 ): Promise<{ row: RentalNoteRow | null; error: string | null }> {
   const text = input.note.trim();
   if (!text) return { row: null, error: 'Note cannot be empty.' };
+
+  if (input.authorRole === 'owner' && input.phase === 'pre_handoff') {
+    const { data, error } = await client.rpc('insert_owner_pre_handoff_rental_note', {
+      p_rental_id: input.rentalId,
+      p_note: text,
+    });
+    if (error) {
+      console.warn('[rentalNotes] insert_owner_pre_handoff_rental_note', error.message);
+      if (__DEV__) {
+        const diag = await debugRentalNoteInsertEligibility(client, {
+          rentalId: input.rentalId,
+          authorId: input.authorId,
+          authorRole: input.authorRole,
+          phase: input.phase,
+        });
+        console.warn('[rentalNotes] insert eligibility', diag);
+      }
+      return { row: null, error: error.message };
+    }
+    if (__DEV__) {
+      console.log('[rentalNotes] insert success (owner rpc)', {
+        rentalId: input.rentalId,
+        rowId: (data as { id?: string } | null)?.id ?? null,
+      });
+    }
+    return { row: data as RentalNoteRow, error: null };
+  }
+
   const { data, error } = await client
     .from('rental_notes')
     .insert({
@@ -112,6 +142,15 @@ export async function insertRentalNote(
     .single();
   if (error) {
     console.warn('[rentalNotes] insertRentalNote', error.message);
+    if (__DEV__) {
+      const diag = await debugRentalNoteInsertEligibility(client, {
+        rentalId: input.rentalId,
+        authorId: input.authorId,
+        authorRole: input.authorRole,
+        phase: input.phase,
+      });
+      console.warn('[rentalNotes] insert eligibility', diag);
+    }
     return { row: null, error: error.message };
   }
   if (__DEV__) {

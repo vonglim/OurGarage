@@ -37,6 +37,13 @@ export type WizardCoordinateStepProps = {
   /** Hide preset time chips (calmer return confirmation). */
   hideTimeChips?: boolean;
   waitingForOwner?: boolean;
+  /** When set, replaces the default waiting banner copy. */
+  waitingBannerText?: string;
+  /** Renter-facing banner when owner proposed this phase. */
+  ownerProposalPending?: boolean;
+  ownerProposalBannerText?: string;
+  /** Instructional copy clarifying wizard vs chat roles. */
+  messagesHelpText?: string;
   timeSlots: CoordinateTimeSlot[];
   selectedTimeIso: string | null;
   onSelectTimeSlot: (iso: string) => void;
@@ -59,6 +66,10 @@ export function WizardCoordinateStep({
   lockFields = false,
   hideTimeChips = false,
   waitingForOwner = false,
+  waitingBannerText,
+  ownerProposalPending = false,
+  ownerProposalBannerText,
+  messagesHelpText,
   timeSlots,
   selectedTimeIso,
   onSelectTimeSlot,
@@ -213,11 +224,26 @@ export function WizardCoordinateStep({
         </View>
       </View>
 
+      {ownerProposalPending ? (
+        <View style={[styles.waitingBanner, styles.ownerProposalBanner]}>
+          <Ionicons name="information-circle-outline" size={16} color={ui.primary} />
+          <Text style={styles.waitingText}>
+            {ownerProposalBannerText ??
+              `The owner proposed ${isPickup ? 'pickup' : 'return'} details. Accept them below or suggest changes.`}
+          </Text>
+        </View>
+      ) : null}
+
+      {messagesHelpText ? (
+        <Text style={styles.messagesHelpText}>{messagesHelpText}</Text>
+      ) : null}
+
       {waitingForOwner ? (
         <View style={styles.waitingBanner}>
           <Ionicons name="time-outline" size={16} color={ui.primary} />
           <Text style={styles.waitingText}>
-            Waiting for the owner to review your proposal. You can still message them with questions.
+            {waitingBannerText ??
+              'Waiting for the owner to review your proposal. You can still message them with questions.'}
           </Text>
         </View>
       ) : null}
@@ -390,5 +416,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#EEF2FF',
     alignItems: 'flex-start',
   },
+  ownerProposalBanner: {
+    backgroundColor: '#FFF7ED',
+  },
   waitingText: { flex: 1, fontSize: 13, fontWeight: '500', color: '#4338CA', lineHeight: 18 },
+  messagesHelpText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: ui.textSecondary,
+    lineHeight: 18,
+  },
 });

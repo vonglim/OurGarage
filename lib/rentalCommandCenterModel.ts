@@ -110,7 +110,7 @@ export function buildRentalCommandCenterModel(input: {
   viewerRole: RentalWorkspaceViewerRole;
   lifecyclePhase: 'pickup' | 'active' | 'return' | 'completed';
   rentalStatus: string;
-  meetingCompleted: boolean;
+  meetupCoordinationComplete: boolean;
   pickupHandoffComplete: boolean;
   returnHandoffComplete: boolean;
   pickupOperationalState: RentalOperationalState | null;
@@ -223,7 +223,7 @@ export function buildRentalCommandCenterModel(input: {
       input.viewerRole === 'owner'
         ? 'Respond to keep return timing accurate.'
         : `Waiting on the owner to respond.`;
-  } else if (!input.meetingCompleted) {
+  } else if (!input.meetupCoordinationComplete) {
     tone = 'attention';
     operationalState = 'action_required';
     contextLine = 'Meetup not confirmed';

@@ -1,83 +1,207 @@
 import { useCallback, useEffect, useRef } from 'react';
 
-import { getSupabase } from '@/lib/supabase';
+import {
+  extractRenterWizardHandoffPatch,
+  type PickupHandoffPresenceRentalPatch,
+  type RenterWizardHandoffPatch,
+} from '@/lib/pickupHandoffLive';
 import {
   registerRentalRealtimeSubscription,
   unregisterRentalRealtimeSubscription,
 } from '@/lib/rentalLifecycle/realtimeSubscriptionRegistry';
+import {
+  meetupCoordinationFieldsDiffer,
+  meetupCoordinationPatchFromRow,
+} from '@/lib/rentalMeetupCoordinationLive';
+import {
+  parseRentalsLiveUpdate,
+  type RentalsLiveUpdateResult,
+} from '@/lib/rentalLifecycle/rentalRowLivePatch';
+import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
+import { getSupabase } from '@/lib/supabase';
 
-const REFRESH_DEBOUNCE_MS = 120;
+const DEFAULT_DEBOUNCE_MS = 120;
 
-type RentalsUpdatePayload = {
-  agreement_status?: string | null;
-  last_proposed_by?: string | null;
-  meetup_location?: string | null;
-  agreed_pickup_datetime?: string | null;
+export type RentalWizardRealtimeSyncMeta = {
+  triggerSource: string;
+  table: string;
+  receivedAt: number;
+  coordinationChangedFields?: string[];
 };
 
-function summarizeRentalsRow(row: Record<string, unknown> | undefined): RentalsUpdatePayload | null {
-  if (!row || typeof row !== 'object') return null;
-  return {
-    agreement_status:
-      typeof row.agreement_status === 'string' ? row.agreement_status : (row.agreement_status as null),
-    last_proposed_by:
-      typeof row.last_proposed_by === 'string' ? row.last_proposed_by : (row.last_proposed_by as null),
-    meetup_location:
-      typeof row.meetup_location === 'string' ? row.meetup_location : (row.meetup_location as null),
-    agreed_pickup_datetime:
-      typeof row.agreed_pickup_datetime === 'string'
-        ? row.agreed_pickup_datetime
-        : (row.agreed_pickup_datetime as null),
-  };
-}
+export type UseRentalWizardRealtimeSyncOptions = {
+  surface?: string;
+  onRentalRowLivePatch?: (
+    live: RentalsLiveUpdateResult,
+    meta: RentalWizardRealtimeSyncMeta
+  ) => void;
+  onRentalPresencePatch?: (
+    patch: PickupHandoffPresenceRentalPatch,
+    meta: RentalWizardRealtimeSyncMeta
+  ) => void;
+  onRentalCoordinationPatch?: (
+    patch: RentalsLiveUpdateResult['patch'],
+    meta: RentalWizardRealtimeSyncMeta & { changedFields: string[] }
+  ) => void;
+  onRenterWizardHandoffPatch?: (
+    patch: RenterWizardHandoffPatch,
+    meta: RentalWizardRealtimeSyncMeta
+  ) => void;
+  debounceMs?: number;
+  getCoordinationBaseline?: () => Record<string, unknown> | null;
+};
 
 /**
- * Subscribes to rentals + rental_wizard_state changes and coalesces refresh bursts (stress-safe).
+ * Subscribes to rentals + wizard + verification changes.
+ * Live presence/coordination fields patch immediately (0ms); other bursts are debounced.
  */
 export function useRentalWizardRealtimeSync(
   rentalId: string,
-  onRefresh: () => void | Promise<void>
+  onRefresh: () => void | Promise<void>,
+  options?: UseRentalWizardRealtimeSyncOptions
 ): void {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onRefreshRef = useRef(onRefresh);
+  const optionsRef = useRef(options);
   onRefreshRef.current = onRefresh;
+  optionsRef.current = options;
+  const surface = options?.surface ?? 'rental_wizard_layout';
 
-  const scheduleRefresh = useCallback((trigger: string, table: string, payload?: unknown) => {
-    const rentalsSummary =
-      table === 'rentals' && payload && typeof payload === 'object'
-        ? {
-            old: summarizeRentalsRow((payload as { old?: Record<string, unknown> }).old),
-            new: summarizeRentalsRow((payload as { new?: Record<string, unknown> }).new),
-          }
-        : undefined;
-
-    logScenario('realtime', {
-      event: 'change_received',
-      rentalId,
-      source: 'rental_wizard_layout',
-      table,
-      trigger,
-      ...(rentalsSummary ? { rentals: rentalsSummary } : {}),
-    });
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      debounceRef.current = null;
+  const runImmediateRefresh = useCallback(
+    (meta: RentalWizardRealtimeSyncMeta) => {
       logScenario('realtime', {
-        event: 'refresh_scheduled',
+        event: 'live_row_refresh_immediate',
         rentalId,
-        source: 'rental_wizard_layout',
-        trigger,
+        source: surface,
+        trigger: meta.triggerSource,
+        table: meta.table,
       });
-      void Promise.resolve(onRefreshRef.current()).then(() => {
+      void Promise.resolve(onRefreshRef.current());
+    },
+    [rentalId, surface]
+  );
+
+  const scheduleDebouncedRefresh = useCallback(
+    (meta: RentalWizardRealtimeSyncMeta) => {
+      const ms = optionsRef.current?.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        debounceRef.current = null;
         logScenario('realtime', {
-          event: 'refresh_completed',
+          event: 'refresh_scheduled',
           rentalId,
-          source: 'rental_wizard_layout',
+          source: surface,
+          trigger: meta.triggerSource,
+          debounceMs: ms,
         });
+        void Promise.resolve(onRefreshRef.current()).then(() => {
+          logScenario('realtime', {
+            event: 'refresh_completed',
+            rentalId,
+            source: surface,
+          });
+        });
+      }, ms);
+    },
+    [rentalId, surface]
+  );
+
+  const handleChange = useCallback(
+    (triggerSource: string, table: string, payload: unknown) => {
+      const meta: RentalWizardRealtimeSyncMeta = {
+        triggerSource,
+        table,
+        receivedAt: Date.now(),
+      };
+
+      logScenario('realtime', {
+        event: 'change_received',
+        rentalId,
+        source: surface,
+        table,
+        trigger: triggerSource,
       });
-    }, REFRESH_DEBOUNCE_MS);
-  }, [rentalId]);
+
+      if (table === 'rentals') {
+        const rentalsPayload = payload as RealtimePostgresChangesPayload<Record<string, unknown>>;
+        const coordinationBaseline = optionsRef.current?.getCoordinationBaseline?.() ?? null;
+        let live = parseRentalsLiveUpdate(rentalsPayload, { coordinationBaseline });
+        if (!live) {
+          const newRow = rentalsPayload.new as Record<string, unknown> | undefined;
+          if (
+            newRow &&
+            coordinationBaseline &&
+            meetupCoordinationFieldsDiffer(coordinationBaseline, newRow)
+          ) {
+            if (typeof __DEV__ !== 'undefined' && __DEV__) {
+              console.log('[realtime-rentals-handler]', {
+                event: 'synthetic_coordination_patch_from_baseline',
+                surface,
+                triggerSource,
+                last_proposed_by: newRow.last_proposed_by ?? null,
+                proposal_version: newRow.proposal_version ?? null,
+              });
+            }
+            live = {
+              patch: meetupCoordinationPatchFromRow(newRow),
+              presenceChanged: false,
+              coordinationChanged: true,
+              coordinationChangedFields: ['synthetic_baseline_row_diff'],
+              requiresImmediateRefresh: true,
+            };
+          }
+        }
+        if (live?.requiresImmediateRefresh) {
+          const liveMeta: RentalWizardRealtimeSyncMeta = {
+            ...meta,
+            coordinationChangedFields: live.coordinationChangedFields,
+          };
+          if (optionsRef.current?.onRentalRowLivePatch) {
+            optionsRef.current.onRentalRowLivePatch(live, liveMeta);
+          } else {
+            if (live.presenceChanged) {
+              optionsRef.current?.onRentalPresencePatch?.(live.patch, liveMeta);
+            }
+            if (live.coordinationChanged) {
+              optionsRef.current?.onRentalCoordinationPatch?.(live.patch, {
+                ...liveMeta,
+                changedFields: live.coordinationChangedFields,
+              });
+            }
+          }
+          if (live.presenceChanged) {
+            runImmediateRefresh(liveMeta);
+          } else if (live.coordinationChanged && !optionsRef.current?.onRentalRowLivePatch) {
+            scheduleDebouncedRefresh(liveMeta);
+          }
+          return;
+        }
+        scheduleDebouncedRefresh(meta);
+        return;
+      }
+
+      if (table === 'rental_wizard_state') {
+        const wizPatch = extractRenterWizardHandoffPatch(
+          payload as Parameters<typeof extractRenterWizardHandoffPatch>[0]
+        );
+        if (
+          wizPatch?.renterPickupImHereAt ||
+          wizPatch?.renterApprovedPickupPhotosAt ||
+          wizPatch?.renterConfirmedPickupReceiptAt
+        ) {
+          optionsRef.current?.onRenterWizardHandoffPatch?.(wizPatch, meta);
+          runImmediateRefresh(meta);
+          return;
+        }
+        scheduleDebouncedRefresh(meta);
+        return;
+      }
+
+      scheduleDebouncedRefresh(meta);
+    },
+    [rentalId, runImmediateRefresh, scheduleDebouncedRefresh, surface]
+  );
 
   useEffect(() => {
     const id = rentalId.trim();
@@ -85,33 +209,53 @@ export function useRentalWizardRealtimeSync(
 
     const supabase = getSupabase();
     const channelName = `rental-wizard-sync-${id}`;
-    registerRentalRealtimeSubscription(id, channelName, 'rental_wizard_layout');
+    registerRentalRealtimeSubscription(id, channelName, surface);
 
     const channel = supabase
       .channel(channelName)
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'rentals', filter: `id=eq.${id}` },
-        (payload) => scheduleRefresh('rentals_update', 'rentals', payload)
+        (payload) => handleChange('rentals_update', 'rentals', payload)
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'rental_wizard_state', filter: `rental_id=eq.${id}` },
-        (payload) => scheduleRefresh('wizard_state_change', 'rental_wizard_state', payload)
+        (payload) => handleChange('wizard_state_change', 'rental_wizard_state', payload)
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'rental_verification_photos',
+          filter: `rental_id=eq.${id}`,
+        },
+        (payload) => handleChange('pickup_evidence_change', 'rental_verification_photos', payload)
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'rental_verifications',
+          filter: `rental_id=eq.${id}`,
+        },
+        (payload) => handleChange('verification_row_change', 'rental_verifications', payload)
       )
       .subscribe((status) => {
         logScenario('realtime', {
           event: 'channel_status',
           rentalId: id,
-          source: 'rental_wizard_layout',
+          source: surface,
           status,
         });
       });
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
-      unregisterRentalRealtimeSubscription(id, 'rental_wizard_layout');
+      unregisterRentalRealtimeSubscription(id, surface);
       void supabase.removeChannel(channel);
     };
-  }, [rentalId, scheduleRefresh]);
+  }, [handleChange, rentalId, surface]);
 }

@@ -1,5 +1,13 @@
-export { buildRentalWizardContext } from '@/lib/rentalWizard/buildRentalWizardContext';
-export { resolveRentalWizardDestination, estimateWizardCtaLabelFromRentalRow } from '@/lib/rentalWizard/rentalWizardStepResolver';
+export {
+  buildRentalWizardContext,
+  buildRentalWizardContextWithDiagnostics,
+} from '@/lib/rentalWizard/buildRentalWizardContext';
+export {
+  resolveRentalWizardDestination,
+  safeResolveRentalWizardDestination,
+  safeResolveLogicalWizardStep,
+  estimateWizardCtaLabelFromRentalRow,
+} from '@/lib/rentalWizard/rentalWizardStepResolver';
 export {
   clearCoordinateReturnDraft,
   fetchRentalWizardState,

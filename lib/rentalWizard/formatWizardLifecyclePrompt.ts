@@ -3,6 +3,7 @@ import {
   resolveAcceptedMeetupLocation,
   resolveAcceptedRentalPickupIso,
 } from '@/lib/rentalWizard/acceptedPickupCoordination';
+import { resolveRentalReturnIso } from '@/lib/rentalExtensionProposal';
 import type { RentalWizardContext } from '@/lib/rentalWizard/types';
 
 export function formatPromptMeetupDateTime(iso: string | null | undefined): string | null {
@@ -36,6 +37,31 @@ export function buildPickupCoordinationAcceptedPromptContent(
   return {
     headline: 'Pickup details confirmed',
     body: `${ownerShort} approved the meetup location and pickup time.`,
+    detailLines,
+  };
+}
+
+export type ReturnCoordinationAcceptedPromptContent = {
+  headline: string;
+  body: string;
+  detailLines: string[];
+};
+
+export function buildReturnCoordinationAcceptedPromptContent(
+  ctx: RentalWizardContext
+): ReturnCoordinationAcceptedPromptContent {
+  const ownerShort = formatOwnerShortLabel(ctx.ownerDisplayName);
+  const returnIso = resolveRentalReturnIso(ctx.rental) ?? ctx.returnIso;
+  const location = (ctx.rental.return_location ?? ctx.rental.meetup_location ?? '').trim();
+  const scheduleLine = formatPromptMeetupDateTime(returnIso);
+
+  const detailLines: string[] = [];
+  if (scheduleLine) detailLines.push(scheduleLine);
+  if (location) detailLines.push(location);
+
+  return {
+    headline: 'Return details confirmed',
+    body: `${ownerShort} approved the meetup location and return time.`,
     detailLines,
   };
 }

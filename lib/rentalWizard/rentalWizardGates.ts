@@ -1,6 +1,8 @@
 import type { RentalLifecyclePhase } from '@/lib/rentalLifecyclePhase';
+import { rentalRowHasReturnSchedule } from '@/lib/rentalMeetupCoordinationState';
 import {
   hasCanonicalAgreedPickupDatetime,
+  hasCanonicalAgreedReturnDatetime,
   hasCanonicalMeetupLocation,
   isPickupCoordinationComplete,
 } from '@/lib/rentalWizard/pickupCoordinationDiagnostics';
@@ -18,14 +20,21 @@ export function hasPickupLocation(ctx: RentalWizardContext): boolean {
   return hasCanonicalMeetupLocation(ctx.rental);
 }
 
-/** Return time agreed (operational or agreed column). */
+/**
+ * Contractual/operational return hint exists (for display hints only).
+ * Not equivalent to bilateral return coordination acceptance.
+ */
 export function hasReturnSchedule(ctx: RentalWizardContext): boolean {
-  const r = ctx.rental;
-  return Boolean(
-    (r.agreed_return_datetime && String(r.agreed_return_datetime).trim()) ||
-      (r.return_datetime && String(r.return_datetime).trim()) ||
-      (r.return_time && String(r.return_time).trim())
+  return rentalRowHasReturnSchedule(
+    ctx.rental,
+    ctx.requestSchedulingMeta,
+    ctx.hasPendingProposal
   );
+}
+
+/** Return coordination bilaterally accepted — `agreed_return_datetime` on rentals only. */
+export function hasReturnCoordinationAgreed(ctx: RentalWizardContext): boolean {
+  return hasCanonicalAgreedReturnDatetime(ctx.rental);
 }
 
 function isReturnCoordinationAcknowledged(ctx: RentalWizardContext): boolean {
@@ -33,13 +42,13 @@ function isReturnCoordinationAcknowledged(ctx: RentalWizardContext): boolean {
 }
 
 /**
- * Full meetup coordination finished: pickup agreed, return acknowledged on Screen 2, transition 1.5 seen.
- * Required before pickup prep / meetup day screens.
+ * Full meetup coordination finished: pickup agreed, return agreed, Screen 2 ack, transition seen.
+ * Operational/contract return hints alone do not satisfy this gate.
  */
 export function isMeetupCoordinationComplete(ctx: RentalWizardContext): boolean {
   return (
     isPickupCoordinationComplete(ctx) &&
-    hasReturnSchedule(ctx) &&
+    hasReturnCoordinationAgreed(ctx) &&
     ctx.seenTransitions.has('pickup_confirmed_seen') &&
     isReturnCoordinationAcknowledged(ctx)
   );
@@ -55,7 +64,7 @@ export function isWizardReturnPhase(ctx: RentalWizardContext): boolean {
 }
 
 /**
- * Screen 5 (active rental) — only after bilateral pickup handoff (signatures / verification).
+ * Screen 5 (active rental) — only after legal rental activation (agreement, preauth, signatures).
  * `rentals.status` may be `active` immediately after owner approves a request; that is not
  * equipment-out.
  */

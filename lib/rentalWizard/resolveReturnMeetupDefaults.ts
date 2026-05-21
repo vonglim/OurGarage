@@ -1,4 +1,5 @@
 import { mergeCalendarDayKeepingClock } from '@/lib/dateTimeScheduling';
+import { resolveMeetupDisplaySchedule } from '@/lib/rentalMeetupDisplaySchedule';
 import {
   resolveAcceptedMeetupLocation,
   resolveAcceptedRentalPickupIso,
@@ -25,6 +26,7 @@ export type ReturnMeetupDateSource =
   | 'return_datetime'
   | 'return_time'
   | 'pickup_clock_on_return_end_day'
+  | 'display_schedule_return'
   | 'none';
 
 export type ResolvedReturnMeetupTime = {
@@ -100,14 +102,24 @@ function isoFromRentalEndSchedule(ctx: RentalWizardContext): ResolvedReturnMeetu
  * Canonical return meetup time for Coordinate Return (Screen 2).
  *
  * Priority:
- * 1. agreed_return_datetime
- * 2. rental end / schedule hint return ISO
- * 3. accepted return proposal (operational return_* when not pickup-day polluted)
- * 4. return_datetime / return_time (same guard)
+ * 1. resolveMeetupDisplaySchedule return (operational vs agreed precedence)
+ * 2. agreed_return_datetime
+ * 3. rental end / schedule hint return ISO
+ * 4. accepted return proposal (operational return_* when not pickup-day polluted)
+ * 5. return_datetime / return_time (same guard)
  *
  * Never uses agreed_pickup_datetime or pickup meetup date as the return day anchor.
  */
 export function resolveReturnMeetupTimeIso(ctx: RentalWizardContext): ResolvedReturnMeetupTime {
+  const display = resolveMeetupDisplaySchedule({
+    rental: ctx.rental,
+    requestSchedulingMeta: ctx.requestSchedulingMeta,
+    hasPendingProposal: ctx.hasPendingProposal,
+  });
+  if (display.returnIso && !isOperationalReturnPollutedByPickupDay(ctx, display.returnIso)) {
+    return { iso: display.returnIso, source: 'display_schedule_return' };
+  }
+
   const agreed = parseValidIso(ctx.rental.agreed_return_datetime);
   if (agreed && !isOperationalReturnPollutedByPickupDay(ctx, agreed)) {
     return { iso: agreed, source: 'agreed_return_datetime' };

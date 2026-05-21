@@ -1,3 +1,7 @@
+import {
+  isPickupCoordinationCompleteFromRow,
+  isReturnCoordinationCompleteFromRow,
+} from '@/lib/rentalOwnerWorkspacePhase';
 import type { RentalWizardRentalRow } from '@/lib/rentalWizard/types';
 
 export function buildRentalWizardContextFlags(rental: RentalWizardRentalRow) {
@@ -19,6 +23,21 @@ export function buildRentalWizardContextFlags(rental: RentalWizardRentalRow) {
           : 'pending';
   const hasPendingProposal =
     agreementStatus === 'pending' && String(rental.last_proposed_by ?? '').trim().length > 0;
-  const meetingCompleted = agreementStatus === 'confirmed' && !hasPendingProposal;
-  return { agreementStatus, hasPendingProposal, meetingCompleted };
+  const pickupCoordinationComplete = isPickupCoordinationCompleteFromRow(rental);
+  const returnCoordinationAgreed = isReturnCoordinationCompleteFromRow(rental);
+  const meetupCoordinationComplete =
+    pickupCoordinationComplete && returnCoordinationAgreed;
+  /** Global pending layer cleared (e.g. after pickup-only accept) — not full meetup bilateral. */
+  const meetingAgreementCleared = agreementStatus === 'confirmed' && !hasPendingProposal;
+  /** Full bilateral meetup coordination — drives wizard/workspace progression. */
+  const meetingCompleted = meetupCoordinationComplete;
+  return {
+    agreementStatus,
+    hasPendingProposal,
+    meetingCompleted,
+    meetingAgreementCleared,
+    pickupCoordinationComplete,
+    returnCoordinationAgreed,
+    meetupCoordinationComplete,
+  };
 }
