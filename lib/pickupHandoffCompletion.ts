@@ -15,6 +15,7 @@ import {
 import { isPickupHandoffBilaterallyComplete } from '@/lib/rentalOperationalAttention';
 import type { RentalWizardContext, RentalWizardRentalRow, RentalWizardStep } from '@/lib/rentalWizard/types';
 import type { RentalVerificationRow } from '@/lib/rentalVerification';
+import { resolveAuthorizationStepForPickupHandoff } from '@/lib/rentalAuthorization/resolveAuthorizationWizardStep';
 import { canShowWizardActiveRental } from '@/lib/rentalWizard/rentalWizardGates';
 
 export type PickupHandoffNextOperationalStep =
@@ -398,32 +399,54 @@ export function resolveWizardPickupHandoffStep(ctx: RentalWizardContext): {
     };
   }
 
-  if (completion.physicalPossessionConfirmed) {
-    return {
-      step: 'rental_authorization',
-      reason: `authorization_${activation.authorization.phase}`,
-      completion,
-      activation,
-    };
+  if (completion.physicalPossessionConfirmed && !activation.rentalActivated) {
+    const authStep = resolveAuthorizationStepForPickupHandoff(ctx);
+    if (authStep) {
+      return {
+        step: authStep,
+        reason: `authorization_${authStep}`,
+        completion,
+        activation,
+      };
+    }
   }
 
   if (completion.signaturesRequired && !completion.signaturesComplete) {
-    return { step: 'rental_authorization', reason: 'signatures_required', completion, activation };
+    const authStep = resolveAuthorizationStepForPickupHandoff(ctx);
+    if (authStep) {
+      return {
+        step: authStep,
+        reason: 'signatures_required',
+        completion,
+        activation,
+      };
+    }
   }
 
   if (completion.renterConfirmedReceipt || completion.ownerConfirmedHandoff) {
-    return {
-      step: 'rental_authorization',
-      reason: completion.renterConfirmedReceipt
-        ? 'renter_confirmed_receipt'
-        : 'owner_confirmed_handoff',
-      completion,
-      activation,
-    };
+    const authStep = resolveAuthorizationStepForPickupHandoff(ctx);
+    if (authStep) {
+      return {
+        step: authStep,
+        reason: completion.renterConfirmedReceipt
+          ? 'renter_confirmed_receipt'
+          : 'owner_confirmed_handoff',
+        completion,
+        activation,
+      };
+    }
   }
 
   if (!isMeetupPresenceRoutingActive(completion)) {
-    return { step: 'rental_authorization', reason: 'presence_deactivated', completion, activation };
+    const authStep = resolveAuthorizationStepForPickupHandoff(ctx);
+    if (authStep) {
+      return {
+        step: authStep,
+        reason: 'presence_deactivated',
+        completion,
+        activation,
+      };
+    }
   }
 
   const renterAtMeetup = Boolean(
@@ -432,12 +455,42 @@ export function resolveWizardPickupHandoffStep(ctx: RentalWizardContext): {
   const ownerAtMeetup = Boolean(ctx.rental.owner_arrived_at?.trim());
 
   if (renterAtMeetup && ownerAtMeetup) {
-    return { step: 'owner_confirmed_arrival', reason: 'both_present', completion, activation };
+    if (!completion.renterConfirmedReceipt) {
+      return {
+        step: 'owner_confirmed_arrival',
+        reason: 'both_present_inspection',
+        completion,
+        activation,
+      };
+    }
+    if (!activation.rentalActivated) {
+      const authStep = resolveAuthorizationStepForPickupHandoff(ctx);
+      if (authStep) {
+        return {
+          step: authStep,
+          reason: 'both_present_authorization',
+          completion,
+          activation,
+        };
+      }
+    }
+    const authStep = resolveAuthorizationStepForPickupHandoff(ctx);
+    if (authStep) {
+      return {
+        step: authStep,
+        reason: 'both_present_authorization',
+        completion,
+        activation,
+      };
+    }
+    return {
+      step: 'equipment_confirmation',
+      reason: 'both_present_receipt_confirmed',
+      completion,
+      activation,
+    };
   }
-  if (
-    renterAtMeetup &&
-    (ctx.rental.handoff_approval_started_at || ctx.rental.handoff_approved_by_owner)
-  ) {
+  if (renterAtMeetup && !ownerAtMeetup) {
     return { step: 'meetup_day', reason: 'renter_arrived_waiting_owner', completion, activation };
   }
   if (ctx.pickupEvidenceReadiness.renterEvidenceReady || ctx.ownerPickupPhotoCount > 0) {

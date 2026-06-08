@@ -34,6 +34,13 @@ export type WizardCoordinateStepProps = {
   scheduleIso: string | null;
   /** Locks location/time editing (waiting for owner, etc.). */
   lockFields?: boolean;
+  /** Pickup/return coordination is fully agreed — show confirmed labels. */
+  coordinationFinalized?: boolean;
+  /** Viewer is reviewing a counterparty proposal. */
+  reviewingCounterpartyProposal?: boolean;
+  /** Persistent accent while a counterparty proposal awaits a decision. */
+  highlightLocation?: boolean;
+  highlightTime?: boolean;
   /** Hide preset time chips (calmer return confirmation). */
   hideTimeChips?: boolean;
   waitingForOwner?: boolean;
@@ -44,6 +51,8 @@ export type WizardCoordinateStepProps = {
   ownerProposalBannerText?: string;
   /** Instructional copy clarifying wizard vs chat roles. */
   messagesHelpText?: string;
+  /** Owner wizard uses handoff-oriented method labels instead of renter delivery language. */
+  copyVariant?: 'renter' | 'owner';
   timeSlots: CoordinateTimeSlot[];
   selectedTimeIso: string | null;
   onSelectTimeSlot: (iso: string) => void;
@@ -64,12 +73,17 @@ export function WizardCoordinateStep({
   onPressLocation,
   scheduleIso,
   lockFields = false,
+  coordinationFinalized = false,
+  reviewingCounterpartyProposal = false,
+  highlightLocation = false,
+  highlightTime = false,
   hideTimeChips = false,
   waitingForOwner = false,
   waitingBannerText,
   ownerProposalPending = false,
   ownerProposalBannerText,
   messagesHelpText,
+  copyVariant = 'renter',
   timeSlots,
   selectedTimeIso,
   onSelectTimeSlot,
@@ -79,30 +93,74 @@ export function WizardCoordinateStep({
   const fieldsLocked = lockFields || waitingForOwner;
   const pickupSelected = method === 'pickup';
 
-  const pickupLabel = pickupSelected ? 'Pickup' : agreedMethod === 'delivery' ? 'Switch to pickup' : 'Pickup';
-  const pickupHint =
-    !pickupSelected && agreedMethod === 'delivery' ? 'Save delivery fee' : undefined;
+  const isOwnerCopy = copyVariant === 'owner';
 
-  const deliveryLabel = pickupSelected
-    ? agreedMethod === 'pickup'
-      ? 'Request delivery'
+  const pickupLabel = isOwnerCopy
+    ? 'Meet in person'
+    : pickupSelected
+      ? 'Pickup'
+      : agreedMethod === 'delivery'
+        ? 'Switch to pickup'
+        : 'Pickup';
+  const pickupHint = isOwnerCopy
+    ? !pickupSelected && agreedMethod === 'delivery'
+      ? 'No delivery required'
+      : undefined
+    : !pickupSelected && agreedMethod === 'delivery'
+      ? 'Save delivery fee'
+      : undefined;
+
+  const deliveryLabel = isOwnerCopy
+    ? pickupSelected
+      ? agreedMethod === 'pickup'
+        ? 'Offer delivery'
+        : agreedMethodLabel('delivery', agreedDeliveryFee)
       : agreedMethodLabel('delivery', agreedDeliveryFee)
-    : agreedMethodLabel('delivery', agreedDeliveryFee);
-  const deliveryHint =
-    pickupSelected && agreedMethod === 'pickup' ? '+ delivery fee may apply' : undefined;
+    : pickupSelected
+      ? agreedMethod === 'pickup'
+        ? 'Request delivery'
+        : agreedMethodLabel('delivery', agreedDeliveryFee)
+      : agreedMethodLabel('delivery', agreedDeliveryFee);
+  const deliveryHint = isOwnerCopy
+    ? pickupSelected && agreedMethod === 'pickup'
+      ? 'You bring the item to the renter'
+      : undefined
+    : pickupSelected && agreedMethod === 'pickup'
+      ? '+ delivery fee may apply'
+      : undefined;
 
   const showTimeChips = !fieldsLocked && !hideTimeChips;
 
-  const locationPlaceholder = isPickup ? 'Add a meetup location' : 'Add a return location';
+  const locationPlaceholder = isOwnerCopy
+    ? isPickup
+      ? 'Add a pickup location'
+      : 'Add a return location'
+    : isPickup
+      ? 'Add a meetup location'
+      : 'Add a return location';
   const timeFieldTitle =
     scheduleFieldTitle ??
-    (fieldsLocked
-      ? waitingForOwner
-        ? 'Proposed time'
-        : 'Confirmed time'
-      : isPickup
-        ? 'Choose a meetup time'
-        : 'Choose a return time');
+    (coordinationFinalized
+      ? 'Confirmed time'
+      : reviewingCounterpartyProposal
+        ? copyVariant === 'owner'
+          ? "Renter's proposed time"
+          : "Owner's proposed time"
+        : fieldsLocked && waitingForOwner
+          ? 'Your proposed time'
+          : isPickup
+            ? 'Choose a meetup time'
+            : 'Choose a return time');
+
+  const handleLocationPress = () => {
+    if (reviewingCounterpartyProposal) return;
+    if (!fieldsLocked) onPressLocation();
+  };
+
+  const handleTimePress = () => {
+    if (reviewingCounterpartyProposal) return;
+    if (!fieldsLocked) onPressTime();
+  };
 
   return (
     <View style={wizardSectionStackStyle}>
@@ -121,7 +179,9 @@ export function WizardCoordinateStep({
               <Text style={styles.methodReadOnlyLabel}>
                 {agreedMethodLabel(agreedMethod, agreedDeliveryFee)}
               </Text>
-              <Text style={styles.methodReadOnlyHint}>Matches your pickup agreement.</Text>
+              <Text style={styles.methodReadOnlyHint}>
+                {isOwnerCopy ? 'Same handoff method as pickup.' : 'Matches your pickup agreement.'}
+              </Text>
             </View>
           </View>
         ) : (
@@ -148,52 +208,22 @@ export function WizardCoordinateStep({
 
       <View style={wizardSectionBlockStyle}>
         <Text style={wizardSectionLabelStyle.kicker}>LOCATION</Text>
-        <Pressable
-          onPress={fieldsLocked ? undefined : onPressLocation}
-          disabled={fieldsLocked}
-          style={({ pressed }) => [
-            styles.fieldCard,
-            !fieldsLocked && pressed && { opacity: 0.92 },
-          ]}
-        >
-          <View style={styles.fieldIcon}>
-            <Ionicons name="location-outline" size={18} color={ui.primary} />
-          </View>
-          <View style={styles.fieldText}>
-            <Text style={styles.fieldTitle}>{locationCardTitle}</Text>
-            <Text style={styles.fieldValue}>{location || locationPlaceholder}</Text>
-          </View>
-          {!fieldsLocked ? (
-            <View style={styles.changeBtn}>
-              <Text style={styles.changeBtnText}>Change</Text>
-              <Ionicons name="chevron-forward" size={16} color={ui.primary} />
-            </View>
-          ) : null}
-        </Pressable>
-      </View>
-
-      <View style={wizardSectionBlockStyle}>
-        <Text style={wizardSectionLabelStyle.kicker}>TIME</Text>
-        <View style={wizardSectionContentStyle}>
+        <HighlightableFieldCard highlight={highlightLocation}>
           <Pressable
-            onPress={fieldsLocked ? undefined : onPressTime}
-            disabled={fieldsLocked}
+            onPress={fieldsLocked && !reviewingCounterpartyProposal ? undefined : handleLocationPress}
+            disabled={fieldsLocked && !reviewingCounterpartyProposal}
             style={({ pressed }) => [
               styles.fieldCard,
               !fieldsLocked && pressed && { opacity: 0.92 },
+              reviewingCounterpartyProposal && pressed && { opacity: 0.92 },
             ]}
           >
             <View style={styles.fieldIcon}>
-              <Ionicons name="calendar-outline" size={18} color={ui.primary} />
+              <Ionicons name="location-outline" size={18} color={ui.primary} />
             </View>
             <View style={styles.fieldText}>
-              <Text style={styles.fieldTitle}>{timeFieldTitle}</Text>
-              {meetupDateHint && !fieldsLocked ? (
-                <Text style={styles.fieldDateHint}>{meetupDateHint}</Text>
-              ) : null}
-              <Text style={styles.fieldValue}>
-                {scheduleIso ? formatWizardDateTime(scheduleIso) : 'Choose a time'}
-              </Text>
+              <Text style={styles.fieldTitle}>{locationCardTitle}</Text>
+              <Text style={styles.fieldValue}>{location || locationPlaceholder}</Text>
             </View>
             {!fieldsLocked ? (
               <View style={styles.changeBtn}>
@@ -202,6 +232,42 @@ export function WizardCoordinateStep({
               </View>
             ) : null}
           </Pressable>
+        </HighlightableFieldCard>
+      </View>
+
+      <View style={wizardSectionBlockStyle}>
+        <Text style={wizardSectionLabelStyle.kicker}>TIME</Text>
+        <View style={wizardSectionContentStyle}>
+          <HighlightableFieldCard highlight={highlightTime}>
+            <Pressable
+              onPress={fieldsLocked && !reviewingCounterpartyProposal ? undefined : handleTimePress}
+              disabled={fieldsLocked && !reviewingCounterpartyProposal}
+              style={({ pressed }) => [
+                styles.fieldCard,
+                !fieldsLocked && pressed && { opacity: 0.92 },
+                reviewingCounterpartyProposal && pressed && { opacity: 0.92 },
+              ]}
+            >
+              <View style={styles.fieldIcon}>
+                <Ionicons name="calendar-outline" size={18} color={ui.primary} />
+              </View>
+              <View style={styles.fieldText}>
+                <Text style={styles.fieldTitle}>{timeFieldTitle}</Text>
+                {meetupDateHint && !fieldsLocked ? (
+                  <Text style={styles.fieldDateHint}>{meetupDateHint}</Text>
+                ) : null}
+                <Text style={styles.fieldValue}>
+                  {scheduleIso ? formatWizardDateTime(scheduleIso) : 'Choose a time'}
+                </Text>
+              </View>
+              {!fieldsLocked ? (
+                <View style={styles.changeBtn}>
+                  <Text style={styles.changeBtnText}>Change</Text>
+                  <Ionicons name="chevron-forward" size={16} color={ui.primary} />
+                </View>
+              ) : null}
+            </Pressable>
+          </HighlightableFieldCard>
 
           {showTimeChips ? (
             <View style={styles.slotRow}>
@@ -248,6 +314,18 @@ export function WizardCoordinateStep({
         </View>
       ) : null}
     </View>
+  );
+}
+
+function HighlightableFieldCard({
+  highlight,
+  children,
+}: {
+  highlight: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <View style={[styles.highlightWrap, highlight && styles.highlightActive]}>{children}</View>
   );
 }
 
@@ -361,11 +439,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: 'transparent',
     borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E2E8F0',
+    borderColor: 'transparent',
     padding: 14,
+  },
+  highlightWrap: {
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+  },
+  highlightActive: {
+    backgroundColor: '#DCFCE7',
+    borderColor: 'rgba(22, 163, 74, 0.35)',
   },
   fieldIcon: {
     width: 36,

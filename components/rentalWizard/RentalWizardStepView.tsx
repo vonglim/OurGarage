@@ -9,14 +9,21 @@ import { WizardItemCard } from '@/components/rentalWizard/WizardItemCard';
 import { WizardLightShell } from '@/components/rentalWizard/shells/WizardLightShell';
 import { WizardTransitionShell } from '@/components/rentalWizard/shells/WizardTransitionShell';
 import { CoordinatePickupStep } from '@/components/rentalWizard/steps/CoordinatePickupStep';
-import { MeetupInspectionStep } from '@/components/rentalWizard/steps/MeetupInspectionStep';
-import { RentalAuthorizationStep } from '@/components/rentalWizard/steps/RentalAuthorizationStep';
+import { EquipmentInspectionStep } from '@/components/rentalWizard/steps/EquipmentInspectionStep';
+import { RentalAgreementReviewStep } from '@/components/rentalWizard/steps/RentalAgreementReviewStep';
+import { LegacyMeetupStepRedirect } from '@/components/rentalWizard/steps/LegacyMeetupStepRedirect';
+import { MeetupLifecycleShell } from '@/components/rentalLifecycle/MeetupLifecycleShell';
+import { DigitalSignatureStep } from '@/components/rentalWizard/steps/DigitalSignatureStep';
+import { RentalActivationStep } from '@/components/rentalWizard/steps/RentalActivationStep';
+import { SecurityHoldAuthorizationStep } from '@/components/rentalWizard/steps/SecurityHoldAuthorizationStep';
 import { PreparePickupStep } from '@/components/rentalWizard/steps/PreparePickupStep';
 import { CancelledSummaryStep } from '@/components/rentalWizard/steps/CancelledSummaryStep';
 import { RentalConfirmedTransitionStep } from '@/components/rentalWizard/steps/RentalConfirmedTransitionStep';
 import { CoordinateReturnStep } from '@/components/rentalWizard/steps/CoordinateReturnStep';
 import { WizardCoordinateStep } from '@/components/rentalWizard/WizardCoordinateStep';
+import { MeetupCountdownCard } from '@/components/rentalWizard/shared/MeetupCountdownCard';
 import { WizardDarkMeetupCards } from '@/components/rentalWizard/shared/WizardMeetupCards';
+import { WizardTransitionConfirmedDetails } from '@/components/rentalWizard/shared/WizardTransitionConfirmedDetails';
 import { ui } from '@/constants/appUi';
 import { formatBorrowingFromOwner } from '@/lib/rentalWizard/formatBorrowingFromOwner';
 import { formatWizardDateTime, formatWizardLocation } from '@/lib/rentalWizard/formatWizardSchedule';
@@ -79,13 +86,20 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
       return (
         <WizardTransitionShell
           hideHeaderTitle
-          headline="Great! Pickup location and handoff time set"
-          subheadline="You're all set for pickup. Now let's coordinate a return time and location."
-          primaryLabel="Continue to return details"
+          headline="Great! Pickup details confirmed"
+          subheadline="You and the owner have agreed on the pickup location and handoff time. Next, let's confirm where and when the item will be returned."
+          iconTint="green"
           onBack={() => router.back()}
           onOpenMessages={w.openMessages}
+          primaryLabel={meta.continueLabel}
           onPrimary={() => void w.advanceAfterTransition('transition_pickup_confirmed')}
-        />
+        >
+          <WizardTransitionConfirmedDetails
+            phase="pickup"
+            location={ctx.rental.meetup_location}
+            scheduleIso={ctx.pickupIso}
+          />
+        </WizardTransitionShell>
       );
 
     case 'coordinate_return':
@@ -97,11 +111,18 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
           hideHeaderTitle
           headline="Return location and time set"
           subheadline="You're all set for return. Next we'll get you ready for pickup day."
+          iconTint="green"
           primaryLabel="Continue"
           onBack={() => router.back()}
           onOpenMessages={w.openMessages}
           onPrimary={() => void w.advanceAfterTransition('transition_return_confirmed')}
-        />
+        >
+          <WizardTransitionConfirmedDetails
+            phase="return"
+            location={ctx.rental.return_location ?? ctx.rental.meetup_location}
+            scheduleIso={ctx.returnIso}
+          />
+        </WizardTransitionShell>
       );
 
     case 'transition_all_set':
@@ -130,11 +151,9 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
           iconTint="green"
           icon="checkmark-circle"
           onBack={() => router.back()}
-          primaryLabel="I'm here"
-          onPrimary={async () => {
-            await w.advanceAfterTransition('transition_pickup_ready');
-            await w.markImHerePickup();
-          }}
+          primaryLabel={w.arrivalActionBusy ? 'Saving…' : "I'm here"}
+          onPrimary={() => void w.markImHerePickup()}
+          primaryDisabled={w.arrivalActionBusy}
         >
           <WizardDarkMeetupCards ctx={ctx} />
           <View style={styles.statusPill}>
@@ -154,11 +173,19 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
           title={meta.title}
           onBack={() => router.back()}
           onOpenMessages={w.openMessages}
-          primaryLabel={waitingForOwner ? 'Waiting for owner' : "I'm here"}
+          primaryLabel={
+            waitingForOwner ? 'Waiting for owner' : w.arrivalActionBusy ? 'Saving…' : "I'm here"
+          }
           onPrimary={waitingForOwner ? () => {} : () => void w.markImHerePickup()}
-          primaryDisabled={waitingForOwner}
-          secondaryLabel="Message owner"
-          onSecondary={w.openMessages}
+          primaryDisabled={waitingForOwner || w.arrivalActionBusy}
+          secondaryLabel="Review rental agreement"
+          onSecondary={w.openAuthorizationFlow}
+          footerInlineActions={[
+            {
+              label: 'Message owner',
+              onPress: w.openMessages,
+            },
+          ]}
         >
           <WizardItemCard {...itemCardProps} />
           <InfoPanel
@@ -168,6 +195,7 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
             actionLabel="View map"
           />
           <InfoPanel icon="calendar-outline" title="Pickup time" value={formatWizardDateTime(ctx.pickupIso)} />
+          <MeetupCountdownCard pickupIso={ctx.pickupIso} />
           {waitingForOwner ? (
             <StatusBanner
               tone="info"
@@ -181,38 +209,52 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
     }
 
     case 'owner_confirmed_arrival':
-      return <MeetupInspectionStep />;
+      return <EquipmentInspectionStep />;
 
     case 'equipment_confirmation':
-      return (
-        <WizardLightShell
-          title={meta.title}
-          onBack={() => router.back()}
-          onOpenMessages={w.openMessages}
-          primaryLabel="Sign & continue"
-          onPrimary={() => w.openAdvancedDetails('pickup')}
-          secondaryLabel="Message owner"
-          onSecondary={w.openMessages}
-        >
-          <WizardItemCard {...itemCardProps} />
-          <EquipmentChecklist />
-        </WizardLightShell>
-      );
-
     case 'rental_authorization':
-      return <RentalAuthorizationStep />;
+    case 'rental_agreement_intro':
+    case 'liability_disclosures':
+    case 'transition_agreement_reviewed':
+    case 'transition_disclosures_complete':
+    case 'transition_hold_authorized':
+    case 'transition_agreement_signed':
+    case 'transition_rental_activated':
+      return <LegacyMeetupStepRedirect />;
+
+    case 'rental_agreement':
+      return <RentalAgreementReviewStep />;
+
+    case 'security_hold_authorization':
+      return <SecurityHoldAuthorizationStep />;
+
+    case 'digital_signature':
+      return <DigitalSignatureStep />;
+
+    case 'rental_activation':
+      return <RentalActivationStep />;
 
     case 'transition_enjoy_rental':
       return (
-        <WizardTransitionShell
+        <MeetupLifecycleShell
+          phase="rental_active"
+          progressIndex={2}
           title="Enjoy your rental"
-          headline="Enjoy your rental!"
-          subheadline={`Your rental is now active. Return by ${formatWizardDateTime(ctx.returnIso)}.`}
-          icon="sparkles"
+          subtitle={`Your rental is officially active. Return by ${formatWizardDateTime(ctx.returnIso)}.`}
           onBack={() => router.back()}
-          primaryLabel="View rental"
+          onOpenMessages={w.openMessages}
+          primaryLabel="Go to my rental"
           onPrimary={() => void w.advanceAfterTransition('transition_enjoy_rental')}
+          secondaryLabel="Message owner"
+          onSecondary={w.openMessages}
         >
+          <View style={styles.enjoyHero}>
+            <Ionicons name="checkmark-circle" size={64} color="#16A34A" />
+            <Text style={styles.enjoyTitle}>Enjoy your rental!</Text>
+            <Text style={styles.enjoyBody}>
+              Protection is active and your rental period has started.
+            </Text>
+          </View>
           <WizardActionRow
             icon="time-outline"
             title="Need more time?"
@@ -225,13 +267,16 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
             body="You can message the owner anytime during your rental."
             onPress={w.openMessages}
           />
-        </WizardTransitionShell>
+        </MeetupLifecycleShell>
       );
 
     case 'active_rental':
       return (
-        <WizardLightShell
-          title={meta.title}
+        <MeetupLifecycleShell
+          phase="rental_active"
+          progressIndex={2}
+          title="Your rental"
+          subtitle={`Return by ${formatWizardDateTime(ctx.returnIso)}`}
           onBack={() => router.back()}
           onOpenMessages={w.openMessages}
           primaryLabel="Message owner"
@@ -239,14 +284,14 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
           secondaryLabel="Request extension"
           onSecondary={() => w.openAdvancedDetails()}
         >
-          <View style={styles.activeHero}>
-            <Text style={styles.activeChip}>ACTIVE</Text>
-            <Text style={styles.activeTitle}>Enjoy your rental!</Text>
-            <Text style={styles.activeSub}>Return due {formatWizardDateTime(ctx.returnIso)}</Text>
+          <View style={styles.enjoyHero}>
+            <Ionicons name="checkmark-circle" size={64} color="#16A34A" />
+            <Text style={styles.enjoyTitle}>Enjoy your rental!</Text>
+            <Text style={styles.enjoyBody}>Your rental period is active.</Text>
           </View>
           <QuickActionGrid onDetails={w.openAdvancedDetails} onMessages={w.openMessages} />
           <WizardItemCard {...itemCardProps} />
-        </WizardLightShell>
+        </MeetupLifecycleShell>
       );
 
     case 'transition_return_reminder':
@@ -270,8 +315,9 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
           title={meta.title}
           onBack={() => router.back()}
           onOpenMessages={w.openMessages}
-          primaryLabel="I'm here"
+          primaryLabel={w.arrivalActionBusy ? 'Saving…' : "I'm here"}
           onPrimary={() => void w.markImHereReturn()}
+          primaryDisabled={w.arrivalActionBusy}
           footerNote="Notify the owner that you've arrived."
         >
           <WizardItemCard {...itemCardProps} />
@@ -688,6 +734,9 @@ const styles = StyleSheet.create({
   successHero: { alignItems: 'center', gap: 8, paddingVertical: 12 },
   successTitle: { fontSize: 20, fontWeight: '800', color: ui.textPrimary, textAlign: 'center' },
   successBody: { fontSize: 14, color: ui.textSecondary, textAlign: 'center', lineHeight: 20 },
+  enjoyHero: { alignItems: 'center', gap: 10, paddingVertical: 24 },
+  enjoyTitle: { fontSize: 24, fontWeight: '800', color: '#0F172A', textAlign: 'center' },
+  enjoyBody: { fontSize: 15, color: '#64748B', textAlign: 'center', lineHeight: 22 },
   activeHero: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,

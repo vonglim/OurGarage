@@ -1,26 +1,29 @@
 import { Platform } from 'react-native';
 import { File as ExpoFsFile } from 'expo-file-system';
 
+import {
+  contentTypeForEvidenceMediaKind,
+  extensionForEvidenceContentType,
+  inferEvidenceMediaKindFromPath,
+} from '@/lib/evidenceMediaKind';
+
 declare const __DEV__: boolean;
 
-function normalizeContentType(blob: Blob): string {
+function normalizeContentType(blob: Blob, uri: string): string {
   const t = blob.type?.trim();
-  if (t && t.startsWith('image/')) return t;
-  return 'image/jpeg';
+  if (t && (t.startsWith('image/') || t.startsWith('video/'))) return t;
+  const kind = inferEvidenceMediaKindFromPath(uri);
+  return contentTypeForEvidenceMediaKind(kind, uri);
 }
 
 /** File extension (no dot) for storage paths. */
 export function extensionForContentType(ct: string): string {
-  if (ct.includes('png')) return 'png';
-  if (ct.includes('webp')) return 'webp';
-  return 'jpg';
+  return extensionForEvidenceContentType(ct);
 }
 
 function contentTypeHintFromUri(uri: string): string {
-  const base = uri.split('?')[0]?.toLowerCase() ?? '';
-  if (base.endsWith('.png')) return 'image/png';
-  if (base.endsWith('.webp')) return 'image/webp';
-  return 'image/jpeg';
+  const kind = inferEvidenceMediaKindFromPath(uri);
+  return contentTypeForEvidenceMediaKind(kind, uri);
 }
 
 async function loadNativeImageForUpload(localUri: string): Promise<{
@@ -31,7 +34,7 @@ async function loadNativeImageForUpload(localUri: string): Promise<{
     const file = new ExpoFsFile(localUri);
     const body = await file.arrayBuffer();
     if (!body || body.byteLength === 0) {
-      throw new Error('Empty image data');
+      throw new Error('Empty media data');
     }
     return {
       body,
@@ -68,16 +71,16 @@ async function loadWebImageForUpload(localUri: string): Promise<{ body: Blob; co
   }
 
   let uploadBlob = blob;
-  let contentType = normalizeContentType(blob);
+  let contentType = normalizeContentType(blob, localUri);
 
   if (blob.size === 0) {
     try {
       const buf = await fallbackCopy.arrayBuffer();
       if (!buf || buf.byteLength === 0) {
-        throw new Error('Empty image data');
+        throw new Error('Empty media data');
       }
       uploadBlob = new Blob([buf], { type: contentType });
-      contentType = normalizeContentType(uploadBlob);
+      contentType = normalizeContentType(uploadBlob, localUri);
     } catch (fallbackErr) {
       console.error('[localImageForUpload] empty blob fallback failed', fallbackErr);
       throw fallbackErr;
@@ -91,7 +94,8 @@ async function loadWebImageForUpload(localUri: string): Promise<{ body: Blob; co
  * Read bytes from a local capture URI (file:// on native, blob/data on web).
  * Prefer this over raw `fetch(fileUri)` on React Native — `fetch` is unreliable for file://.
  */
-export async function loadLocalImageForUpload(localUri: string): Promise<{
+/** Read bytes from a local capture URI (images or short operational videos). */
+export async function loadLocalMediaForUpload(localUri: string): Promise<{
   body: ArrayBuffer | Blob;
   contentType: string;
 }> {
@@ -103,4 +107,11 @@ export async function loadLocalImageForUpload(localUri: string): Promise<{
     return loadWebImageForUpload(localUri);
   }
   return loadNativeImageForUpload(localUri);
+}
+
+export async function loadLocalImageForUpload(localUri: string): Promise<{
+  body: ArrayBuffer | Blob;
+  contentType: string;
+}> {
+  return loadLocalMediaForUpload(localUri);
 }

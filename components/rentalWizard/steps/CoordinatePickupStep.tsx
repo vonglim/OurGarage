@@ -1,9 +1,12 @@
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { usePickupCoordinationAcceptedPromptSnapshotTrace } from '@/components/rentalWizard/hooks/usePickupCoordinationAcceptedPrompt';
+import { useCoordinationProposalFieldHighlight } from '@/components/rentalWizard/hooks/useCoordinationProposalFieldHighlight';
+import { useCoordinateProposalReviewUi } from '@/components/rentalWizard/hooks/useCoordinateProposalReviewUi';
 import { useRentalWizard } from '@/components/rentalWizard/RentalWizardProvider';
 import { WizardCoordinateStep } from '@/components/rentalWizard/WizardCoordinateStep';
 import { WizardItemCard } from '@/components/rentalWizard/WizardItemCard';
+import { WizardCoordinationLiveBannerSlot } from '@/components/rentalWizard/WizardCoordinationLiveBannerSlot';
 import { WizardLightShell } from '@/components/rentalWizard/shells/WizardLightShell';
 import { WizardLocationProposalSheet } from '@/components/rentalWizard/modals/WizardLocationProposalSheet';
 import { WizardTimeProposalSheet } from '@/components/rentalWizard/modals/WizardTimeProposalSheet';
@@ -18,13 +21,24 @@ import { WIZARD_STEP_META } from '@/lib/rentalWizard/wizardStepMeta';
 import {
   coordinatePickupDraftProgressPatch,
   isCoordinateDraftValid,
-  locationCardTitleForDraft,
   mergeCoordinatePickupDraft,
   readCoordinatePickupDraft,
   wizardHandoffFromNegotiation,
   type WizardMeetupProposalDraft,
 } from '@/lib/rentalWizard/wizardMeetupDraft';
 import { updateWizardProgress } from '@/lib/rentalWizard';
+import {
+  coordinateLocationCardTitle,
+  coordinateScheduleFieldTitle,
+  counterpartyRoleForViewer,
+} from '@/lib/rentalWizard/coordinateProposalPresentation';
+import {
+  resolvePickupCoordinateReviewState,
+} from '@/lib/rentalWizard/coordinatePickupReviewState';
+import {
+  coordinationSyncSnapshotFromCtx,
+  logCoordinationSyncTrace,
+} from '@/lib/rentalWizard/coordinationSyncDevLog';
 import type { WizardFooterInlineAction } from '@/components/wizard/GuidedWizardChrome';
 
 const WIZARD_MESSAGES_HELP =
@@ -46,17 +60,46 @@ export function CoordinatePickupStep() {
   usePickupCoordinationAcceptedPromptSnapshotTrace(ctx, true);
 
   const pickupCoordination = ctx.meetupCoordination.pickup;
-  const waitingOnCounterparty =
-    pickupCoordination.isPendingThisPhase && pickupCoordination.viewerIsProposer;
-  const ownerProposalPending =
-    pickupCoordination.isPendingThisPhase &&
-    pickupCoordination.proposedByRole === 'owner' &&
-    !pickupCoordination.viewerIsProposer;
-  const reviewingOwnerProposal = ownerProposalPending && !suggestingChanges;
+  const review = resolvePickupCoordinateReviewState({
+    lane: pickupCoordination,
+    lastProposedBy: ctx.rental.last_proposed_by,
+    suggestingChanges,
+  });
+  const {
+    reviewingCounterpartyProposal: reviewingOwnerProposal,
+    waitingOnCounterparty,
+    viewerCanAccept,
+  } = review;
+  const ownerProposalPending = viewerCanAccept;
 
   useEffect(() => {
-    setDraft(mergeCoordinatePickupDraft(ctx, readCoordinatePickupDraft(ctx.wizardProgress)));
+    const stored = readCoordinatePickupDraft(ctx.wizardProgress);
+    const nextDraft = mergeCoordinatePickupDraft(ctx, stored);
+    const lane = ctx.meetupCoordination.pickup;
+    const counterpartyProposalActive =
+      lane.isPendingThisPhase && lane.viewerCanAccept;
+
+    const mergedDraft =
+      counterpartyProposalActive && !suggestingChanges
+        ? {
+            ...nextDraft,
+            location: lane.location || nextDraft.location,
+            meetupTimeIso: lane.dateTimeIso ?? nextDraft.meetupTimeIso,
+          }
+        : nextDraft;
+
+    setDraft(mergedDraft);
+    logCoordinationSyncTrace('coordinate_pickup_render', {
+      event: 'draft_sync',
+      ...coordinationSyncSnapshotFromCtx(ctx),
+      reviewingOwnerProposal,
+      waitingOnCounterparty,
+      suggestingChanges,
+      draftLocation: mergedDraft.location,
+      draftMeetupTimeIso: mergedDraft.meetupTimeIso,
+    });
   }, [
+    ctx,
     ctx.rentalId,
     ctx.wizardProgress.coordinate_pickup_draft,
     ctx.rental.meetup_location,
@@ -64,9 +107,17 @@ export function CoordinatePickupStep() {
     ctx.rental.pickup_datetime,
     ctx.rental.return_datetime,
     ctx.rental.last_proposed_by,
+    ctx.rental.proposal_version,
     ctx.meetupCoordination.revision,
     ctx.meetupCoordination.pickup.dateTimeIso,
     ctx.meetupCoordination.pickup.status,
+    ctx.meetupCoordination.pickup.proposedByRole,
+    ctx.meetupCoordination.pickup.isPendingThisPhase,
+    ctx.meetupCoordination.pickup.location,
+    ctx.meetupCoordination.pickup.viewerIsProposer,
+    suggestingChanges,
+    reviewingOwnerProposal,
+    waitingOnCounterparty,
   ]);
 
   useEffect(() => {
@@ -100,9 +151,9 @@ export function CoordinatePickupStep() {
   const agreedMethod = wizardHandoffFromNegotiation(ctx.agreedDeliveryMethod);
   const lockedPickupSchedule = useMemo(() => resolveLockedPickupSchedule(ctx), [ctx]);
 
-  const proposedLocation = pickupCoordination.location || draft.location;
+  const proposedLocation = review.laneLocation || pickupCoordination.location || draft.location;
   const proposedScheduleIso =
-    pickupCoordination.dateTimeIso ?? ctx.pickupIso ?? draft.meetupTimeIso;
+    review.laneDateTimeIso ?? pickupCoordination.dateTimeIso ?? ctx.pickupIso ?? draft.meetupTimeIso;
 
   const timeSlots = useMemo(
     () =>
@@ -133,6 +184,55 @@ export function CoordinatePickupStep() {
   const canPropose =
     isCoordinateDraftValid(draft) && !waitingOnCounterparty && !ctx.pickupCoordinationComplete && !reviewingOwnerProposal;
 
+  const reviewUi = useCoordinateProposalReviewUi();
+
+  const fieldHighlights = useCoordinationProposalFieldHighlight({
+    phase: 'pickup',
+    reviewingCounterpartyProposal: reviewingOwnerProposal,
+    coordinationFinalized: ctx.pickupCoordinationComplete,
+    lane: pickupCoordination,
+    ctx,
+    logSurface: 'renter_coordinate_pickup_review',
+    proposalVersion:
+      typeof ctx.rental.proposal_version === 'number' ? ctx.rental.proposal_version : null,
+  });
+
+  const fieldsLocked =
+    ctx.pickupCoordinationComplete ||
+    waitingOnCounterparty ||
+    reviewingOwnerProposal ||
+    hasPendingLifecyclePrompt;
+
+  const counterpartyRole = counterpartyRoleForViewer(ctx);
+  const locationTitle = coordinateLocationCardTitle({
+    phase: 'pickup',
+    coordinationFinalized: ctx.pickupCoordinationComplete,
+    reviewingCounterpartyProposal: reviewingOwnerProposal,
+    counterpartyRole,
+    waitingOnCounterparty,
+  });
+  const scheduleTitle = coordinateScheduleFieldTitle({
+    phase: 'pickup',
+    coordinationFinalized: ctx.pickupCoordinationComplete,
+    reviewingCounterpartyProposal: reviewingOwnerProposal,
+    counterpartyRole,
+    waitingOnCounterparty,
+    editing: !fieldsLocked && !reviewingOwnerProposal && !waitingOnCounterparty,
+  });
+
+  useLayoutEffect(() => {
+    logCoordinationSyncTrace('coordinate_pickup_render', {
+      event: 'render',
+      ...coordinationSyncSnapshotFromCtx(ctx),
+      reviewingOwnerProposal,
+      waitingOnCounterparty,
+      ownerProposalPending,
+      suggestingChanges,
+      displayLocation,
+      scheduleIso,
+    });
+  });
+
   const handlePropose = async () => {
     if (!canPropose || hasPendingLifecyclePrompt) return;
     const ok = await w.submitCoordinatePickupProposal(draft);
@@ -144,6 +244,7 @@ export function CoordinatePickupStep() {
 
   const handleAccept = async () => {
     if (!reviewingOwnerProposal || hasPendingLifecyclePrompt || w.proposalBusy) return;
+    reviewUi.dismissBanner();
     const ok = await w.acceptCoordinatePickupProposal();
     if (ok) await w.refresh();
   };
@@ -173,13 +274,16 @@ export function CoordinatePickupStep() {
     }
     if (reviewingOwnerProposal) {
       return {
-        primaryLabel: w.proposalBusy ? 'Accepting…' : 'Accept pickup details',
+        primaryLabel: w.proposalBusy ? 'Accepting…' : 'Accept proposal',
         primaryDisabled: hasPendingLifecyclePrompt || w.proposalBusy,
         onPrimary: () => void handleAccept(),
         inlineActions: [
           {
             label: 'Suggest changes',
-            onPress: () => setSuggestingChanges(true),
+            onPress: () => {
+              reviewUi.dismissBanner();
+              setSuggestingChanges(true);
+            },
             emphasis: 'secondary',
             disabled: w.proposalBusy,
           },
@@ -219,11 +323,7 @@ export function CoordinatePickupStep() {
     };
   })();
 
-  const fieldsLocked =
-    ctx.pickupCoordinationComplete ||
-    waitingOnCounterparty ||
-    reviewingOwnerProposal ||
-    hasPendingLifecyclePrompt;
+  const fieldsLockedForStep = fieldsLocked;
 
   return (
     <>
@@ -237,6 +337,9 @@ export function CoordinatePickupStep() {
         onPrimary={footer.onPrimary}
         footerInlineActions={footer.inlineActions}
         footerCompact
+        headerExtra={
+          <WizardCoordinationLiveBannerSlot lane="pickup" rentalId={ctx.rentalId} />
+        }
       >
         <WizardItemCard
           title={ctx.displayTitle}
@@ -251,18 +354,18 @@ export function CoordinatePickupStep() {
           method={draft.method}
           onMethodChange={(method) => patchDraft({ method })}
           location={displayLocation}
-          locationCardTitle={
-            reviewingOwnerProposal
-              ? "Owner's proposed location"
-              : locationCardTitleForDraft(draft, 'pickup')
-          }
+          locationCardTitle={locationTitle}
+          scheduleFieldTitle={scheduleTitle}
           onPressLocation={() => setLocationOpen(true)}
           scheduleIso={scheduleIso}
-          lockFields={fieldsLocked}
+          lockFields={fieldsLockedForStep}
+          coordinationFinalized={ctx.pickupCoordinationComplete}
+          reviewingCounterpartyProposal={reviewingOwnerProposal}
+          highlightLocation={fieldHighlights.highlightLocation}
+          highlightTime={fieldHighlights.highlightTime}
           waitingForOwner={waitingOnCounterparty}
           waitingBannerText="Your pickup proposal was sent. The owner will review it here."
-          ownerProposalPending={reviewingOwnerProposal}
-          ownerProposalBannerText="Pickup proposal pending — review the owner's proposed location and time below."
+          ownerProposalPending={false}
           messagesHelpText={
             reviewingOwnerProposal || suggestingChanges || waitingOnCounterparty
               ? WIZARD_MESSAGES_HELP
@@ -274,7 +377,7 @@ export function CoordinatePickupStep() {
               : undefined
           }
           timeSlots={timeSlots}
-          selectedTimeIso={draft.meetupTimeIso}
+          selectedTimeIso={reviewingOwnerProposal ? scheduleIso : draft.meetupTimeIso}
           onSelectTimeSlot={saveMeetupTime}
           onPressTime={() => setTimeOpen(true)}
         />

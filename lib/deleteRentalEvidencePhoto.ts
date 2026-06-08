@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { OWNER_PICKUP_EVIDENCE_LOCKED_ERROR } from '@/lib/pickupEvidenceLock';
 import { BUCKET, deleteVerificationPhotoById } from '@/lib/rentalVerification';
 
 export type DeleteRentalEvidencePhotoResult =
@@ -16,7 +17,13 @@ export async function deleteRentalEvidencePhoto(params: {
   uploadedByUserId: string;
   actorUserId: string;
   storagePath: string | null | undefined;
+  /** Set when deleting owner pickup evidence after renter approval. */
+  pickupEvidenceLocked?: boolean;
 }): Promise<DeleteRentalEvidencePhotoResult> {
+  if (params.pickupEvidenceLocked) {
+    return { ok: false, error: OWNER_PICKUP_EVIDENCE_LOCKED_ERROR };
+  }
+
   const actor = String(params.actorUserId ?? '').trim();
   const uploader = String(params.uploadedByUserId ?? '').trim();
   if (!actor || !uploader || actor !== uploader) {

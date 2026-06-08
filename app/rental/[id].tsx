@@ -30,6 +30,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Pressable } from '@/components/Pressable';
 import { RentalEvidenceGalleryModal } from '@/components/RentalEvidenceGalleryModal';
 import { RentalEvidenceThumbnail } from '@/components/RentalEvidenceThumbnail';
+import { RentalEvidenceVideoPlaybackModal } from '@/components/rentalEvidence/RentalEvidenceVideoPlaybackModal';
+import { RentalEvidenceVideoThumb } from '@/components/rentalEvidence/RentalEvidenceVideoThumb';
+import { inferEvidenceMediaKindFromPath, type EvidenceMediaKind } from '@/lib/evidenceMediaKind';
+import { promptOwnerOptionalOperationalVideo } from '@/lib/ownerOptionalVideoEvidence';
+import { processPendingOwnerWizardEvidenceUploads } from '@/lib/ownerWizardEvidenceFlow';
 import {
   RentalDetailsCard,
   type RentalDetailsCardHandle,
@@ -113,7 +118,9 @@ import {
 } from '@/lib/pickupHandoffMilestones';
 import { evaluatePickupInspectionFlow, logPickupInspectionFlow } from '@/lib/pickupInspectionFlow';
 import { resolveRentalActivationState } from '@/lib/rentalActivation';
+import { OwnerMeetupLifecyclePanel } from '@/components/rentalLifecycle/OwnerMeetupLifecyclePanel';
 import { RentalAuthorizationSection } from '@/components/rentalWorkspace/RentalAuthorizationSection';
+import { resolveMeetupLifecyclePresentationFromWorkspace } from '@/lib/rentalLifecycle/meetupLifecycle';
 import {
   buildPickupHandoffCompletionInputFromWorkspace,
   logPickupLifecycleDesync,
@@ -245,6 +252,11 @@ import { formatDurationDisplay } from '@/lib/durationFormat';
 import { calculatePreauthAmount } from '@/lib/rentalProtection';
 import { agreedScheduleIsoPairFromRequest } from '@/lib/agreedRentalScheduleFromRequest';
 import { deleteRentalEvidencePhoto } from '@/lib/deleteRentalEvidencePhoto';
+import {
+  alertOwnerPickupEvidenceLocked,
+  isOwnerPickupEvidenceLocked,
+} from '@/lib/pickupEvidenceLock';
+import { canOwnerMarkImHereAtPickup } from '@/lib/pickupHandoffArrivalGates';
 import {
   isOfferEvidencePickupDisplayId,
   mergeOfferEvidenceIntoPickupRows,
@@ -515,6 +527,7 @@ type PhotoDisplay = {
   userId?: string;
   createdAt?: string;
   pickupPhotoCategory?: PickupPhotoCategory | null;
+  mediaKind?: EvidenceMediaKind;
 };
 
 function buildOwnerPickupDoneEffective(
@@ -1452,6 +1465,8 @@ export default function RentalScreen() {
     return: false,
   });
   const [photoViewerVisible, setPhotoViewerVisible] = useState(false);
+  const [pickupVideoViewerVisible, setPickupVideoViewerVisible] = useState(false);
+  const [pickupVideoViewerUri, setPickupVideoViewerUri] = useState<string | null>(null);
   const [photoViewerPhase, setPhotoViewerPhase] = useState<VerificationPhase>('pickup');
   const [photoViewerIndex, setPhotoViewerIndex] = useState(0);
   const [viewerImageLoading, setViewerImageLoading] = useState(false);
@@ -1917,6 +1932,7 @@ export default function RentalScreen() {
               userId: row.uploaded_by,
               createdAt: row.created_at,
               pickupPhotoCategory,
+              mediaKind: inferEvidenceMediaKindFromPath(row.storage_path),
             });
           }
         }
@@ -2486,6 +2502,13 @@ export default function RentalScreen() {
     },
     onRenterWizardHandoffPatch: (patch, meta) => {
       setRenterWizardHandoff((prev) => ({ ...prev, ...patch }));
+      if (patch.renterPickupImHereAt?.trim()) {
+        setRental((prev) =>
+          prev && !prev.renter_arrived_at?.trim()
+            ? { ...prev, renter_arrived_at: patch.renterPickupImHereAt! }
+            : prev
+        );
+      }
       const row = rentalRowRef.current;
       if (!row || !me) return;
       const viewerRole: 'owner' | 'renter' =
@@ -2535,6 +2558,44 @@ export default function RentalScreen() {
       void refreshVerificationState();
     },
   });
+
+  /** Fallback when rentals.renter_arrived_at lags but renter wizard progress already has I'm here. */
+  useEffect(() => {
+    if (!rental?.id || !rental.renter_user_id || me !== rental.owner_user_id) return;
+    const handoffStarted = Boolean(
+      rental.handoff_approval_started_at?.trim() || rental.handoff_approved_by_owner
+    );
+    if (!handoffStarted || rental.renter_arrived_at?.trim() || renterWizardHandoff.renterPickupImHereAt?.trim()) {
+      return;
+    }
+    let cancelled = false;
+    const syncRenterArrival = async () => {
+      const wiz = await fetchRenterWizardHandoffProgress(supabase, rental.id, rental.renter_user_id);
+      if (cancelled || !wiz.renterPickupImHereAt?.trim()) return;
+      setRenterWizardHandoff(wiz);
+      setRental((prev) =>
+        prev && !prev.renter_arrived_at?.trim()
+          ? { ...prev, renter_arrived_at: wiz.renterPickupImHereAt }
+          : prev
+      );
+    };
+    void syncRenterArrival();
+    const timer = setInterval(() => void syncRenterArrival(), 8000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [
+    me,
+    rental?.handoff_approval_started_at,
+    rental?.handoff_approved_by_owner,
+    rental?.id,
+    rental?.owner_user_id,
+    rental?.renter_arrived_at,
+    rental?.renter_user_id,
+    renterWizardHandoff.renterPickupImHereAt,
+    supabase,
+  ]);
 
   useEffect(() => {
     if (!rental?.id || !me) return;
@@ -2654,6 +2715,15 @@ export default function RentalScreen() {
       const role: PartyRole =
         me === rental.owner_user_id ? 'owner' : me === rental.renter_user_id ? 'renter' : 'renter';
 
+      const pickupLocked = isOwnerPickupEvidenceLocked({
+        renter_approved_pickup_photos_at: renterWizardHandoffRef.current.renterApprovedPickupPhotosAt,
+      });
+      if (phase === 'pickup' && role === 'owner' && pickupLocked) {
+        setRentalEvidenceSession(null);
+        setCapturedPhotoUris([]);
+        return;
+      }
+
       const pickupPhotoCategory: PickupPhotoCategory | null | undefined = sess.pickupPhotoCategory;
       if (phase === 'pickup' && role === 'owner' && pickupPhotoCategory == null) {
         setRentalEvidenceSession(null);
@@ -2694,6 +2764,7 @@ export default function RentalScreen() {
               localUri: uri,
               pickupPhotoCategory:
                 phase === 'pickup' && role === 'owner' ? pickupPhotoCategory ?? null : null,
+              pickupEvidenceLocked: phase === 'pickup' && role === 'owner' ? pickupLocked : false,
             });
             if (!res.ok) {
               failures.push({
@@ -2764,7 +2835,7 @@ export default function RentalScreen() {
       if (c === 'item') return 'Item';
       if (c === 'serial') return 'Serial';
       if (c === 'timestamp_proof') return 'Live possession check';
-      if (c === 'additional') return 'Extra';
+      if (c === 'additional') return 'Video (Optional)';
       return 'Photo';
     },
     [photoViewerPhase, pickupEvidenceDisplay, returnEvidenceDisplay]
@@ -3830,6 +3901,24 @@ export default function RentalScreen() {
     ownerConfirmedHandoff: pickupHandoffCompletion.ownerConfirmedHandoff,
     viewerRole,
   });
+  const ownerMeetupLifecyclePresentation =
+    viewerRole === 'owner' && agreementStatus === 'confirmed' && meetupCoordinationComplete
+      ? resolveMeetupLifecyclePresentationFromWorkspace({
+          handoffInput: buildPickupHandoffCompletionInputFromWorkspace({
+            rental,
+            pickupAck,
+            verificationRows,
+            renterPickupImHereAt: renterWizardHandoff.renterPickupImHereAt,
+            renterApprovedPickupPhotosAt: renterWizardHandoff.renterApprovedPickupPhotosAt,
+            renterPickupViewFlags,
+          }),
+          wizardProgress: {
+            renter_pickup_im_here_at: renterWizardHandoff.renterPickupImHereAt,
+            rental_agreement_acknowledged_at: rental.agreement_acknowledged_at,
+          },
+          rental,
+        })
+      : null;
   const renterEvidenceReviewed =
     viewerRole === 'renter' &&
     Boolean(
@@ -3860,11 +3949,17 @@ export default function RentalScreen() {
   /** Owner lane: prep complete only — renter checklist is not required. */
   const canOwnerConfirmPickupReady =
     viewerRole === 'owner' &&
-    pickupHandoffPresenceState.ownerLivePhase === 'confirm_ready' &&
-    lifecyclePhase === 'pickup';
+    lifecyclePhase === 'pickup' &&
+    ownerPickupPrepComplete &&
+    !(rental.owner_pickup_ready || rental.handoff_approved_by_owner);
   const canOwnerMarkImHere =
     viewerRole === 'owner' &&
-    pickupHandoffPresenceState.ownerLivePhase === 'renter_arrived';
+    canOwnerMarkImHereAtPickup({
+      renterArrived: pickupHandoffPresenceState.renterArrived,
+      renterPickupImHereAt: renterWizardHandoff.renterPickupImHereAt,
+      ownerArrived: pickupHandoffPresenceState.ownerArrived,
+      handoffApprovalStarted,
+    });
   const canOwnerConfirmHandoff =
     viewerRole === 'owner' && pickupHandoffPresenceState.canConfirmHandoff;
   const canRenterMarkImHere =
@@ -3880,7 +3975,11 @@ export default function RentalScreen() {
     viewerRole === 'renter' && Boolean(renterInspection?.receiptButtonEnabled);
   const pickupWindow = isPhotoUploadWindowOpen('pickup', rental.pickup_datetime, rental.return_datetime);
   const returnWindow = isPhotoUploadWindowOpen('return', rental.pickup_datetime, rental.return_datetime);
-  const canUploadPickup = viewerRole === 'owner' && !handoffCompleted && pickupWindow.allowed;
+  const pickupEvidenceLocked = isOwnerPickupEvidenceLocked({
+    renter_approved_pickup_photos_at: renterWizardHandoff.renterApprovedPickupPhotosAt,
+  });
+  const canUploadPickup =
+    viewerRole === 'owner' && !handoffCompleted && !pickupEvidenceLocked && pickupWindow.allowed;
   const canUploadReturn = viewerRole === 'renter' && returnWorkflowEnabled && !returnCompleted && returnWindow.allowed;
   const returnPhotoUploadBlockedExplanation: string | null = canUploadReturn
     ? null
@@ -3983,7 +4082,7 @@ export default function RentalScreen() {
     const phase = normalizePhase(photo.phase);
     if (!phase) return false;
     if (phase === 'pickup') {
-      if (handoffCompleted) return false;
+      if (handoffCompleted || pickupEvidenceLocked) return false;
       return true;
     }
     if (phase === 'return') return !returnCompleted;
@@ -3991,7 +4090,12 @@ export default function RentalScreen() {
   };
 
   const confirmDeletePhoto = (photo: PhotoDisplay) => {
-    if (!me || !canDeletePhoto(photo)) return;
+    if (!me) return;
+    if (normalizePhase(photo.phase) === 'pickup' && pickupEvidenceLocked) {
+      alertOwnerPickupEvidenceLocked();
+      return;
+    }
+    if (!canDeletePhoto(photo)) return;
     Alert.alert('Delete this photo?', 'This action cannot be undone.', [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -4004,6 +4108,8 @@ export default function RentalScreen() {
             uploadedByUserId: photo.userId ?? '',
             actorUserId: me,
             storagePath: photo.path,
+            pickupEvidenceLocked:
+              normalizePhase(photo.phase) === 'pickup' ? pickupEvidenceLocked : false,
           });
           if (!res.ok) {
             if (__DEV__) {
@@ -4593,6 +4699,10 @@ export default function RentalScreen() {
       return;
     }
     if (phase === 'return' && viewerRole !== 'renter') return;
+    if (phase === 'pickup' && viewerRole === 'owner' && pickupEvidenceLocked) {
+      alertOwnerPickupEvidenceLocked();
+      return;
+    }
     if (phase === 'pickup' && viewerRole === 'owner' && !canUploadPickup) {
       Alert.alert(
         'Pickup photos locked',
@@ -4624,10 +4734,32 @@ export default function RentalScreen() {
         : phase === 'return' && viewerRole === 'renter'
           ? storageCategoryFromReturnTile((tileCategory as ReturnPhotoCategory | undefined) ?? 'item')
           : null;
+    if (phase === 'pickup' && viewerRole === 'owner' && tileCategory === 'additional') {
+      promptOwnerOptionalOperationalVideo({
+        router,
+        rentalId: rental.id,
+        ownerPickupEvidence: ownerPickupPhotos,
+        pickupEvidenceLocked,
+        onVideoReady: async () => {
+          if (!me || !rental.renter_user_id) return;
+          await processPendingOwnerWizardEvidenceUploads({
+            client: supabase,
+            rentalId: rental.id,
+            ownerUserId: me,
+            renterUserId: rental.renter_user_id,
+            pickupEvidenceLocked,
+          });
+          await refreshVerificationState();
+        },
+      });
+      return;
+    }
+
     st.setRentalEvidenceSession({
       rentalId: rental.id,
       phase,
       pickupPhotoCategory: storageCategory,
+      captureMode: 'photo',
     });
     router.push('/camera');
   };
@@ -4641,6 +4773,12 @@ export default function RentalScreen() {
   const { pickupPrepOrVerificationComplete } = pickupChecklistCollapseModel!;
 
   const openPickupPhotoById = (id: string) => {
+    const photo = pickupEvidenceDisplay.find((p) => p.id === id);
+    if (photo?.mediaKind === 'video' && photo.signedUrl) {
+      setPickupVideoViewerUri(photo.signedUrl);
+      setPickupVideoViewerVisible(true);
+      return;
+    }
     const idx = pickupEvidenceDisplay.findIndex((p) => p.id === id);
     if (idx >= 0) openPhotoViewer('pickup', idx);
   };
@@ -4682,11 +4820,31 @@ export default function RentalScreen() {
   let pickupPrimaryOnPress: (() => void) | undefined;
 
   if (viewerRole === 'owner') {
+    if (canOwnerMarkImHere) {
+      pickupPrimaryLabel = ownerArrivalBusy ? 'Saving…' : "Renter is here · I'm here too";
+      pickupPrimaryDisabled = ownerArrivalBusy;
+      pickupPrimaryOnPress = () => void onOwnerMarkImHere();
+      pickupPrimaryFootnote =
+        'The renter is at the meetup. Mark your arrival to unlock the agreement and handoff flow.';
+    } else {
     switch (pickupHandoffPresenceState.ownerLivePhase) {
       case 'confirm_ready':
-        pickupPrimaryLabel = beginHandoffBusy ? 'Saving…' : 'Confirm Item Ready';
-        pickupPrimaryDisabled = beginHandoffBusy;
-        pickupPrimaryOnPress = () => void onBeginHandoffApproval();
+      case 'waiting_for_renter':
+        if (canOwnerConfirmPickupReady) {
+          pickupPrimaryLabel = beginHandoffBusy ? 'Saving…' : 'Confirm Item Ready';
+          pickupPrimaryDisabled = beginHandoffBusy;
+          pickupPrimaryOnPress = () => void onBeginHandoffApproval();
+          pickupPrimaryFootnote =
+            'Item is ready for pickup. The renter can review evidence and head to the meetup.';
+          break;
+        }
+        if (pickupHandoffPresenceState.ownerLivePhase === 'waiting_for_renter') {
+          pickupPrimaryLabel = 'Waiting for renter';
+          pickupPrimaryDisabled = true;
+          pickupPrimaryFootnote =
+            'Item is marked ready. The renter will review evidence, approve photos, and mark arrival at the meetup.';
+          break;
+        }
         break;
       case 'renter_arrived':
         pickupPrimaryLabel = ownerArrivalBusy ? 'Saving…' : "Renter is here · I'm here too";
@@ -4701,12 +4859,6 @@ export default function RentalScreen() {
         pickupPrimaryOnPress = () => onConfirmPickup();
         pickupPrimaryFootnote = 'Confirm you physically handed the item to the renter.';
         break;
-      case 'waiting_for_renter':
-        pickupPrimaryLabel = 'Waiting for renter';
-        pickupPrimaryDisabled = true;
-        pickupPrimaryFootnote =
-          'Item is marked ready. The renter will review evidence, approve photos, and mark arrival at the meetup.';
-        break;
       case 'waiting_receipt':
         pickupPrimaryLabel = 'Waiting for renter receipt';
         pickupPrimaryDisabled = true;
@@ -4714,6 +4866,12 @@ export default function RentalScreen() {
           'You confirmed handoff — waiting for the renter to confirm they received the item.';
         break;
       default:
+        if (canOwnerConfirmPickupReady) {
+          pickupPrimaryLabel = beginHandoffBusy ? 'Saving…' : 'Confirm Item Ready';
+          pickupPrimaryDisabled = beginHandoffBusy;
+          pickupPrimaryOnPress = () => void onBeginHandoffApproval();
+          break;
+        }
         pickupPrimaryLabel = 'Confirm Item Ready';
         pickupPrimaryDisabled = true;
         pickupPrimaryFootnote = !ownerPickupPrepComplete
@@ -4721,6 +4879,7 @@ export default function RentalScreen() {
           : handoffCompleted
             ? 'Pickup is already complete for this rental.'
             : '';
+    }
     }
   } else {
     switch (pickupHandoffPresenceState.renterLivePhase) {
@@ -5276,11 +5435,9 @@ export default function RentalScreen() {
                           ]}
                         >
                           <Ionicons name="add" size={26} color={ui.textSecondary} />
-                          <Text style={styles.handoffTileLabel}>Additional Photos</Text>
+                          <Text style={styles.handoffTileLabel}>Video (Optional)</Text>
                           <Text style={styles.handoffTileCount}>
-                            {ownerPickupBuckets.additional.length > 0
-                              ? `${ownerPickupBuckets.additional.length} extra`
-                              : ' '}
+                            {ownerPickupBuckets.additional.length > 0 ? '1 video' : ' '}
                           </Text>
                         </Pressable>
                       </View>
@@ -5406,23 +5563,31 @@ export default function RentalScreen() {
 
                       {ownerPickupBuckets.additional.length > 0 ? (
                         <>
-                          <Text style={styles.handoffEvidenceGroupLabel}>Additional Photos</Text>
+                          <Text style={styles.handoffEvidenceGroupLabel}>Video (Optional)</Text>
                           <ScrollView
                             horizontal
                             showsHorizontalScrollIndicator={false}
                             contentContainerStyle={styles.handoffEvidenceGallery}
                           >
-                            {ownerPickupBuckets.additional.map((p) => (
-                              <RentalEvidenceThumbnail
-                                key={p.id}
-                                uri={p.signedUrl}
-                                size="handoffSquare"
-                                category="additional"
-                                canDelete={canDeletePhoto(p)}
-                                onPress={() => openPickupPhotoById(p.id)}
-                                onDelete={() => confirmDeletePhoto(p)}
-                              />
-                            ))}
+                            {ownerPickupBuckets.additional.map((p) =>
+                              p.mediaKind === 'video' ? (
+                                <RentalEvidenceVideoThumb
+                                  key={p.id}
+                                  size="handoffSquare"
+                                  onPress={() => openPickupPhotoById(p.id)}
+                                />
+                              ) : (
+                                <RentalEvidenceThumbnail
+                                  key={p.id}
+                                  uri={p.signedUrl}
+                                  size="handoffSquare"
+                                  category="additional"
+                                  canDelete={canDeletePhoto(p)}
+                                  onPress={() => openPickupPhotoById(p.id)}
+                                  onDelete={() => confirmDeletePhoto(p)}
+                                />
+                              )
+                            )}
                           </ScrollView>
                         </>
                       ) : null}
@@ -5806,23 +5971,31 @@ export default function RentalScreen() {
 
                       {ownerPickupBuckets.additional.length > 0 ? (
                         <>
-                          <Text style={styles.handoffEvidenceGroupLabel}>Additional Photos</Text>
+                          <Text style={styles.handoffEvidenceGroupLabel}>Video (Optional)</Text>
                           <ScrollView
                             horizontal
                             showsHorizontalScrollIndicator={false}
                             contentContainerStyle={styles.handoffEvidenceGallery}
                           >
-                            {ownerPickupBuckets.additional.map((p) => (
-                              <RentalEvidenceThumbnail
-                                key={p.id}
-                                uri={p.signedUrl}
-                                size="handoffSquare"
-                                category="additional"
-                                canDelete={canDeletePhoto(p)}
-                                onPress={() => openPickupPhotoById(p.id)}
-                                onDelete={() => confirmDeletePhoto(p)}
-                              />
-                            ))}
+                            {ownerPickupBuckets.additional.map((p) =>
+                              p.mediaKind === 'video' ? (
+                                <RentalEvidenceVideoThumb
+                                  key={p.id}
+                                  size="handoffSquare"
+                                  onPress={() => openPickupPhotoById(p.id)}
+                                />
+                              ) : (
+                                <RentalEvidenceThumbnail
+                                  key={p.id}
+                                  uri={p.signedUrl}
+                                  size="handoffSquare"
+                                  category="additional"
+                                  canDelete={canDeletePhoto(p)}
+                                  onPress={() => openPickupPhotoById(p.id)}
+                                  onDelete={() => confirmDeletePhoto(p)}
+                                />
+                              )
+                            )}
                           </ScrollView>
                         </>
                       ) : null}
@@ -6653,7 +6826,17 @@ export default function RentalScreen() {
               )}
             </View>
 
+            {ownerMeetupLifecyclePresentation && !pickupHandoffComplete ? (
+              <View onLayout={onLifecycleSectionLayout('pickup')}>
+                <OwnerMeetupLifecyclePanel
+                  presentation={ownerMeetupLifecyclePresentation}
+                  onMessageRenter={openRentalChat}
+                />
+              </View>
+            ) : null}
+
             {agreementStatus === 'confirmed' &&
+            viewerRole === 'renter' &&
             physicalPossessionConfirmed &&
             !pickupHandoffComplete ? (
               <View onLayout={onLifecycleSectionLayout('pickup')}>
@@ -6662,9 +6845,7 @@ export default function RentalScreen() {
                   viewerRole={viewerRole}
                   busy={signHandoffBusy}
                   onOpenAuthorization={() => {
-                    setAgreementModalVisible(true);
-                    setPickupExpanded(true);
-                    scrollToLifecycleStep(3);
+                    router.push(`/rental-wizard/${rental.id}/s/rental-agreement`);
                   }}
                 />
               </View>
@@ -6761,6 +6942,16 @@ export default function RentalScreen() {
             onProposeChange={onProposeRentalDetails}
           />
         </View>
+
+        <RentalEvidenceVideoPlaybackModal
+          visible={pickupVideoViewerVisible}
+          uri={pickupVideoViewerUri}
+          title="Video (Optional)"
+          onClose={() => {
+            setPickupVideoViewerVisible(false);
+            setPickupVideoViewerUri(null);
+          }}
+        />
 
         <RentalEvidenceGalleryModal
           visible={photoViewerVisible}

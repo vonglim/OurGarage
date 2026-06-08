@@ -14,6 +14,12 @@ import { formatUsd } from '@/lib/money';
 
 export type WizardHandoffMethod = 'pickup' | 'delivery';
 
+/** Immutable snapshot of what the viewer last submitted for a meetup phase (diff baseline). */
+export type ViewerMeetupSubmissionSnapshot = {
+  location: string;
+  meetupTimeIso: string | null;
+};
+
 export type WizardMeetupProposalDraft = {
   method: WizardHandoffMethod;
   location: string;
@@ -36,6 +42,10 @@ export type CoordinateReturnInheritedDefaults = {
 
 const DRAFT_KEY_PICKUP = 'coordinate_pickup_draft' as const;
 const DRAFT_KEY_RETURN = 'coordinate_return_draft' as const;
+const VIEWER_SUBMISSION_KEY_PICKUP = 'coordinate_pickup_viewer_last_submission' as const;
+const VIEWER_SUBMISSION_KEY_RETURN = 'coordinate_return_viewer_last_submission' as const;
+
+export type CoordinateMeetupPhase = 'pickup' | 'return';
 
 export function wizardHandoffFromNegotiation(method: NegotiationDeliveryMethod): WizardHandoffMethod {
   return method === 'owner_delivery' ? 'delivery' : 'pickup';
@@ -219,6 +229,49 @@ export function coordinateReturnDraftProgressPatch(
   draft: WizardMeetupProposalDraft
 ): Partial<RentalWizardProgress> {
   return { [DRAFT_KEY_RETURN]: draft };
+}
+
+export function readViewerLastMeetupSubmission(
+  progress: RentalWizardProgress,
+  phase: CoordinateMeetupPhase
+): ViewerMeetupSubmissionSnapshot | null {
+  const raw =
+    phase === 'pickup'
+      ? progress[VIEWER_SUBMISSION_KEY_PICKUP]
+      : progress[VIEWER_SUBMISSION_KEY_RETURN];
+  if (!raw) return null;
+  const location = String(raw.location ?? '').trim();
+  const meetupTimeIso =
+    typeof raw.meetupTimeIso === 'string' && raw.meetupTimeIso.trim()
+      ? raw.meetupTimeIso.trim()
+      : null;
+  if (!location && !meetupTimeIso) return null;
+  return { location, meetupTimeIso };
+}
+
+export function viewerLastMeetupSubmissionPatch(
+  phase: CoordinateMeetupPhase,
+  snapshot: ViewerMeetupSubmissionSnapshot
+): Partial<RentalWizardProgress> {
+  const normalized: ViewerMeetupSubmissionSnapshot = {
+    location: snapshot.location.trim(),
+    meetupTimeIso:
+      typeof snapshot.meetupTimeIso === 'string' && snapshot.meetupTimeIso.trim()
+        ? snapshot.meetupTimeIso.trim()
+        : null,
+  };
+  return phase === 'pickup'
+    ? { [VIEWER_SUBMISSION_KEY_PICKUP]: normalized }
+    : { [VIEWER_SUBMISSION_KEY_RETURN]: normalized };
+}
+
+export function snapshotFromMeetupDraft(
+  draft: WizardMeetupProposalDraft
+): ViewerMeetupSubmissionSnapshot {
+  return {
+    location: draft.location.trim(),
+    meetupTimeIso: draft.meetupTimeIso,
+  };
 }
 
 export function isCoordinateDraftValid(draft: WizardMeetupProposalDraft): boolean {

@@ -38,7 +38,7 @@ const CTA_BY_PHASE: Partial<Record<CanonicalRentalPhase, string>> = {
   all_set_transition: 'Continue',
   prepare_pickup: 'Prepare for pickup',
   meetup_day: 'Meetup day',
-  pickup_confirmed: 'Sign & continue',
+  pickup_confirmed: 'Review rental agreement',
   active_rental: 'Enjoy your rental',
   return_pending: 'Prepare for return',
   review_pending: 'Leave review',

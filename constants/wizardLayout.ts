@@ -105,6 +105,20 @@ export function wizardScrollBottomPaddingStackedFooter(safeBottom: number): numb
   );
 }
 
+/**
+ * Remove ScreenWrapper’s default 16px inset so bands (hero, dark transition) bleed edge-to-edge.
+ * Pair with `wizardContentGutterStyle` on inner chrome (header, scroll, footer).
+ */
+export const wizardScreenBleedStyle: ViewStyle = {
+  paddingHorizontal: 0,
+  paddingTop: 0,
+};
+
+/** Standard wizard horizontal inset — matches ScreenWrapper default. */
+export const wizardContentGutterStyle: ViewStyle = {
+  paddingHorizontal: wizardLayout.screenPaddingHorizontal,
+};
+
 export const wizardStepContentStyle: ViewStyle = {
   paddingHorizontal: wizardLayout.stepContentInset,
 };
@@ -233,10 +247,10 @@ export const guidedWizardChromeStyles = StyleSheet.create({
   footerNote: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#4338CA',
+    color: ui.primary,
     textAlign: 'center',
     lineHeight: 18,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: ui.surfaceTintPrimary,
     paddingVertical: wizardLayout.footerNotePaddingVertical,
     paddingHorizontal: wizardLayout.footerNotePaddingHorizontal,
     borderRadius: wizardLayout.footerNoteRadius,

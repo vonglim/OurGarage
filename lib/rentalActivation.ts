@@ -23,6 +23,11 @@ export type RentalActivationRentalSlice = {
   physical_possession_confirmed_at?: string | null;
   rental_activated_at?: string | null;
   agreement_acknowledged_at?: string | null;
+  equipment_condition_acknowledged_at?: string | null;
+  liability_disclosure_acknowledged_at?: string | null;
+  late_fee_policy_acknowledged_at?: string | null;
+  protection_declined_acknowledged_at?: string | null;
+  protection_coverage_acknowledged?: boolean | null;
 };
 
 export type RentalActivationWizardSlice = {
@@ -86,8 +91,15 @@ export function resolveRentalAuthorizationState(input: {
   }
 
   const agreementAcknowledged =
-    parseTs(rental.agreement_acknowledged_at) ||
-    parseTs(wizard?.rental_agreement_acknowledged_at);
+    (parseTs(rental.agreement_acknowledged_at) ||
+      parseTs(wizard?.rental_agreement_acknowledged_at)) &&
+    parseTs(rental.equipment_condition_acknowledged_at);
+
+  const disclosuresAcknowledged =
+    parseTs(rental.liability_disclosure_acknowledged_at) &&
+    parseTs(rental.late_fee_policy_acknowledged_at) &&
+    (parseTs(rental.protection_declined_acknowledged_at) ||
+      rental.protection_coverage_acknowledged === true);
 
   const preauth = preauthStatusNorm(rental.preauth_status);
   const preauthorizationFailed = preauth === 'failed';
@@ -102,6 +114,8 @@ export function resolveRentalAuthorizationState(input: {
 
   let phase: RentalAuthorizationPhase = 'pending_agreement_review';
   if (!agreementAcknowledged) {
+    phase = 'pending_agreement_review';
+  } else if (!disclosuresAcknowledged) {
     phase = 'pending_agreement_review';
   } else if (preauthorizationFailed) {
     phase = 'failed_authorization';
@@ -131,7 +145,10 @@ export function resolveRentalAuthorizationState(input: {
               : 'Rental authorization';
 
   const authorizationReady =
-    agreementAcknowledged && preauthorizationSucceeded && signaturesComplete;
+    agreementAcknowledged &&
+    disclosuresAcknowledged &&
+    preauthorizationSucceeded &&
+    signaturesComplete;
 
   return {
     phase,

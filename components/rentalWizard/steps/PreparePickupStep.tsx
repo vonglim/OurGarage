@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
 
 import { Pressable } from '@/components/Pressable';
+import { RentalAgreementReviewSheet } from '@/components/rentalWizard/modals/RentalAgreementReviewSheet';
 import { PickupEvidenceReviewModal } from '@/components/rentalWizard/PickupEvidenceReviewModal';
 import { useRentalWizard } from '@/components/rentalWizard/RentalWizardProvider';
 import { WizardItemCard } from '@/components/rentalWizard/WizardItemCard';
@@ -14,6 +15,7 @@ import {
   logPickupEvidenceRealtime,
   resolveRenterPreparePickupStepState,
 } from '@/lib/pickupEvidenceReadiness';
+import { canReviewAgreementBeforeMeetup } from '@/lib/rentalAuthorization/authorizationProgress';
 import { WIZARD_STEP_META } from '@/lib/rentalWizard/wizardStepMeta';
 
 function StatusBanner({
@@ -47,6 +49,7 @@ export function PreparePickupStep() {
   const { ctx, hasPendingLifecyclePrompt } = w;
   const meta = WIZARD_STEP_META.prepare_pickup;
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [agreementSheetOpen, setAgreementSheetOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const readiness = ctx.pickupEvidenceReadiness;
@@ -200,8 +203,17 @@ export function PreparePickupStep() {
         primaryDisabled={primaryDisabled}
         onPrimary={onPrimary ?? (() => {})}
         footerNote={footerNote}
-        footerInlineActions={
-          readiness.renterEvidenceReady || readiness.ownerPhotoCount > 0
+        footerInlineActions={[
+          ...(canReviewAgreementBeforeMeetup(ctx)
+            ? [
+                {
+                  label: 'Review rental agreement',
+                  onPress: () => setAgreementSheetOpen(true),
+                  disabled: hasPendingLifecyclePrompt,
+                },
+              ]
+            : []),
+          ...(readiness.renterEvidenceReady || readiness.ownerPhotoCount > 0
             ? [
                 {
                   label: 'Open messages',
@@ -209,8 +221,8 @@ export function PreparePickupStep() {
                   disabled: hasPendingLifecyclePrompt,
                 },
               ]
-            : undefined
-        }
+            : []),
+        ]}
       >
         <WizardItemCard
           title={ctx.displayTitle}
@@ -232,7 +244,7 @@ export function PreparePickupStep() {
               <Text style={styles.reviewCardBody}>
                 Item · Serial · Live possession proof
                 {readiness.bucketCounts.additional > 0
-                  ? ` · +${readiness.bucketCounts.additional} additional`
+                  ? ' · optional video included'
                   : ''}
               </Text>
             </View>
@@ -251,6 +263,12 @@ export function PreparePickupStep() {
         onReportConcern={handleReportConcern}
         approveDisabled={!readiness.renterEvidenceReady}
         busy={busy}
+      />
+
+      <RentalAgreementReviewSheet
+        visible={agreementSheetOpen}
+        ctx={ctx}
+        onClose={() => setAgreementSheetOpen(false)}
       />
     </>
   );

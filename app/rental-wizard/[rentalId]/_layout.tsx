@@ -1,11 +1,16 @@
 import { useFocusEffect } from '@react-navigation/native';
-import { Stack, useLocalSearchParams, usePathname } from 'expo-router';
+import { Stack, useLocalSearchParams, usePathname, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
+import { CoordinationLiveBannerProvider, useCoordinationLiveBanner } from '@/components/rentalWizard/CoordinationLiveBannerContext';
 import { RentalWizardProvider } from '@/components/rentalWizard/RentalWizardProvider';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { useAuthUserId } from '@/lib/authUser';
+import {
+  buildOwnerRentalWizardContextWithDiagnostics,
+  resolveOwnerRentalWizardDestination,
+} from '@/lib/ownerRentalWizard';
 import { buildRentalWizardContextWithDiagnostics } from '@/lib/rentalWizard/buildRentalWizardContext';
 import { logRentalActivationSchema } from '@/lib/rentalActivationSchema';
 import type { RentalWizardContext } from '@/lib/rentalWizard/types';
@@ -16,26 +21,21 @@ import {
   resolvePickupHandoffPresenceState,
   type LivePresencePhase,
 } from '@/lib/pickupHandoffLive';
-import type { RentalsLiveUpdateResult } from '@/lib/rentalLifecycle/rentalRowLivePatch';
+
 import { useRentalWizardRealtimeSync } from '@/lib/rentalLifecycle/useRentalWizardRealtimeSync';
 import {
+  mergeWizardContextFromRentalLivePatch,
+  type WizardCoordinationPatchRefs,
+} from '@/lib/rentalWizard/applyWizardCoordinationLivePatch';
+import { processCoordinationLiveSideEffects } from '@/lib/rentalWizard/processCoordinationLiveSideEffects';
+import {
+  coordinationSyncSnapshotFromRow,
+  logCoordinationSyncTrace,
+} from '@/lib/rentalWizard/coordinationSyncDevLog';
+import {
   extractCoordinationFreshnessMeta,
-  mergeRentalRowFromRealtimeCoordinationPatch,
-  patchContainsMeetupCoordinationFields,
   type CoordinationFreshnessMeta,
 } from '@/lib/meetupCoordinationFreshness';
-import {
-  buildReturnCoordinationLiveDiagnostics,
-  logPickupCoordinationLive,
-  logPickupCoordinationLiveReturn,
-  snapshotMeetupCoordinationStatuses,
-} from '@/lib/rentalMeetupCoordinationLive';
-import {
-  recomputeCanonicalMeetupCoordination,
-  roleForViewerOnRental,
-} from '@/lib/canonicalMeetupCoordination';
-import type { RentalMeetupRow } from '@/lib/rentalMeetupProposalLifecycle';
-import { buildRentalWizardContextFlags } from '@/lib/rentalWizard/rentalWizardContextFlags';
 import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
 import {
   createLifecyclePromptGateState,
@@ -61,6 +61,18 @@ function isOnCoordinateReturnPath(pathname: string): boolean {
 }
 
 export default function RentalWizardLayout() {
+  return (
+    <CoordinationLiveBannerProvider>
+      <RentalWizardLayoutContent />
+    </CoordinationLiveBannerProvider>
+  );
+}
+
+function RentalWizardLayoutContent() {
+  const liveBanner = useCoordinationLiveBanner();
+  const showCoordinationBannerRef = useRef(liveBanner?.showBanner);
+  showCoordinationBannerRef.current = liveBanner?.showBanner;
+  const router = useRouter();
   const { rentalId: rawId } = useLocalSearchParams<{ rentalId: string }>();
   const rentalId = typeof rawId === 'string' ? rawId : '';
   const pathname = usePathname();
@@ -131,6 +143,26 @@ export default function RentalWizardLayout() {
       if (!next) {
         const message =
           buildError?.trim() || 'This rental is not available for the guided flow.';
+        if (message.includes('not available for the guided flow')) {
+          const ownerResult = await buildOwnerRentalWizardContextWithDiagnostics(
+            supabase,
+            rentalId,
+            me
+          );
+          if (ownerResult.ctx) {
+            const dest = resolveOwnerRentalWizardDestination(ownerResult.ctx);
+            if (dest.path) {
+              logScenario('routing', {
+                event: 'renter_wizard_redirect_owner',
+                rentalId,
+                source: 'wizard_layout',
+                path: dest.path,
+              });
+              router.replace(dest.path as `/owner-rental-wizard/${string}/s/${string}`);
+              return;
+            }
+          }
+        }
         logRentalActivationSchema({
           rentalId,
           wizardBuildPhase: 'wizard_layout_refresh',
@@ -149,6 +181,11 @@ export default function RentalWizardLayout() {
         setCtx(next);
         ctxRef.current = next;
         setError(null);
+        logCoordinationSyncTrace('wizard_layout_ctx', {
+          source: 'refresh_end',
+          rentalId,
+          ...coordinationSyncSnapshotFromRow(next.rental as Record<string, unknown>, next.meetupCoordination),
+        });
         logScenario('lifecycle', {
           event: 'refresh_end',
           rentalId,
@@ -172,7 +209,7 @@ export default function RentalWizardLayout() {
     } finally {
       setLoading(false);
     }
-  }, [me, rentalId]);
+  }, [me, rentalId, router]);
 
   useEffect(() => {
     void refresh();
@@ -189,158 +226,46 @@ export default function RentalWizardLayout() {
     surface: 'rental_wizard_layout',
     getCoordinationBaseline: () =>
       ctxRef.current?.rental ? (ctxRef.current.rental as Record<string, unknown>) : null,
-    onRentalRowLivePatch: (live: RentalsLiveUpdateResult, meta) => {
-      if (typeof __DEV__ !== 'undefined' && __DEV__) {
-        console.log('[renter-wizard-realtime-patch]', {
-          triggerSource: meta.triggerSource,
-          coordinationChanged: live.coordinationChanged,
-          coordinationChangedFields: live.coordinationChangedFields,
-          patchHasCoordinationFields: patchContainsMeetupCoordinationFields(live.patch),
-        });
-      }
+    onRentalRowLivePatch: (live, meta) => {
       setCtx((prev) => {
         if (!prev) return prev;
-        const shouldMergeCoordination =
-          live.coordinationChanged || patchContainsMeetupCoordinationFields(live.patch);
-        const mergeResult = shouldMergeCoordination
-          ? mergeRentalRowFromRealtimeCoordinationPatch({
-              baseline: prev.rental,
-              patch: live.patch,
-              baselineMeta: coordinationFreshnessRef.current,
-              coordinationRevision: coordinationRevisionRef.current,
-              surface: 'renter_wizard',
-            })
-          : null;
-        const nextRental = (
-          mergeResult ? mergeResult.merged : { ...prev.rental, ...live.patch }
-        ) as typeof prev.rental;
-        if (mergeResult) {
-          coordinationFreshnessRef.current = mergeResult.meta;
-          if (mergeResult.shouldBumpRevision) {
-            coordinationRevisionRef.current = mergeResult.meta.coordination_revision;
-          }
-        }
-        const wizardFlags = buildRentalWizardContextFlags(nextRental);
-        const prevCoord = snapshotMeetupCoordinationStatuses({
-          rental: prev.rental,
-          viewerUserId: me,
-          requestSchedulingMeta: prev.requestSchedulingMeta,
-          pickupHandoffComplete: prev.pickupHandoffComplete,
-        });
-        const nextCoord = snapshotMeetupCoordinationStatuses({
-          rental: nextRental,
-          viewerUserId: me,
-          requestSchedulingMeta: prev.requestSchedulingMeta,
-          pickupHandoffComplete: prev.pickupHandoffComplete,
-        });
-
-        if (live.coordinationChanged) {
-          const previousReturnStatus =
-            (previousReturnCoordStatusRef.current as typeof nextCoord.returnStatus) ??
-            prevCoord.returnStatus;
-          logPickupCoordinationLive({
-            rentalId,
-            triggerSource: meta.triggerSource,
-            triggeredBy: String(nextRental.last_proposed_by ?? live.patch.last_proposed_by ?? ''),
-            changedFields: live.coordinationChangedFields,
-            previousPickupStatus:
-              (previousPickupCoordStatusRef.current as typeof nextCoord.pickupStatus) ??
-              prevCoord.pickupStatus,
-            nextPickupStatus: nextCoord.pickupStatus,
-            previousReturnStatus,
-            nextReturnStatus: nextCoord.returnStatus,
-            latencyMs: Date.now() - meta.receivedAt,
-            surface: 'rental_wizard',
-          });
-          logPickupCoordinationLiveReturn({
-            rentalId,
-            triggerSource: meta.triggerSource,
-            triggeredBy: String(nextRental.last_proposed_by ?? live.patch.last_proposed_by ?? ''),
-            changedFields: live.coordinationChangedFields,
-            latencyMs: Date.now() - meta.receivedAt,
-            surface: 'rental_wizard',
-            diagnostics: buildReturnCoordinationLiveDiagnostics({
-              rental: nextRental,
-              viewerUserId: me,
-              requestSchedulingMeta: prev.requestSchedulingMeta,
-              pickupHandoffComplete: prev.pickupHandoffComplete,
-              previousReturnStatus,
-            }),
-          });
-          previousPickupCoordStatusRef.current = nextCoord.pickupStatus;
-          previousReturnCoordStatusRef.current = nextCoord.returnStatus;
-        }
-
-        if (live.presenceChanged) {
-          const prevPresence = resolvePickupHandoffPresenceState({
-            rental: prev.rental,
-            renterPickupImHereAt: prev.wizardProgress.renter_pickup_im_here_at,
-            renterApprovedPickupPhotosAt: prev.wizardProgress.renter_approved_pickup_photos_at,
-            pickupAck: prev.pickupAck,
-            ownerPickupPrepComplete: false,
-            handoffApprovalStarted: Boolean(
-              prev.rental.handoff_approval_started_at?.trim() ||
-                prev.rental.handoff_approved_by_owner
-            ),
-            handoffCompleted: prev.pickupHandoffComplete,
-            viewerRole: 'renter',
-          });
-          const nextPresence = resolvePickupHandoffPresenceState({
-            rental: nextRental,
-            renterPickupImHereAt: prev.wizardProgress.renter_pickup_im_here_at,
-            renterApprovedPickupPhotosAt: prev.wizardProgress.renter_approved_pickup_photos_at,
-            pickupAck: prev.pickupAck,
-            ownerPickupPrepComplete: false,
-            handoffApprovalStarted: Boolean(
-              nextRental.handoff_approval_started_at?.trim() ||
-                nextRental.handoff_approved_by_owner
-            ),
-            handoffCompleted: prev.pickupHandoffComplete,
-            viewerRole: 'renter',
-          });
-          logPickupHandoffLive({
-            rentalId,
-            triggerSource: meta.triggerSource,
-            rerenderedSurface: 'rental_wizard',
-            ownerArrived: nextPresence.ownerArrived,
-            renterArrived: nextPresence.renterArrived,
-            bothPresent: nextPresence.bothPresent,
-            previousPresenceState:
-              previousLivePhaseRef.current ?? prevPresence.livePresencePhase,
-            nextPresenceState: nextPresence.livePresencePhase,
-            latencyMs: Date.now() - meta.receivedAt,
-          });
-          previousLivePhaseRef.current = nextPresence.livePresencePhase;
-        }
-
-        const viewerRole = roleForViewerOnRental(nextRental as RentalMeetupRow, me);
-        const meetupCoordination = recomputeCanonicalMeetupCoordination({
-          rental: nextRental as RentalMeetupRow,
-          viewerUserId: me,
-          viewerRole,
-          presentationSurface: viewerRole === 'owner' ? 'owner_workspace' : 'renter_wizard',
-          requestSchedulingMeta: prev.requestSchedulingMeta,
-          pickupHandoffComplete: prev.pickupHandoffComplete,
-          previousRevision: prev.meetupCoordination.revision,
-          bumpRevision:
-            live.coordinationChanged &&
-            (mergeResult?.shouldBumpRevision ?? true),
-        });
-        const next = {
-          ...prev,
-          rental: nextRental,
-          meetupCoordination,
-          hasPendingProposal: meetupCoordination.hasPendingProposal,
-          pickupCoordinationComplete: meetupCoordination.pickupCoordinationComplete,
-          returnCoordinationAgreed: meetupCoordination.returnCoordinationComplete,
-          meetupCoordinationComplete: meetupCoordination.meetupCoordinationComplete,
-          pickupIso: meetupCoordination.pickupIso,
-          returnIso: meetupCoordination.returnIso,
-          meetingCompleted: wizardFlags.meetingCompleted,
-          meetingAgreementCleared: wizardFlags.meetingAgreementCleared,
+        const patchRefs: WizardCoordinationPatchRefs = {
+          freshness: coordinationFreshnessRef.current,
+          revision: coordinationRevisionRef.current,
+          previousPickupStatus: previousPickupCoordStatusRef.current,
+          previousReturnStatus: previousReturnCoordStatusRef.current,
+          previousLivePhase: previousLivePhaseRef.current,
         };
-        ctxRef.current = next;
-        return next;
+        const mergeResult = mergeWizardContextFromRentalLivePatch({
+          prev,
+          live,
+          triggerSource: meta.triggerSource,
+          receivedAt: meta.receivedAt,
+          rentalId,
+          viewerUserId: me,
+          presentationSurface: 'renter_wizard',
+          surfaceLabel: 'rental_wizard',
+          refs: patchRefs,
+        });
+        coordinationFreshnessRef.current = mergeResult.refs.freshness;
+        coordinationRevisionRef.current = mergeResult.refs.revision;
+        previousPickupCoordStatusRef.current = mergeResult.refs.previousPickupStatus;
+        previousReturnCoordStatusRef.current = mergeResult.refs.previousReturnStatus;
+        previousLivePhaseRef.current = mergeResult.refs.previousLivePhase;
+        ctxRef.current = mergeResult.next;
+        queueMicrotask(() => {
+          processCoordinationLiveSideEffects({
+            prev,
+            next: mergeResult.next,
+            viewerUserId: me,
+            rentalId,
+            pathname: pathnameRef.current,
+            triggerSource: meta.triggerSource,
+            armLifecyclePrompt,
+            showBanner: (banner) => showCoordinationBannerRef.current?.(banner),
+          });
+        });
+        return mergeResult.next;
       });
     },
     onRenterWizardHandoffPatch: (patch, meta) => {
@@ -424,9 +349,11 @@ export default function RentalWizardLayout() {
       isGateActive: () => lifecycleGateRef.current != null,
       armPickupAcceptedPrompt: () => armLifecyclePrompt('pickup_coordination_accepted'),
       armReturnAcceptedPrompt: () => armLifecyclePrompt('return_coordination_accepted'),
+      showCoordinationBanner: (banner) => showCoordinationBannerRef.current?.(banner),
+      refreshWizard: () => void refresh(),
     });
     return () => unregisterWizardMeetupPromptSession(rentalId);
-  }, [armLifecyclePrompt, rentalId]);
+  }, [armLifecyclePrompt, refresh, rentalId]);
 
   useEffect(() => {
     lifecycleGateRef.current = null;

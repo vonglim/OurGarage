@@ -16,7 +16,7 @@ import { openChatForRequest } from '@/lib/openRequestChat';
 import type { AppNotification } from '@/store/notificationsStore';
 import { resolveRequestFromRouteId } from '@/store/requestsStore';
 import { markNotificationAsRead } from '@/lib/markNotificationsRead';
-import { isWizardLifecycleNotificationType, pushRentalFromNotification } from '@/lib/rentalNavigation';
+import { isRentalJourneyNotificationType, pushRentalFromNotification } from '@/lib/rentalNavigation';
 import {
   useNotificationsList,
   useNotificationsStore,
@@ -225,21 +225,11 @@ export default function NotificationsScreen() {
 
     const rentalRouteId =
       typeof n.rentalId === 'string' && n.rentalId.trim() !== '' ? n.rentalId.trim() : null;
-    if (rentalRouteId && isWizardLifecycleNotificationType(n.type)) {
+    if (rentalRouteId && isRentalJourneyNotificationType(n.type)) {
       if (__DEV__) {
-        console.log('[notifications] navigate -> rental entry', { rentalId: rentalRouteId, type: n.type });
+        console.log('[notifications] navigate -> rental wizard', { rentalId: rentalRouteId, type: n.type });
       }
       void pushRentalFromNotification(router, n);
-      return;
-    }
-    if (rentalRouteId && (n.type === 'message' || n.type === 'offer_accepted')) {
-      if (__DEV__) {
-        console.log('[notifications] navigate -> rental workspace', { rentalId: rentalRouteId });
-      }
-      router.push({
-        pathname: '/rental/[id]',
-        params: { id: rentalRouteId },
-      });
       return;
     }
 

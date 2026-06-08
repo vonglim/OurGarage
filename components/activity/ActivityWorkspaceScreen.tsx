@@ -56,7 +56,10 @@ import {
   resolveRentalCardStatusBadge,
   type RentalCardStatusBadge,
 } from '@/lib/rentalLifecycle';
-import { rentalWizardCancelledSummaryPath } from '@/lib/rentalNavigation';
+import {
+  openGuidedRentalFlow,
+  rentalWizardCancelledSummaryPath,
+} from '@/lib/rentalNavigation';
 import type { RentalCancellationReasonKey } from '@/lib/rentalCancellation';
 import { pickRentalWorkspaceNudgeRow } from '@/lib/rentalWorkspaceNudge';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -924,10 +927,15 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
 
   const rentalsTotalCount = unifiedRentals.length;
 
-  const rentalWorkspaceNudgeRow = useMemo(
-    () => pickRentalWorkspaceNudgeRow(unifiedRentals, dismissedWorkspaceNudgeIds),
-    [unifiedRentals, dismissedWorkspaceNudgeIds]
-  );
+  const rentalWorkspaceNudgeRow = useMemo(() => {
+    const pool =
+      mode === 'renting'
+        ? unifiedRentals.filter((r) => r.renter_user_id === me)
+        : mode === 'my_shop'
+          ? unifiedRentals.filter((r) => r.owner_user_id === me)
+          : unifiedRentals;
+    return pickRentalWorkspaceNudgeRow(pool, dismissedWorkspaceNudgeIds);
+  }, [unifiedRentals, dismissedWorkspaceNudgeIds, mode, me]);
 
   const onDismissRentalWorkspaceNudge = useCallback(() => {
     const id = rentalWorkspaceNudgeRow?.id;
@@ -1359,13 +1367,13 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
                     <Pressable
                       pressOpacityFeedback={false}
                       haptic
-                      onPress={() =>
-                        router.push(
-                          cancelled
-                            ? rentalWizardCancelledSummaryPath(row.id)
-                            : `/rental-wizard/${row.id}`
-                        )
-                      }
+                      onPress={() => {
+                        if (cancelled) {
+                          router.push(rentalWizardCancelledSummaryPath(row.id));
+                          return;
+                        }
+                        openGuidedRentalFlow(router, row.id, me, row);
+                      }}
                       style={({ pressed }) => [
                         styles.rentalGridBtnPrimaryWide,
                         pressed && styles.rentalGridBtnPressed,
@@ -1501,7 +1509,8 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
                   }
                   onDismissNudge={onDismissRentalWorkspaceNudge}
                   onOpenRental={(id) => {
-                    router.push(`/rental-wizard/${id}`);
+                    const row = unifiedRentals.find((r) => r.id === id);
+                    openGuidedRentalFlow(router, id, me, row ?? null);
                   }}
                   goSection={goRentingSection}
                   activeRentalCount={rentingActiveRentalRows.length}
@@ -1708,7 +1717,12 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
                           pressOpacityFeedback={false}
                           haptic
                           onPress={() => {
-                            router.push(`/rental-wizard/${rentalWorkspaceNudgeRow.id}`);
+                            openGuidedRentalFlow(
+                              router,
+                              rentalWorkspaceNudgeRow.id,
+                              me,
+                              rentalWorkspaceNudgeRow
+                            );
                           }}
                           style={({ pressed }) => [
                             styles.workspaceNudgeCta,

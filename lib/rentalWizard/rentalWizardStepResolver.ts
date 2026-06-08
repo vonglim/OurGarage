@@ -22,6 +22,7 @@ import {
   logPickupHandoffRouting,
   resolveWizardPickupHandoffStep,
 } from '@/lib/pickupHandoffCompletion';
+import { normalizeMeetupWizardStep } from '@/lib/rentalLifecycle/normalizeMeetupWizardStep';
 import {
   logRentalActivationSchema,
   resolveFallbackLogicalWizardStep,
@@ -110,7 +111,7 @@ function resolveLogicalWizardStepInner(ctx: RentalWizardContext): RentalWizardSt
       if (ctx.schemaDegraded && resolved.step === 'rental_authorization') {
         return resolveFallbackLogicalWizardStep(ctx);
       }
-      return resolved.step;
+      return normalizeMeetupWizardStep(resolved.step, ctx);
     } catch (err) {
       logRentalActivationSchema({
         rentalId: ctx.rentalId,
@@ -229,9 +230,9 @@ function resolveRentalWizardDestinationInner(
       path: wizardPathForStep(ctx.rentalId, stepOverride),
     };
   }
-  const logical = safeResolveLogicalWizardStep(merged);
+  const logical = normalizeMeetupWizardStep(safeResolveLogicalWizardStep(merged), merged);
   const transition = resolveWizardTransitionBefore(logical, merged, nowMs);
-  const step = transition ?? logical;
+  const step = normalizeMeetupWizardStep(transition ?? logical, merged);
   const meta = WIZARD_STEP_META[step];
   if (!meta) {
     const fallbackStep = resolveFallbackLogicalWizardStep(merged);

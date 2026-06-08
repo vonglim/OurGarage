@@ -19,6 +19,7 @@ import {
 } from '@/lib/rentalLifecycle/rentalRowLivePatch';
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
+import { logCoordinationSyncTrace } from '@/lib/rentalWizard/coordinationSyncDevLog';
 import { getSupabase } from '@/lib/supabase';
 
 const DEFAULT_DEBOUNCE_MS = 120;
@@ -126,6 +127,18 @@ export function useRentalWizardRealtimeSync(
       if (table === 'rentals') {
         const rentalsPayload = payload as RealtimePostgresChangesPayload<Record<string, unknown>>;
         const coordinationBaseline = optionsRef.current?.getCoordinationBaseline?.() ?? null;
+        const newRow = rentalsPayload.new as Record<string, unknown> | undefined;
+        logCoordinationSyncTrace('realtime_received', {
+          surface,
+          triggerSource,
+          table,
+          rentalId,
+          hasBaseline: Boolean(coordinationBaseline),
+          pickup_datetime: newRow?.pickup_datetime ?? null,
+          meetup_location: newRow?.meetup_location ?? null,
+          last_proposed_by: newRow?.last_proposed_by ?? null,
+          proposal_version: newRow?.proposal_version ?? null,
+        });
         let live = parseRentalsLiveUpdate(rentalsPayload, { coordinationBaseline });
         if (!live) {
           const newRow = rentalsPayload.new as Record<string, unknown> | undefined;
@@ -152,6 +165,21 @@ export function useRentalWizardRealtimeSync(
             };
           }
         }
+        logCoordinationSyncTrace('realtime_parsed', {
+          surface,
+          triggerSource,
+          rentalId,
+          parsed: Boolean(live),
+          presenceChanged: live?.presenceChanged ?? false,
+          coordinationChanged: live?.coordinationChanged ?? false,
+          coordinationChangedFields: live?.coordinationChangedFields ?? [],
+          requiresImmediateRefresh: live?.requiresImmediateRefresh ?? false,
+          patch_pickup_datetime: live?.patch?.pickup_datetime ?? null,
+          patch_meetup_location: live?.patch?.meetup_location ?? null,
+          patch_last_proposed_by: live?.patch?.last_proposed_by ?? null,
+          patch_proposal_version: live?.patch?.proposal_version ?? null,
+        });
+
         if (live?.requiresImmediateRefresh) {
           const liveMeta: RentalWizardRealtimeSyncMeta = {
             ...meta,

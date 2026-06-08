@@ -4,6 +4,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { Pressable } from '@/components/Pressable';
 import { ui } from '@/constants/appUi';
 import type { RentalAuthorizationState } from '@/lib/rentalActivation';
+import { MEETUP_LIFECYCLE_THEME } from '@/lib/rentalLifecycle/meetupLifecycleTheme';
 
 export type RentalAuthorizationSectionProps = {
   authorization: RentalAuthorizationState;
@@ -26,9 +27,11 @@ export function RentalAuthorizationSection({
         ? styles.pillError
         : styles.pillPending;
 
+  const theme = MEETUP_LIFECYCLE_THEME.rental_authorization;
+
   return (
-    <View style={styles.card}>
-      <Text style={styles.title}>Rental authorization</Text>
+    <View style={[styles.card, { borderColor: theme.softBorder, backgroundColor: theme.soft }]}>
+      <Text style={styles.title}>Phase 18 · Rental authorization</Text>
       <Text style={styles.subtitle}>
         {isRenter
           ? 'Pickup inspection is complete. Review the agreement, authorize the security hold, and sign to officially activate your rental.'
@@ -53,16 +56,21 @@ export function RentalAuthorizationSection({
           onPress={onOpenAuthorization}
           style={({ pressed }) => [
             styles.primaryBtn,
+            { backgroundColor: theme.primary },
             pressed && styles.btnPressed,
             busy && styles.btnDisabled,
           ]}
         >
           <Text style={styles.primaryBtnText}>
             {authorization.phase === 'pending_agreement_review'
-              ? 'Review agreement & authorize'
-              : authorization.phase === 'failed_authorization'
-                ? 'Retry authorization'
-                : 'Continue authorization'}
+              ? 'Review & sign rental agreement'
+              : authorization.phase === 'pending_preauthorization'
+                ? 'Authorize security hold'
+                : authorization.phase === 'pending_signature'
+                  ? 'Complete digital signature'
+                  : authorization.phase === 'failed_authorization'
+                    ? 'Retry authorization'
+                    : 'Continue authorization'}
           </Text>
         </Pressable>
       ) : null}
@@ -103,7 +111,6 @@ const styles = StyleSheet.create({
   rowDone: { color: ui.textSecondary },
   primaryBtn: {
     marginTop: 8,
-    backgroundColor: ui.primary,
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: 'center',

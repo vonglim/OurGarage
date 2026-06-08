@@ -8,6 +8,7 @@ import { useRentalWizard } from '@/components/rentalWizard/RentalWizardProvider'
 import { WizardItemCard } from '@/components/rentalWizard/WizardItemCard';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { ui } from '@/constants/appUi';
+import { wizardContentGutterStyle, wizardLayout } from '@/constants/wizardLayout';
 import { formatBorrowingFromOwner } from '@/lib/rentalWizard/formatBorrowingFromOwner';
 import { RENTAL_CANCELLATION_REASONS } from '@/lib/rentalCancellation';
 
@@ -89,16 +90,21 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
+    ...wizardContentGutterStyle,
     paddingVertical: 8,
     gap: 8,
   },
   headerBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { flex: 1, fontSize: 17, fontWeight: '700', color: ui.textPrimary, textAlign: 'center' },
-  body: { flex: 1, paddingHorizontal: 16, paddingTop: 12, gap: 16 },
+  body: {
+    flex: 1,
+    ...wizardContentGutterStyle,
+    paddingTop: wizardLayout.scrollPaddingTop,
+    gap: wizardLayout.bodyGap,
+  },
   iconWrap: { alignItems: 'center', paddingVertical: 8 },
   headline: { fontSize: 22, fontWeight: '800', color: ui.textPrimary, textAlign: 'center' },
-  sub: { fontSize: 15, lineHeight: 22, color: ui.textSecondary, textAlign: 'center', paddingHorizontal: 8 },
+  sub: { fontSize: 15, lineHeight: 22, color: ui.textSecondary, textAlign: 'center' },
   reason: { fontSize: 14, fontWeight: '600', color: ui.textPrimary, textAlign: 'center' },
   actions: { gap: 10, marginTop: 8 },
   primaryBtn: {

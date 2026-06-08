@@ -3,6 +3,7 @@ import { Modal, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Pressable } from '@/components/Pressable';
+import { RentalEvidenceVideoPlaybackModal } from '@/components/rentalEvidence/RentalEvidenceVideoPlaybackModal';
 import { PickupEvidenceReviewSections } from '@/components/rentalWizard/PickupEvidenceReviewSections';
 import { RentalEvidenceGalleryModal, type GalleryModalPhoto } from '@/components/RentalEvidenceGalleryModal';
 import { ui } from '@/constants/appUi';
@@ -33,7 +34,7 @@ function slideLabel(category: PickupPhotoCategory | null | undefined, index: num
         : category === 'timestamp_proof'
           ? 'Live check'
           : category === 'additional'
-            ? 'Additional'
+            ? 'Video (Optional)'
             : 'Photo';
   return `${name} · ${index + 1} of ${total}`;
 }
@@ -51,6 +52,8 @@ export function PickupEvidenceReviewModal({
 }: PickupEvidenceReviewModalProps) {
   const insets = useSafeAreaInsets();
   const [galleryOpen, setGalleryOpen] = useState(false);
+  const [videoOpen, setVideoOpen] = useState(false);
+  const [videoUri, setVideoUri] = useState<string | null>(null);
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [imageRetryKey, setImageRetryKey] = useState(0);
   const [galleryLoading, setGalleryLoading] = useState(false);
@@ -74,6 +77,12 @@ export function PickupEvidenceReviewModal({
 
   const openPhoto = useCallback(
     (id: string) => {
+      const photo = photos.find((p) => p.id === id);
+      if (photo?.mediaKind === 'video' && photo.signedUrl) {
+        setVideoUri(photo.signedUrl);
+        setVideoOpen(true);
+        return;
+      }
       const idx = galleryPhotos.findIndex((p) => p.id === id);
       if (idx < 0) return;
       setGalleryIndex(idx);
@@ -81,7 +90,7 @@ export function PickupEvidenceReviewModal({
       setGalleryLoading(true);
       setGalleryOpen(true);
     },
-    [galleryPhotos]
+    [galleryPhotos, photos]
   );
 
   const closeGallery = useCallback(() => {
@@ -141,6 +150,16 @@ export function PickupEvidenceReviewModal({
           ) : null}
         </View>
       </View>
+
+      <RentalEvidenceVideoPlaybackModal
+        visible={videoOpen}
+        uri={videoUri}
+        title="Video (Optional)"
+        onClose={() => {
+          setVideoOpen(false);
+          setVideoUri(null);
+        }}
+      />
 
       <RentalEvidenceGalleryModal
         visible={galleryOpen}

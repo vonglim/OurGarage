@@ -26,6 +26,8 @@ export type WizardLightShellProps = {
   footerInlineActions?: WizardFooterInlineAction[];
   footerCompact?: boolean;
   footerNote?: string;
+  headerExtra?: React.ReactNode;
+  publishCta?: boolean;
   children: React.ReactNode;
   contentContainerStyle?: StyleProp<ViewStyle>;
 };
@@ -46,6 +48,8 @@ export function WizardLightShell({
   footerInlineActions,
   footerCompact = false,
   footerNote,
+  headerExtra,
+  publishCta = false,
   children,
   contentContainerStyle,
 }: WizardLightShellProps) {
@@ -66,6 +70,8 @@ export function WizardLightShell({
         onTertiaryFooterPress={onTertiary}
         footerInlineActions={footerInlineActions}
         footerCompact={footerCompact}
+        publishCta={publishCta}
+        headerExtra={headerExtra}
         contentContainerStyle={contentContainerStyle}
         bodyStyle={wizardSectionStackStyle}
         rightAccessory={

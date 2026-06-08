@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { extensionForContentType, loadLocalImageForUpload } from '@/lib/localImageForUpload';
+import { extensionForContentType, loadLocalMediaForUpload } from '@/lib/localImageForUpload';
+import { OWNER_PICKUP_EVIDENCE_LOCKED_ERROR } from '@/lib/pickupEvidenceLock';
 import type { PickupPhotoCategory } from '@/lib/pickupVerificationPhotoBuckets';
 import {
   BUCKET,
@@ -66,14 +67,21 @@ export async function uploadRentalEvidencePhoto(params: {
   localUri: string;
   /** Set for owner pickup uploads from a specific tile. */
   pickupPhotoCategory?: PickupPhotoCategory | null;
+  /** Set when owner pickup evidence is locked after renter approval. */
+  pickupEvidenceLocked?: boolean;
 }): Promise<RentalEvidenceUploadResult> {
-  const { client, rentalId, phase, userId, role, localUri, pickupPhotoCategory } = params;
+  const { client, rentalId, phase, userId, role, localUri, pickupPhotoCategory, pickupEvidenceLocked } =
+    params;
+
+  if (phase === 'pickup' && role === 'owner' && pickupEvidenceLocked) {
+    return { ok: false, stage: 'db', message: OWNER_PICKUP_EVIDENCE_LOCKED_ERROR };
+  }
   const fileId = randomId();
 
   let body: ArrayBuffer | Blob;
   let contentType: string;
   try {
-    const loaded = await loadLocalImageForUpload(localUri);
+    const loaded = await loadLocalMediaForUpload(localUri);
     body = loaded.body;
     contentType = loaded.contentType;
     if (__DEV__) {

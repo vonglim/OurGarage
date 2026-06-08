@@ -16,6 +16,7 @@ import {
   selectHomeActiveRentalCardModel,
   type HomeActiveRentalCardModel,
 } from '@/lib/homeActiveRentalCardModel';
+import { openGuidedRentalFlow } from '@/lib/rentalNavigation';
 import { formatUsd, getNumericTotalPrice } from '@/lib/money';
 import { listOpenRequestsSortedByDistance } from '@/lib/openRequestsForBrowse';
 import { hydrateListingsFromSupabase } from '@/lib/hydrateListingsFromSupabase';
@@ -379,7 +380,7 @@ export default function Home() {
                   haptic
                   pressOpacityFeedback={false}
                   onPress={() => {
-                    router.push(`/rental-wizard/${homeRentalCard.rentalId}`);
+                    openGuidedRentalFlow(router, homeRentalCard.rentalId, me.trim());
                   }}
                   style={({ pressed }) => [styles.activeRentalCta, pressed && styles.activeRentalCtaPressed]}
                   accessibilityRole="button"

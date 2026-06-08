@@ -38,6 +38,10 @@ import {
   roleForViewerOnRental,
 } from '@/lib/canonicalMeetupCoordination';
 import { recordMeetupCoordinationSurfaceSnapshot } from '@/lib/rentalMeetupCoordinationState';
+import {
+  coordinationSyncSnapshotFromRow,
+  logCoordinationSyncTrace,
+} from '@/lib/rentalWizard/coordinationSyncDevLog';
 
 function rentalCodeFromId(id: string): string {
   const compact = id.replace(/-/g, '').slice(0, 6).toUpperCase();
@@ -73,11 +77,18 @@ export async function buildRentalWizardContext(
   return result.ctx;
 }
 
+export type BuildRentalWizardContextOptions = {
+  /** When `owner`, loads renter wizard progress for handoff sync and uses owner resolver at build time. */
+  expectedViewerRole?: 'renter' | 'owner';
+};
+
 export async function buildRentalWizardContextWithDiagnostics(
   supabase: SupabaseClient,
   rentalId: string,
-  viewerUserId: string
+  viewerUserId: string,
+  options?: BuildRentalWizardContextOptions
 ): Promise<BuildRentalWizardContextResult> {
+  const expectedViewerRole = options?.expectedViewerRole ?? 'renter';
   const schemaLog = (phase: string, extra?: Partial<Parameters<typeof logRentalActivationSchema>[0]>) => {
     logRentalActivationSchema({
       rentalId,
@@ -116,8 +127,11 @@ export async function buildRentalWizardContextWithDiagnostics(
     }
 
     const rental = normalizeRentalRowForWizard(rentalData as RentalWizardRentalRow);
-    if (rental.renter_user_id !== viewerUserId) {
+    if (expectedViewerRole === 'renter' && rental.renter_user_id !== viewerUserId) {
       return { ctx: null, buildError: 'This rental is not available for the guided flow.' };
+    }
+    if (expectedViewerRole === 'owner' && rental.owner_user_id !== viewerUserId) {
+      return { ctx: null, buildError: 'This rental is not available for the owner guided flow.' };
     }
 
     schemaLog('flags');
@@ -157,6 +171,23 @@ export async function buildRentalWizardContextWithDiagnostics(
     schemaLog('wizard_state');
     const wizardState = await fetchRentalWizardState(supabase, rentalId, viewerUserId);
     let wizardProgress = wizardState.wizardProgress;
+    if (expectedViewerRole === 'owner') {
+      const renterState = await fetchRentalWizardState(
+        supabase,
+        rentalId,
+        rental.renter_user_id
+      );
+      const rwp = renterState.wizardProgress;
+      wizardProgress = {
+        ...wizardProgress,
+        renter_pickup_im_here_at: rwp.renter_pickup_im_here_at,
+        renter_approved_pickup_photos_at: rwp.renter_approved_pickup_photos_at,
+        renter_confirmed_pickup_receipt_at: rwp.renter_confirmed_pickup_receipt_at,
+        renter_pickup_evidence_review_opened_at: rwp.renter_pickup_evidence_review_opened_at,
+        rental_agreement_acknowledged_at:
+          rwp.rental_agreement_acknowledged_at ?? wizardProgress.rental_agreement_acknowledged_at,
+      };
+    }
     const evidenceRevision = computeOwnerPickupEvidenceRevision(
       ownerPickupEvidence.map((p) => ({
         id: p.id,
@@ -225,7 +256,7 @@ export async function buildRentalWizardContextWithDiagnostics(
     ]);
 
     try {
-      await prefetchProfileNamesForUserIds([rental.owner_user_id]);
+      await prefetchProfileNamesForUserIds([rental.owner_user_id, rental.renter_user_id]);
     } catch {
       /* non-fatal */
     }
@@ -250,6 +281,18 @@ export async function buildRentalWizardContextWithDiagnostics(
       revision: 0,
     });
 
+    logCoordinationSyncTrace('build_context', {
+      rentalId,
+      viewerRole,
+      expectedViewerRole: options?.expectedViewerRole ?? 'renter',
+      ...coordinationSyncSnapshotFromRow(rental as Record<string, unknown>, meetupCoordination),
+    });
+
+    const counterpartyDisplayName =
+      viewerRole === 'owner'
+        ? getProfileNameForUserId(rental.renter_user_id)
+        : getProfileNameForUserId(rental.owner_user_id);
+
     const ctxDraft: RentalWizardContext = {
       rentalId,
       viewerUserId,
@@ -257,6 +300,7 @@ export async function buildRentalWizardContextWithDiagnostics(
       rental,
       displayTitle: snapshotTitle || displayTitle,
       ownerDisplayName: getProfileNameForUserId(rental.owner_user_id),
+      counterpartyDisplayName,
       heroImageUrl,
       listingSnapshot: enrichment.listingSnapshot,
       agreedDeliveryMethod: enrichment.agreedDeliveryMethod,

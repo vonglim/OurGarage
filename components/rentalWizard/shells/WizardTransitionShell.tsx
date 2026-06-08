@@ -6,7 +6,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Pressable } from '@/components/Pressable';
 import { WizardCancellationBannerSlot } from '@/components/rentalCancellation/WizardCancellationBannerSlot';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
-import { wizardLayout, wizardScrollBottomPadding } from '@/constants/wizardLayout';
+import {
+  wizardContentGutterStyle,
+  wizardLayout,
+  wizardScreenBleedStyle,
+  wizardScrollBottomPadding,
+} from '@/constants/wizardLayout';
 import { ui } from '@/constants/appUi';
 
 export type WizardTransitionShellProps = {
@@ -22,6 +27,7 @@ export type WizardTransitionShellProps = {
   onOpenMessages?: () => void;
   primaryLabel: string;
   onPrimary: () => void;
+  primaryDisabled?: boolean;
   children?: React.ReactNode;
 };
 
@@ -36,6 +42,7 @@ export function WizardTransitionShell({
   onOpenMessages,
   primaryLabel,
   onPrimary,
+  primaryDisabled = false,
   children,
 }: WizardTransitionShellProps) {
   const insets = useSafeAreaInsets();
@@ -43,10 +50,14 @@ export function WizardTransitionShell({
   const iconColor = iconTint === 'green' ? '#4ADE80' : '#A5B4FC';
 
   return (
-    <ScreenWrapper style={styles.screenWrap} innerStyle={styles.screenInner} edges={['top', 'left', 'right']}>
+    <ScreenWrapper
+      style={[styles.screenWrap, wizardScreenBleedStyle]}
+      innerStyle={styles.screenInner}
+      edges={['top', 'left', 'right']}
+    >
       <View style={styles.flex}>
         <View style={styles.headerBlock}>
-          <View style={styles.minimalHeader}>
+          <View style={[styles.minimalHeader, wizardContentGutterStyle]}>
             <Pressable
               pressOpacityFeedback={false}
               haptic
@@ -99,12 +110,23 @@ export function WizardTransitionShell({
           </View>
         </ScrollView>
 
-        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, wizardLayout.footerBottomMin) }]}>
+        <View
+          style={[
+            styles.footer,
+            wizardContentGutterStyle,
+            { paddingBottom: Math.max(insets.bottom, wizardLayout.footerBottomMin) },
+          ]}
+        >
           <Pressable
             pressOpacityFeedback={false}
             haptic
+            disabled={primaryDisabled}
             onPress={onPrimary}
-            style={({ pressed }) => [styles.primaryBtn, pressed && { opacity: 0.94 }]}
+            style={({ pressed }) => [
+              styles.primaryBtn,
+              primaryDisabled && styles.primaryBtnDisabled,
+              pressed && !primaryDisabled && { opacity: 0.94 },
+            ]}
           >
             <Text style={styles.primaryBtnText}>{primaryLabel}</Text>
           </Pressable>
@@ -156,7 +178,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingVertical: 28,
-    paddingHorizontal: 8,
+    ...wizardContentGutterStyle,
     gap: wizardLayout.bodyGap,
   },
   iconGlow: {
@@ -181,11 +203,9 @@ const styles = StyleSheet.create({
     color: 'rgba(226, 232, 240, 0.78)',
     textAlign: 'center',
     lineHeight: 23,
-    paddingHorizontal: 12,
     maxWidth: 300,
   },
   footer: {
-    paddingHorizontal: 0,
     paddingTop: wizardLayout.footerPaddingTop,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: 'rgba(255,255,255,0.08)',
@@ -197,5 +217,6 @@ const styles = StyleSheet.create({
     paddingVertical: wizardLayout.ctaPaddingVertical,
     alignItems: 'center',
   },
+  primaryBtnDisabled: { opacity: 0.45 },
   primaryBtnText: { fontSize: 16, fontWeight: '700', color: ui.primary },
 });

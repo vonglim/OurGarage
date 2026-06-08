@@ -1,12 +1,50 @@
 import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
 import { getEffectiveNowMs } from '@/lib/rentalSimulation/simulationClock';
-import { isMeetupCoordinationComplete, isPickupCoordinationComplete } from '@/lib/rentalWizard/rentalWizardGates';
+import {
+  hasReturnCoordinationAgreed,
+  isPickupCoordinationComplete,
+} from '@/lib/rentalWizard/rentalWizardGates';
 import type { RentalWizardContext, RentalWizardStep, RentalWizardTransitionKey } from '@/lib/rentalWizard/types';
 
 const MS_24H = 24 * 60 * 60 * 1000;
 
 function hasSeen(ctx: RentalWizardContext, key: RentalWizardTransitionKey): boolean {
   return ctx.seenTransitions.has(key);
+}
+
+/** Pickup + return agreed and return-confirmed milestone seen — ready for all-set transition. */
+export function coordinationReadyForAllSet(ctx: RentalWizardContext): boolean {
+  return (
+    isPickupCoordinationComplete(ctx) &&
+    hasReturnCoordinationAgreed(ctx) &&
+    hasSeen(ctx, 'return_confirmed_seen')
+  );
+}
+
+/**
+ * Inserts `transition_all_set` before any pre-handoff destination once return coordination
+ * is finalized. Covers prep, meetup, and authorization entry steps on re-entry.
+ */
+export function resolveAllSetTransitionBefore(
+  logicalStep: RentalWizardStep,
+  ctx: RentalWizardContext
+): RentalWizardStep | null {
+  if (!coordinationReadyForAllSet(ctx) || hasSeen(ctx, 'all_set_seen')) {
+    return null;
+  }
+  if (ctx.pickupHandoffComplete) {
+    return null;
+  }
+  if (isPickupCoordinationComplete(ctx) && !hasSeen(ctx, 'pickup_confirmed_seen')) {
+    return null;
+  }
+  if (
+    (logicalStep === 'coordinate_pickup' || logicalStep === 'coordinate_return') &&
+    !hasReturnCoordinationAgreed(ctx)
+  ) {
+    return null;
+  }
+  return 'transition_all_set';
 }
 
 function isWithin24hBeforeReturn(ctx: RentalWizardContext, nowMs = getEffectiveNowMs()): boolean {
@@ -47,8 +85,6 @@ export function resolveWizardTransitionBefore(
     case 'prepare_pickup':
       if (isPickupCoordinationComplete(ctx) && !hasSeen(ctx, 'pickup_confirmed_seen')) {
         transition = 'transition_pickup_confirmed';
-      } else if (isMeetupCoordinationComplete(ctx) && !hasSeen(ctx, 'all_set_seen')) {
-        transition = 'transition_all_set';
       }
       break;
     case 'meetup_day':
@@ -78,6 +114,10 @@ export function resolveWizardTransitionBefore(
       break;
     default:
       break;
+  }
+
+  if (!transition) {
+    transition = resolveAllSetTransitionBefore(logicalStep, ctx);
   }
 
   if (transition) {
@@ -111,6 +151,16 @@ export function transitionKeyForStep(step: RentalWizardStep): RentalWizardTransi
       return 'return_reminder_seen';
     case 'transition_return_complete':
       return 'return_complete_seen';
+    case 'transition_agreement_signed':
+      return 'agreement_signed_seen';
+    case 'transition_agreement_reviewed':
+      return 'agreement_reviewed_seen';
+    case 'transition_disclosures_complete':
+      return 'disclosures_complete_seen';
+    case 'transition_hold_authorized':
+      return 'hold_authorized_seen';
+    case 'transition_rental_activated':
+      return 'rental_activated_auth_seen';
     default:
       return null;
   }

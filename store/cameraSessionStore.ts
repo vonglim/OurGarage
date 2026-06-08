@@ -6,11 +6,14 @@ import type { VerificationPhase } from '@/lib/rentalVerification';
 /**
  * Holds URIs from the multi-capture camera screen so the previous route can read them after `router.back()`.
  */
+export type EvidenceCaptureMode = 'photo' | 'video';
+
 export type RentalEvidenceCameraSession = {
   rentalId: string;
   phase: VerificationPhase;
   /** Owner pickup tile; all captures in this session share this category. */
   pickupPhotoCategory?: PickupPhotoCategory | null;
+  captureMode?: EvidenceCaptureMode;
 };
 
 type CameraSessionState = {

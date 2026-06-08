@@ -1,10 +1,17 @@
 import React from 'react';
 
 import { WizardCancellationBanner } from '@/components/rentalCancellation/WizardCancellationBanner';
-import { useRentalWizard } from '@/components/rentalWizard/RentalWizardProvider';
+import { useGuidedRentalWizardBindings } from '@/components/rentalWizard/GuidedRentalWizardBindingsContext';
 
-/** Inline banner for guided rental wizard steps (coordinate, pickup, return, etc.). */
+/** Inline banner for guided rental wizard steps (renter or owner). */
 export function WizardCancellationBannerSlot() {
-  const { ctx, refresh, openMessages } = useRentalWizard();
-  return <WizardCancellationBanner ctx={ctx} onRefresh={refresh} onOpenMessages={openMessages} />;
+  const bindings = useGuidedRentalWizardBindings();
+  if (!bindings) return null;
+  return (
+    <WizardCancellationBanner
+      ctx={bindings.ctx}
+      onRefresh={bindings.refresh}
+      onOpenMessages={bindings.openMessages}
+    />
+  );
 }

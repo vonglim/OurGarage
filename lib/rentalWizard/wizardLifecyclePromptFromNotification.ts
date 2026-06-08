@@ -1,6 +1,10 @@
 import { getAuthUserIdSync } from '@/lib/authUser';
 import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
-import { inferNotificationRecipientIsRenter } from '@/lib/rentalNavigation';
+import {
+  coordinationBannerFromNotification,
+  type CoordinationLiveBannerKind,
+} from '@/lib/rentalWizard/coordinationLiveBanner';
+import { logCoordinationBanner } from '@/lib/rentalWizard/coordinationInstrumentation';
 import {
   buildReturnPromptWaitingSnapshot,
   clearReturnProposalWaitingLatch,
@@ -74,7 +78,7 @@ export function isReturnMeetupAcceptedNotification(n: AppNotification): boolean 
   return false;
 }
 
-/** Owner accepted renter pickup meetup — `rental_confirmed` maps to app type `accepted`. */
+/** Pickup meetup acceptance — maps from `pickup_confirmed` / legacy `rental_confirmed`. */
 export function isPickupMeetupAcceptedNotification(n: AppNotification): boolean {
   if (isReturnMeetupAcceptedNotification(n)) return false;
   if (n.type !== 'accepted') return false;
@@ -89,6 +93,24 @@ export function isPickupMeetupAcceptedNotification(n: AppNotification): boolean 
   return false;
 }
 
+export function isPickupProposalReceivedNotification(n: AppNotification): boolean {
+  const m = (n.message ?? '').toLowerCase();
+  return m.includes('pickup proposal received') || m.startsWith('pickup proposal received');
+}
+
+export function isReturnProposalReceivedNotification(n: AppNotification): boolean {
+  const m = (n.message ?? '').toLowerCase();
+  return m.includes('return proposal received') || m.startsWith('return proposal received');
+}
+
+function coordinationKindFromNotification(n: AppNotification): CoordinationLiveBannerKind | null {
+  if (isPickupProposalReceivedNotification(n)) return 'pickup_proposal_received';
+  if (isReturnProposalReceivedNotification(n)) return 'return_proposal_received';
+  if (isPickupMeetupAcceptedNotification(n)) return 'pickup_confirmed';
+  if (isReturnMeetupAcceptedNotification(n)) return 'return_confirmed';
+  return null;
+}
+
 export type WizardMeetupPromptSession = {
   rentalId: string;
   isOnCoordinatePickup: () => boolean;
@@ -97,6 +119,8 @@ export type WizardMeetupPromptSession = {
   isGateActive: () => boolean;
   armPickupAcceptedPrompt: () => void;
   armReturnAcceptedPrompt: () => void;
+  showCoordinationBanner: (banner: ReturnType<typeof coordinationBannerFromNotification>) => void;
+  refreshWizard?: () => void;
 };
 
 /** @deprecated Use WizardMeetupPromptSession */
@@ -132,14 +156,41 @@ function isNotificationRecipient(n: AppNotification): boolean {
   return false;
 }
 
-function isRenterRecipientOfPickupAccept(n: AppNotification): boolean {
-  const me = getAuthUserIdSync().trim();
-  if (!me) return false;
-  if (n.forUserId != null && n.forUserId !== '') {
-    return n.forUserId === me;
-  }
-  const inferred = inferNotificationRecipientIsRenter(n);
-  return inferred === true;
+export function tryArmCoordinationProposalBannerFromNotification(n: AppNotification): boolean {
+  const kind = coordinationKindFromNotification(n);
+  if (!kind || kind === 'pickup_confirmed' || kind === 'return_confirmed') return false;
+  if (typeof n.rentalId !== 'string' || n.rentalId.trim() === '') return false;
+  if (!isNotificationRecipient(n)) return false;
+
+  const rentalId = n.rentalId.trim();
+  const session = sessions.get(rentalId);
+  if (!session) return false;
+  if (session.isGateActive()) return false;
+
+  const onPickup = session.isOnCoordinatePickup();
+  const onReturn = session.isOnCoordinateReturn();
+  if (kind === 'pickup_proposal_received' && !onPickup) return false;
+  if (kind === 'return_proposal_received' && !onReturn) return false;
+
+  const ctx = session.getCtx();
+  const banner = coordinationBannerFromNotification({
+    kind,
+    rentalId,
+    recipientUserId: getAuthUserIdSync().trim(),
+    proposalCreator: String(ctx?.rental.last_proposed_by ?? '').trim() || null,
+    proposalVersion:
+      typeof ctx?.rental.proposal_version === 'number' ? ctx.rental.proposal_version : null,
+  });
+  session.showCoordinationBanner(banner);
+  void session.refreshWizard?.();
+  logCoordinationBanner({
+    event: 'armed_from_notification',
+    rentalId,
+    kind,
+    notificationId: n.id,
+    recipient: getAuthUserIdSync().trim(),
+  });
+  return true;
 }
 
 function viewerWasWaitingOnProposal(ctx: RentalWizardContext | null): boolean {
@@ -201,13 +252,13 @@ export function tryArmPickupAcceptedFromNotification(n: AppNotification): boolea
     return false;
   }
 
-  if (!isRenterRecipientOfPickupAccept(n)) {
+  if (!isNotificationRecipient(n)) {
     if (__DEV__) {
       logScenario('transition', {
         event: 'notification_prompt_arm_skipped',
         rentalId,
         source: 'wizard_notification_prompt',
-        reason: 'not_renter_recipient',
+        reason: 'not_notification_recipient',
         notificationId: n.id,
       });
     }

@@ -10,6 +10,7 @@ import {
   isPickupCoordinationComplete,
   isWizardReturnPhase,
 } from '@/lib/rentalWizard/rentalWizardGates';
+import { hasCanonicalAgreedReturnDatetime } from '@/lib/rentalWizard/pickupCoordinationDiagnostics';
 import {
   resolveLogicalWizardStep,
   resolveRentalWizardDestination,
@@ -88,11 +89,14 @@ function buildReasoningLines(ctx: RentalWizardContext, logical: string, transiti
 
   if (!isMeetupCoordinationComplete(ctx)) {
     lines.push('pickup OK but !isMeetupCoordinationComplete → coordinate_return.');
+    if (!hasCanonicalAgreedReturnDatetime(ctx.rental)) {
+      lines.push('  missing agreed_return_datetime.');
+    }
     if (!ctx.wizardProgress.pickup_return_coordination_ack_at?.trim()) {
-      lines.push('  missing pickup_return_coordination_ack_at.');
+      lines.push('  missing pickup_return_coordination_ack_at (required until bilateral row confirm).');
     }
     if (!ctx.seenTransitions.has('pickup_confirmed_seen')) {
-      lines.push('  missing seen transition pickup_confirmed_seen.');
+      lines.push('  missing seen transition pickup_confirmed_seen (required until bilateral row confirm).');
     }
     return lines;
   }

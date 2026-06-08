@@ -50,6 +50,7 @@ import {
   getRequestSupabaseRowId,
   isUuidString,
 } from '@/lib/requestOwnership';
+import { pushRentalEntry, replaceRentalEntry, viewerRoleOnRental } from '@/lib/rentalNavigation';
 import { scheduleActivityRentalsIntent } from '@/lib/activityPendingIntent';
 import { getSupabase } from '@/lib/supabase';
 import { syncRequestAndOffersFromSupabase } from '@/lib/supabaseOfferSync';
@@ -174,7 +175,9 @@ function scheduleNavigateToRentalWorkspace(
   navOnceRef.current = true;
   setTimeout(() => {
     if ('rentalId' in result && result.rentalId) {
-      router.replace(`/rental-wizard/${result.rentalId}`);
+      void viewerRoleOnRental(result.rentalId).then((role) => {
+        replaceRentalEntry(router, result.rentalId, role);
+      });
       return;
     }
     if ('rentalAgreementFallback' in result && result.rentalAgreementFallback) {
@@ -1113,11 +1116,7 @@ export default function OfferDetailScreen() {
     if (!offer) return;
     const offerId = offer.id;
     const go = (id: string) => {
-      if (isViewerPoster) {
-        router.push(`/rental-wizard/${id}`);
-      } else {
-        router.push({ pathname: '/rental/[id]', params: { id } });
-      }
+      pushRentalEntry(router, id, isViewerPoster ? 'renter' : 'owner');
     };
     if (linkedRentalId) {
       go(linkedRentalId);

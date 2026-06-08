@@ -50,6 +50,17 @@ export {
   getRentalRealtimeSubscription,
   listActiveRentalRealtimeSubscriptions,
 } from '@/lib/rentalLifecycle/realtimeSubscriptionRegistry';
+export {
+  resolveMeetupLifecyclePhase,
+  resolveMeetupLifecyclePresentation,
+  resolveMeetupLifecyclePresentationFromWorkspace,
+  resolveOwnerMeetupSubstate,
+  type MeetupLifecyclePhase,
+  type MeetupLifecyclePresentation,
+  type OwnerMeetupSubstate,
+} from '@/lib/rentalLifecycle/meetupLifecycle';
+export { MEETUP_LIFECYCLE_THEME } from '@/lib/rentalLifecycle/meetupLifecycleTheme';
+export { normalizeMeetupWizardStep } from '@/lib/rentalLifecycle/normalizeMeetupWizardStep';
 export { useRentalWizardRealtimeSync } from '@/lib/rentalLifecycle/useRentalWizardRealtimeSync';
 export { usePickupHandoffPresenceRealtime } from '@/lib/rentalLifecycle/usePickupHandoffPresenceRealtime';
 export {

@@ -1,105 +1,121 @@
-import { useRouter } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ActivationCheckpointList } from '@/components/rentalWizard/authorization/ActivationCheckpointList';
+import { AuthGradientButton } from '@/components/rentalWizard/authorization/AuthGradientButton';
+import { AuthorizationProgressHeader } from '@/components/rentalWizard/authorization/AuthorizationProgressHeader';
+import { authPremium, authType } from '@/components/rentalWizard/authorization/authPremiumTheme';
+import { WizardRentalSummaryCard } from '@/components/rentalWizard/WizardRentalSummaryCard';
 import { useRentalWizard } from '@/components/rentalWizard/RentalWizardProvider';
-import { WizardItemCard } from '@/components/rentalWizard/WizardItemCard';
-import { WizardLightShell } from '@/components/rentalWizard/shells/WizardLightShell';
+import { ScreenWrapper } from '@/components/ScreenWrapper';
+import {
+  wizardContentGutterStyle,
+  wizardLayout,
+  wizardScreenBleedStyle,
+} from '@/constants/wizardLayout';
 import { ui } from '@/constants/appUi';
-import { resolveRentalActivationState } from '@/lib/rentalActivation';
-import { buildPickupHandoffCompletionInputFromWizard } from '@/lib/pickupHandoffCompletion';
+import { buildEquipmentDisplay } from '@/lib/rentalAuthorization/authorizationJourney';
+import { resolveAuthorizationProgress } from '@/lib/rentalAuthorization/authorizationProgress';
+import { resolveAuthorizationWizardStep } from '@/lib/rentalAuthorization/resolveAuthorizationWizardStep';
 import { formatBorrowingFromOwner } from '@/lib/rentalWizard/formatBorrowingFromOwner';
+import { buildRentalConfirmedSummaryDisplay } from '@/lib/rentalWizard/formatRentalConfirmedSummary';
+import { formatWizardLocation } from '@/lib/rentalWizard/formatWizardSchedule';
 import { WIZARD_STEP_META } from '@/lib/rentalWizard/wizardStepMeta';
 
-function authorizationStatusTone(phase: string): { bg: string; text: string } {
-  if (phase === 'authorized') return { bg: '#E8F5E9', text: '#1B5E20' };
-  if (phase === 'failed_authorization') return { bg: '#FFEBEE', text: '#B71C1C' };
-  if (phase.startsWith('pending')) return { bg: '#FFF8E1', text: '#E65100' };
-  return { bg: ui.surfaceStriped, text: ui.textSecondary };
-}
-
 export function RentalAuthorizationStep() {
-  const router = useRouter();
-  const { ctx, openAdvancedDetails } = useRentalWizard();
-  const meta = WIZARD_STEP_META.rental_authorization;
+  const w = useRentalWizard();
+  const { ctx } = w;
+  const insets = useSafeAreaInsets();
+  const progress = useMemo(() => resolveAuthorizationProgress(ctx), [ctx]);
+  const nextStep = useMemo(() => resolveAuthorizationWizardStep(ctx), [ctx]);
+  const equipment = useMemo(() => buildEquipmentDisplay(ctx), [ctx]);
+  const summary = buildRentalConfirmedSummaryDisplay(ctx);
+  const heroBg = authPremium.gradient.hero[0];
 
-  const activation = useMemo(
-    () => resolveRentalActivationState(buildPickupHandoffCompletionInputFromWizard(ctx)),
-    [ctx]
-  );
-  const auth = activation.authorization;
-  const tone = authorizationStatusTone(auth.phase);
-
-  const primaryLabel =
-    auth.phase === 'pending_agreement_review'
-      ? 'Review agreement'
-      : auth.phase === 'pending_preauthorization'
-        ? 'Continue to authorization'
-        : auth.phase === 'pending_signature'
-          ? 'Sign & authorize'
-          : auth.phase === 'failed_authorization'
-            ? 'Try again'
-            : 'Open rental workspace';
+  const primaryLabel = progress.rentalActivated
+    ? 'Rental active'
+    : WIZARD_STEP_META[nextStep].continueLabel;
 
   return (
-    <WizardLightShell
-      title={meta.title}
-      onBack={() => router.back()}
-      onOpenMessages={() => openAdvancedDetails()}
-      primaryLabel={primaryLabel}
-      onPrimary={() => openAdvancedDetails('pickup')}
-      footerNote="Your rental activates only after you review the agreement, authorize the security hold, and sign."
+    <ScreenWrapper
+      style={[styles.screen, wizardScreenBleedStyle, { backgroundColor: heroBg }]}
+      innerStyle={styles.flex}
+      edges={['top', 'left', 'right']}
     >
-      <WizardItemCard
-        title={ctx.displayTitle}
-        ownerLine={formatBorrowingFromOwner(ctx.ownerDisplayName)}
-        thumbUri={ctx.heroImageUrl}
-        rentalCode={ctx.rentalCodeLabel}
-      />
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Rental authorization</Text>
-        <Text style={styles.cardBody}>
-          Physical pickup is complete. Finish the official steps below to activate your rental.
-        </Text>
-        <View style={[styles.pill, { backgroundColor: tone.bg }]}>
-          <Text style={[styles.pillText, { color: tone.text }]}>{auth.phaseLabel}</Text>
+      <LinearGradient
+        colors={[...authPremium.gradient.hero]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.hero}
+      >
+        <View style={[styles.heroInner, { paddingTop: Math.max(insets.top, 8) }]}>
+          <AuthorizationProgressHeader ctx={ctx} activeStep="rental_authorization" variant="onDark" />
+          <Text style={authType.heroHeadline}>Rental authorization</Text>
+          <Text style={authType.heroSupport}>
+            Guided steps to protect you and the owner before your rental begins.
+          </Text>
         </View>
-        <View style={styles.checklist}>
-          <AuthRow done={activation.physical.physicalPossessionConfirmed} label="Pickup inspection complete" />
-          <AuthRow done={auth.agreementAcknowledged} label="Agreement reviewed" />
-          <AuthRow done={auth.preauthorizationSucceeded} label="Payment hold authorized" />
-          <AuthRow done={auth.signaturesComplete} label="Signature & liability accepted" />
-        </View>
-      </View>
-    </WizardLightShell>
-  );
-}
+      </LinearGradient>
 
-function AuthRow({ done, label }: { done: boolean; label: string }) {
-  return (
-    <View style={styles.row}>
-      <Text style={styles.rowMark}>{done ? '✓' : '○'}</Text>
-      <Text style={[styles.rowLabel, done && styles.rowLabelDone]}>{label}</Text>
-    </View>
+      <View style={[styles.body, wizardContentGutterStyle]}>
+        <WizardRentalSummaryCard
+          title={ctx.displayTitle}
+          ownerLine={formatBorrowingFromOwner(ctx.ownerDisplayName)}
+          rentalCode={ctx.rentalCodeLabel}
+          thumbUri={ctx.heroImageUrl}
+          dateRange={equipment.dateRange}
+          durationDays={summary.durationDays}
+          handoffTitle={formatWizardLocation(ctx.rental.meetup_location)}
+          handoffSubtitle="Pickup"
+          handoffIcon="location-outline"
+        />
+        <ActivationCheckpointList progress={progress} />
+      </View>
+
+      <View
+        style={[
+          styles.footer,
+          wizardContentGutterStyle,
+          { paddingBottom: Math.max(insets.bottom, wizardLayout.footerBottomMin) },
+        ]}
+      >
+        <AuthGradientButton
+          label={primaryLabel}
+          onPress={w.openAuthorizationFlow}
+          disabled={progress.rentalActivated}
+          showArrow
+        />
+      </View>
+    </ScreenWrapper>
   );
 }
 
 const styles = StyleSheet.create({
-  card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 16,
-    gap: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: ui.border,
+  screen: { flex: 1 },
+  flex: { flex: 1, backgroundColor: ui.background },
+  hero: {
+    borderBottomLeftRadius: authPremium.radius.hero,
+    borderBottomRightRadius: authPremium.radius.hero,
+    overflow: 'hidden',
   },
-  cardTitle: { fontSize: 17, fontWeight: '700', color: ui.textPrimary },
-  cardBody: { fontSize: 14, color: ui.textSecondary, lineHeight: 20 },
-  pill: { alignSelf: 'flex-start', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999 },
-  pillText: { fontSize: 13, fontWeight: '600' },
-  checklist: { marginTop: 8, gap: 8 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  rowMark: { width: 18, fontSize: 15, fontWeight: '700', color: ui.textSecondary },
-  rowLabel: { flex: 1, fontSize: 14, color: ui.textPrimary },
-  rowLabelDone: { color: ui.textSecondary },
+  heroInner: {
+    ...wizardContentGutterStyle,
+    paddingBottom: 24,
+    gap: 12,
+    alignItems: 'center',
+  },
+  body: {
+    flex: 1,
+    paddingTop: wizardLayout.scrollPaddingTop,
+    gap: wizardLayout.bodyGap,
+  },
+  footer: {
+    paddingTop: wizardLayout.footerPaddingTop,
+    gap: wizardLayout.footerGap,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: ui.border,
+    backgroundColor: ui.background,
+  },
 });

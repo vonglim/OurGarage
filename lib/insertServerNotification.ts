@@ -17,7 +17,11 @@ export type ServerNotificationType =
   | 'rental_cancellation'
   | 'rental_cancellation_requested'
   | 'rental_cancellation_accepted'
-  | 'rental_cancellation_declined';
+  | 'rental_cancellation_declined'
+  | 'pickup_proposal_received'
+  | 'return_proposal_received'
+  | 'pickup_confirmed'
+  | 'return_confirmed';
 
 function dataPayload(
   requestId: string | null,

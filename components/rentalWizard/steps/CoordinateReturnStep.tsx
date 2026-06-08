@@ -1,9 +1,13 @@
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Alert } from 'react-native';
 
 import { useReturnCoordinationAcceptedPromptSnapshotTrace } from '@/components/rentalWizard/hooks/useReturnCoordinationAcceptedPrompt';
+import { useCoordinationProposalFieldHighlight } from '@/components/rentalWizard/hooks/useCoordinationProposalFieldHighlight';
+import { useCoordinateProposalReviewUi } from '@/components/rentalWizard/hooks/useCoordinateProposalReviewUi';
 import { useRentalWizard } from '@/components/rentalWizard/RentalWizardProvider';
 import { WizardCoordinateStep } from '@/components/rentalWizard/WizardCoordinateStep';
+import { WizardCoordinationLiveBannerSlot } from '@/components/rentalWizard/WizardCoordinationLiveBannerSlot';
 import { WizardItemCard } from '@/components/rentalWizard/WizardItemCard';
 import { WizardLightShell } from '@/components/rentalWizard/shells/WizardLightShell';
 import { WizardLocationProposalSheet } from '@/components/rentalWizard/modals/WizardLocationProposalSheet';
@@ -23,6 +27,12 @@ import {
   buildInheritedReturnDefaults,
   logReturnMeetupDefaults,
 } from '@/lib/rentalWizard/resolveReturnMeetupDefaults';
+import {
+  coordinateLocationCardTitle,
+  coordinateScheduleFieldTitle,
+  counterpartyRoleForViewer,
+} from '@/lib/rentalWizard/coordinateProposalPresentation';
+import { resolvePickupCoordinateReviewState } from '@/lib/rentalWizard/coordinatePickupReviewState';
 import { WIZARD_STEP_META } from '@/lib/rentalWizard/wizardStepMeta';
 import {
   buildDefaultCoordinateReturnDraft,
@@ -32,13 +42,14 @@ import {
   isCoordinateDraftValid,
   mergeCoordinateReturnDraft,
   readCoordinateReturnDraft,
-  returnLocationCardTitle,
-  returnTimeCardTitle,
   wizardHandoffFromNegotiation,
   type CoordinateReturnInheritedDefaults,
   type WizardMeetupProposalDraft,
 } from '@/lib/rentalWizard/wizardMeetupDraft';
 import { updateWizardProgress } from '@/lib/rentalWizard';
+import { acceptRentalMeetupProposal } from '@/lib/rentalMeetupProposalLifecycle';
+import { getSupabase } from '@/lib/supabase';
+import type { WizardFooterInlineAction } from '@/components/wizard/GuidedWizardChrome';
 
 function displayDraftFromDefaults(
   draft: WizardMeetupProposalDraft,
@@ -71,6 +82,27 @@ export function CoordinateReturnStep() {
   );
   const [locationOpen, setLocationOpen] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);
+  const [suggestingChanges, setSuggestingChanges] = useState(false);
+  const [acceptBusy, setAcceptBusy] = useState(false);
+
+  const returnCoordination = ctx.meetupCoordination.return;
+  const review = resolvePickupCoordinateReviewState({
+    lane: returnCoordination,
+    lastProposedBy: ctx.rental.last_proposed_by,
+    suggestingChanges,
+  });
+
+  const {
+    reviewingCounterpartyProposal: reviewingOwnerProposal,
+    waitingOnCounterparty,
+    viewerCanAccept,
+  } = review;
+
+  useEffect(() => {
+    if (!viewerCanAccept) {
+      setSuggestingChanges(false);
+    }
+  }, [viewerCanAccept]);
 
   useReturnCoordinationAcceptedPromptSnapshotTrace(ctx, true);
 
@@ -92,7 +124,15 @@ export function CoordinateReturnStep() {
 
   useEffect(() => {
     const merged = mergeCoordinateReturnDraft(ctx, readCoordinateReturnDraft(ctx.wizardProgress));
-    setDraft(merged);
+    const mergedDraft =
+      reviewingOwnerProposal
+        ? {
+            ...merged,
+            location: review.laneLocation || merged.location,
+            meetupTimeIso: review.laneDateTimeIso ?? merged.meetupTimeIso,
+          }
+        : merged;
+    setDraft(mergedDraft);
 
     const stored = readCoordinateReturnDraft(ctx.wizardProgress);
     if (
@@ -123,6 +163,9 @@ export function CoordinateReturnStep() {
     ctx.viewerUserId,
     ctx.wizardProgress.coordinate_return_draft,
     returnDefaults,
+    review.laneDateTimeIso,
+    review.laneLocation,
+    reviewingOwnerProposal,
   ]);
 
   const persistDraft = useCallback(
@@ -141,13 +184,7 @@ export function CoordinateReturnStep() {
   );
 
   const agreedMethod = wizardHandoffFromNegotiation(ctx.agreedDeliveryMethod);
-  const returnCoordination = ctx.meetupCoordination.return;
-  const waitingOnCounterparty =
-    returnCoordination.isPendingThisPhase && returnCoordination.viewerIsProposer;
-  const ownerProposalPending =
-    returnCoordination.isPendingThisPhase &&
-    returnCoordination.proposedByRole === 'owner' &&
-    !returnCoordination.viewerIsProposer;
+
   const returnChanges = useMemo(
     () => hasReturnChanges(displayDraft, ctx, returnDefaults),
     [displayDraft, ctx, returnDefaults]
@@ -155,14 +192,22 @@ export function CoordinateReturnStep() {
 
   const lockedReturnSchedule = useMemo(() => resolveLockedReturnSchedule(ctx), [ctx]);
 
+  const proposedLocation =
+    review.laneLocation || returnCoordination.location || displayDraft.location;
+  const proposedScheduleIso =
+    review.laneDateTimeIso ??
+    returnCoordination.dateTimeIso ??
+    ctx.returnIso ??
+    displayDraft.meetupTimeIso;
+
   const timeSlots = useMemo(
     () =>
       buildCoordinateTimeSlots({
         lockedSchedule: lockedReturnSchedule,
-        ownerProposalIso: ctx.returnIso ?? returnDefaults.meetupTimeIso,
+        ownerProposalIso: proposedScheduleIso,
         selectedIso: displayDraft.meetupTimeIso,
       }),
-    [ctx.returnIso, displayDraft.meetupTimeIso, lockedReturnSchedule, returnDefaults.meetupTimeIso]
+    [displayDraft.meetupTimeIso, lockedReturnSchedule, proposedScheduleIso]
   );
 
   const saveReturnTime = useCallback(
@@ -175,27 +220,85 @@ export function CoordinateReturnStep() {
     [lockedReturnSchedule.dateYmd, patchDraft]
   );
 
+  const displayLocation = reviewingOwnerProposal ? proposedLocation : displayDraft.location;
+  const scheduleIso = ctx.returnCoordinationAgreed
+    ? ctx.returnIso
+    : reviewingOwnerProposal
+      ? proposedScheduleIso
+      : displayDraft.meetupTimeIso;
+
   const canAct =
     isAcceptedPickupCoordinationReady(pickupAccepted) || isCoordinateDraftValid(displayDraft);
 
-  const primaryLabel = ownerProposalPending
-    ? 'Return proposal pending'
-    : waitingOnCounterparty
-      ? 'Waiting for owner'
-      : returnChanges
-        ? 'Propose changes'
-        : 'Confirm return details';
+  const reviewUi = useCoordinateProposalReviewUi();
 
-  const footerNote = ownerProposalPending
-    ? 'The owner proposed return details. Review and respond in Messages.'
-    : waitingOnCounterparty
-      ? 'Your return proposal was sent. The owner will review it in Messages.'
-      : returnChanges
-        ? 'The owner will be notified of your proposed return changes.'
-        : undefined;
+  const fieldHighlights = useCoordinationProposalFieldHighlight({
+    phase: 'return',
+    reviewingCounterpartyProposal: reviewingOwnerProposal,
+    coordinationFinalized: ctx.returnCoordinationAgreed,
+    lane: returnCoordination,
+    ctx,
+    logSurface: 'renter_coordinate_return_review',
+    proposalVersion:
+      typeof ctx.rental.proposal_version === 'number' ? ctx.rental.proposal_version : null,
+  });
+
+  const fieldsLocked =
+    ctx.returnCoordinationAgreed ||
+    waitingOnCounterparty ||
+    reviewingOwnerProposal ||
+    hasPendingLifecyclePrompt;
+
+  const counterpartyRole = counterpartyRoleForViewer(ctx);
+  const locationTitle = coordinateLocationCardTitle({
+    phase: 'return',
+    coordinationFinalized: ctx.returnCoordinationAgreed,
+    reviewingCounterpartyProposal: reviewingOwnerProposal,
+    counterpartyRole,
+    waitingOnCounterparty,
+  });
+  const scheduleTitle = coordinateScheduleFieldTitle({
+    phase: 'return',
+    coordinationFinalized: ctx.returnCoordinationAgreed,
+    reviewingCounterpartyProposal: reviewingOwnerProposal,
+    counterpartyRole,
+    waitingOnCounterparty,
+    editing: !fieldsLocked && returnChanges,
+  });
+
+  const canPropose = isCoordinateDraftValid(displayDraft);
+
+  const handleAccept = async () => {
+    if (!reviewingOwnerProposal || hasPendingLifecyclePrompt || acceptBusy || w.proposalBusy) return;
+    reviewUi.dismissBanner();
+    setAcceptBusy(true);
+    try {
+      const result = await acceptRentalMeetupProposal(getSupabase(), ctx.rental, ctx.viewerUserId, {
+        itemTitle: ctx.displayTitle,
+      });
+      if (!result.ok) {
+        Alert.alert('Could not accept return details', result.message ?? 'Please try again.');
+        return;
+      }
+      await w.refresh();
+      w.goToWizardStep('transition_return_confirmed');
+    } finally {
+      setAcceptBusy(false);
+    }
+  };
+
+  const handleCounterPropose = async () => {
+    if (!canPropose || hasPendingLifecyclePrompt || w.proposalBusy) return;
+    const payload = displayDraftFromDefaults(draft, returnDefaults, pickupAccepted);
+    const ok = await w.submitCoordinateReturnProposal(payload);
+    if (ok) {
+      setSuggestingChanges(false);
+      await w.refresh();
+    }
+  };
 
   const handlePrimary = async () => {
-    if (!canAct || waitingOnCounterparty || ownerProposalPending || hasPendingLifecyclePrompt) return;
+    if (!canAct || waitingOnCounterparty || reviewingOwnerProposal || hasPendingLifecyclePrompt) return;
     const payload = displayDraftFromDefaults(draft, returnDefaults, pickupAccepted);
     if (returnChanges) {
       const ok = await w.submitCoordinateReturnProposal(payload);
@@ -206,6 +309,75 @@ export function CoordinateReturnStep() {
     if (ok) await w.goToResolvedNext();
   };
 
+  const footer = ((): {
+    primaryLabel: string;
+    primaryDisabled: boolean;
+    onPrimary: () => void;
+    inlineActions?: WizardFooterInlineAction[];
+    footerNote?: string;
+  } => {
+    const openMessagesAction: WizardFooterInlineAction = {
+      label: 'Open messages',
+      onPress: w.openMessages,
+      emphasis: 'tertiary',
+    };
+
+    if (reviewingOwnerProposal) {
+      return {
+        primaryLabel: acceptBusy || w.proposalBusy ? 'Accepting…' : 'Accept proposal',
+        primaryDisabled: hasPendingLifecyclePrompt || acceptBusy || w.proposalBusy,
+        onPrimary: () => void handleAccept(),
+        inlineActions: [
+          {
+            label: 'Suggest changes',
+            onPress: () => {
+              reviewUi.dismissBanner();
+              setSuggestingChanges(true);
+            },
+            emphasis: 'secondary',
+            disabled: acceptBusy || w.proposalBusy,
+          },
+          openMessagesAction,
+        ],
+      };
+    }
+    if (suggestingChanges && viewerCanAccept) {
+      return {
+        primaryLabel: w.proposalBusy ? 'Sending…' : 'Send counter-proposal',
+        primaryDisabled: hasPendingLifecyclePrompt || !canPropose || w.proposalBusy,
+        onPrimary: () => void handleCounterPropose(),
+        inlineActions: [
+          {
+            label: 'Back to review',
+            onPress: () => setSuggestingChanges(false),
+            emphasis: 'secondary',
+            disabled: w.proposalBusy,
+          },
+          openMessagesAction,
+        ],
+      };
+    }
+    if (waitingOnCounterparty) {
+      return {
+        primaryLabel: 'Waiting for owner',
+        primaryDisabled: true,
+        onPrimary: () => {},
+        inlineActions: [openMessagesAction],
+        footerNote: 'Your return proposal was sent. The owner will review it here.',
+      };
+    }
+    return {
+      primaryLabel: returnChanges ? 'Propose changes' : 'Confirm return details',
+      primaryDisabled:
+        !canAct || w.proposalBusy || hasPendingLifecyclePrompt,
+      onPrimary: () => void handlePrimary(),
+      inlineActions: [openMessagesAction],
+      footerNote: returnChanges
+        ? 'The owner will be notified of your proposed return changes.'
+        : undefined,
+    };
+  })();
+
   return (
     <>
       <WizardLightShell
@@ -213,14 +385,15 @@ export function CoordinateReturnStep() {
         subtitle="Return will follow the same arrangement as your confirmed pickup unless you change it below."
         onBack={() => router.back()}
         onOpenMessages={w.openMessages}
-        primaryLabel={primaryLabel}
-        primaryDisabled={
-          waitingOnCounterparty || ownerProposalPending || !canAct || w.proposalBusy || hasPendingLifecyclePrompt
+        primaryLabel={footer.primaryLabel}
+        primaryDisabled={footer.primaryDisabled}
+        onPrimary={footer.onPrimary}
+        footerInlineActions={footer.inlineActions}
+        footerNote={footer.footerNote}
+        footerCompact
+        headerExtra={
+          <WizardCoordinationLiveBannerSlot lane="return" rentalId={ctx.rentalId} />
         }
-        onPrimary={() => void handlePrimary()}
-        secondaryLabel="Open messages"
-        onSecondary={w.openMessages}
-        footerNote={footerNote}
       >
         <WizardItemCard
           title={ctx.displayTitle}
@@ -235,26 +408,27 @@ export function CoordinateReturnStep() {
           method={agreedMethod}
           onMethodChange={() => {}}
           methodReadOnly
-          location={displayDraft.location}
-          locationCardTitle={returnLocationCardTitle(displayDraft, returnChanges)}
-          scheduleFieldTitle={
-            returnChanges ? 'Choose a return time' : returnTimeCardTitle(returnChanges)
-          }
+          location={displayLocation}
+          locationCardTitle={locationTitle}
+          scheduleFieldTitle={scheduleTitle}
           meetupDateHint={
-            returnChanges && !waitingOnCounterparty && !ownerProposalPending
+            (returnChanges || suggestingChanges) && !waitingOnCounterparty && !reviewingOwnerProposal
               ? meetupDateHintForYmd(lockedReturnSchedule.dateYmd)
               : undefined
           }
           onPressLocation={() => setLocationOpen(true)}
-          scheduleIso={displayDraft.meetupTimeIso}
-          lockFields={waitingOnCounterparty || ownerProposalPending || hasPendingLifecyclePrompt}
-          hideTimeChips={!returnChanges}
+          scheduleIso={scheduleIso}
+          lockFields={fieldsLocked}
+          coordinationFinalized={ctx.returnCoordinationAgreed}
+          reviewingCounterpartyProposal={reviewingOwnerProposal}
+          highlightLocation={fieldHighlights.highlightLocation}
+          highlightTime={fieldHighlights.highlightTime}
+          hideTimeChips={!returnChanges && !suggestingChanges && !reviewingOwnerProposal}
           waitingForOwner={waitingOnCounterparty}
-          waitingBannerText="Your return proposal was sent. The owner will review it in Messages."
-          ownerProposalPending={ownerProposalPending}
-          ownerProposalBannerText="The owner proposed return details. Accept or suggest changes in Messages."
+          waitingBannerText="Your return proposal was sent. The owner will review it here."
+          ownerProposalPending={false}
           timeSlots={timeSlots}
-          selectedTimeIso={displayDraft.meetupTimeIso}
+          selectedTimeIso={reviewingOwnerProposal ? scheduleIso : displayDraft.meetupTimeIso}
           onSelectTimeSlot={saveReturnTime}
           onPressTime={() => setTimeOpen(true)}
         />

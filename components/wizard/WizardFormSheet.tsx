@@ -28,6 +28,8 @@ export type WizardFormSheetProps = {
   children: ReactNode;
   footer?: ReactNode;
   sheetStyle?: StyleProp<ViewStyle>;
+  /** Hide the left Cancel action — swipe-down, backdrop tap, and X still dismiss. */
+  hideCancelButton?: boolean;
 };
 
 const DISMISS_DRAG_PX = 72;
@@ -39,6 +41,7 @@ export function WizardFormSheet({
   children,
   footer,
   sheetStyle,
+  hideCancelButton = false,
 }: WizardFormSheetProps) {
   const insets = useSafeAreaInsets();
   const translateY = useSharedValue(0);
@@ -92,15 +95,19 @@ export function WizardFormSheet({
               </View>
             </GestureDetector>
               <View style={styles.header}>
-                <Pressable
-                  pressOpacityFeedback={false}
-                  onPress={dismiss}
-                  style={styles.headerSide}
-                  accessibilityLabel="Cancel"
-                >
-                  <Text style={styles.cancelText}>Cancel</Text>
-                </Pressable>
-                <Text style={styles.title} numberOfLines={1}>
+                {hideCancelButton ? (
+                  <View style={styles.headerSide} />
+                ) : (
+                  <Pressable
+                    pressOpacityFeedback={false}
+                    onPress={dismiss}
+                    style={styles.headerSide}
+                    accessibilityLabel="Cancel"
+                  >
+                    <Text style={styles.cancelText}>Cancel</Text>
+                  </Pressable>
+                )}
+                <Text style={styles.title} numberOfLines={2}>
                   {title}
                 </Text>
                 <Pressable
@@ -113,10 +120,11 @@ export function WizardFormSheet({
                 </Pressable>
               </View>
               <ScrollView
+                style={styles.scroll}
                 keyboardShouldPersistTaps="handled"
                 keyboardDismissMode="interactive"
                 showsVerticalScrollIndicator={false}
-                bounces={false}
+                bounces
                 contentContainerStyle={styles.scrollContent}
               >
                 {children}
@@ -141,13 +149,20 @@ const styles = StyleSheet.create({
   keyboardAvoid: {
     width: '100%',
     maxHeight: '92%',
+    flexShrink: 1,
   },
   sheet: {
     backgroundColor: ui.background,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     maxHeight: '100%',
+    flexShrink: 1,
     overflow: 'hidden',
+  },
+  scroll: {
+    flexGrow: 1,
+    flexShrink: 1,
+    minHeight: 0,
   },
   handleRow: {
     alignItems: 'center',
@@ -181,6 +196,7 @@ const styles = StyleSheet.create({
   },
   title: {
     flex: 1,
+    minWidth: 0,
     fontSize: 17,
     fontWeight: '700',
     color: ui.textPrimary,

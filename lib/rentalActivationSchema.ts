@@ -24,6 +24,11 @@ export const RENTAL_ACTIVATION_OPTIONAL_COLUMNS = [
   'pickup_handoff_completed_at',
   'owner_arrived_at',
   'renter_arrived_at',
+  'equipment_condition_acknowledged_at',
+  'liability_disclosure_acknowledged_at',
+  'late_fee_policy_acknowledged_at',
+  'signed_agreement_version',
+  'signed_liability_disclosure_version',
 ] as const;
 
 export type RentalActivationOptionalColumn = (typeof RENTAL_ACTIVATION_OPTIONAL_COLUMNS)[number];

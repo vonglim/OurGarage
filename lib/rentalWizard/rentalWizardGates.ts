@@ -4,6 +4,7 @@ import {
   hasCanonicalAgreedPickupDatetime,
   hasCanonicalAgreedReturnDatetime,
   hasCanonicalMeetupLocation,
+  isAgreementConfirmedOnRental,
   isPickupCoordinationComplete,
 } from '@/lib/rentalWizard/pickupCoordinationDiagnostics';
 import type { RentalWizardContext } from '@/lib/rentalWizard/types';
@@ -42,13 +43,37 @@ function isReturnCoordinationAcknowledged(ctx: RentalWizardContext): boolean {
 }
 
 /**
- * Full meetup coordination finished: pickup agreed, return agreed, Screen 2 ack, transition seen.
- * Operational/contract return hints alone do not satisfy this gate.
+ * Pickup + return bilaterally confirmed on the rental row (owner/renter workspace accept).
+ * When true, renter should not remain stuck on `coordinate_return` waiting for wizard-only acks.
+ */
+export function isBilateralMeetupCoordinationConfirmedOnRow(ctx: RentalWizardContext): boolean {
+  const { rental } = ctx;
+  if (!isAgreementConfirmedOnRental(rental)) return false;
+  return (
+    hasCanonicalAgreedPickupDatetime(rental) && hasCanonicalAgreedReturnDatetime(rental)
+  );
+}
+
+/**
+ * Full meetup coordination finished for wizard routing.
+ * - Bilateral row confirmation (agreed pickup/return + agreement_status confirmed) advances to pickup/handoff.
+ * - Otherwise renter must complete coordinate_return ack + pickup_confirmed transition.
  */
 export function isMeetupCoordinationComplete(ctx: RentalWizardContext): boolean {
+  if (!isPickupCoordinationComplete(ctx) || !hasReturnCoordinationAgreed(ctx)) {
+    return false;
+  }
+  if (isBilateralMeetupCoordinationConfirmedOnRow(ctx)) {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      console.log('[rental-wizard][isMeetupCoordinationComplete] bilateral_row_confirmed', {
+        rentalId: ctx.rentalId,
+        agreed_pickup_datetime: ctx.rental.agreed_pickup_datetime ?? null,
+        agreed_return_datetime: ctx.rental.agreed_return_datetime ?? null,
+      });
+    }
+    return true;
+  }
   return (
-    isPickupCoordinationComplete(ctx) &&
-    hasReturnCoordinationAgreed(ctx) &&
     ctx.seenTransitions.has('pickup_confirmed_seen') &&
     isReturnCoordinationAcknowledged(ctx)
   );

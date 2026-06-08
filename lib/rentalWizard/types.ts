@@ -4,7 +4,7 @@ import type { PickupEvidencePhoto } from '@/lib/pickupEvidenceDisplay';
 import type { PickupEvidenceReadiness } from '@/lib/pickupEvidenceReadiness';
 import type { CanonicalMeetupCoordinationState } from '@/lib/canonicalMeetupCoordination';
 import type { RentalVerificationRow } from '@/lib/rentalVerification';
-import type { WizardMeetupProposalDraft } from '@/lib/rentalWizard/wizardMeetupDraft';
+import type { WizardMeetupProposalDraft, ViewerMeetupSubmissionSnapshot } from '@/lib/rentalWizard/wizardMeetupDraft';
 
 export type RentalWizardStep =
   | 'cancelled'
@@ -20,6 +20,17 @@ export type RentalWizardStep =
   | 'owner_confirmed_arrival'
   | 'equipment_confirmation'
   | 'rental_authorization'
+  | 'rental_agreement_intro'
+  | 'transition_agreement_reviewed'
+  | 'transition_disclosures_complete'
+  | 'transition_hold_authorized'
+  | 'transition_agreement_signed'
+  | 'transition_rental_activated'
+  | 'rental_agreement'
+  | 'liability_disclosures'
+  | 'security_hold_authorization'
+  | 'digital_signature'
+  | 'rental_activation'
   | 'transition_enjoy_rental'
   | 'active_rental'
   | 'transition_return_reminder'
@@ -37,7 +48,12 @@ export type RentalWizardTransitionKey =
   | 'pickup_ready_seen'
   | 'enjoy_rental_seen'
   | 'return_reminder_seen'
-  | 'return_complete_seen';
+  | 'return_complete_seen'
+  | 'agreement_signed_seen'
+  | 'agreement_reviewed_seen'
+  | 'disclosures_complete_seen'
+  | 'hold_authorized_seen'
+  | 'rental_activated_auth_seen';
 
 export type RentalWizardProgress = {
   renter_pickup_im_here_at?: string | null;
@@ -52,10 +68,20 @@ export type RentalWizardProgress = {
   equipment_ack?: Record<string, boolean>;
   coordinate_pickup_draft?: WizardMeetupProposalDraft;
   coordinate_return_draft?: WizardMeetupProposalDraft;
+  /** Last meetup values this viewer submitted — diff baseline during counterparty review. */
+  coordinate_pickup_viewer_last_submission?: ViewerMeetupSubmissionSnapshot;
+  coordinate_return_viewer_last_submission?: ViewerMeetupSubmissionSnapshot;
   /** Set when renter completes the coordinate-return step (Screen 2). */
   pickup_return_coordination_ack_at?: string | null;
   /** Renter reviewed and acknowledged liability / rental agreement text. */
   rental_agreement_acknowledged_at?: string | null;
+  equipment_condition_acknowledged_at?: string | null;
+  liability_disclosure_acknowledged_at?: string | null;
+  late_fee_policy_acknowledged_at?: string | null;
+  protection_declined_acknowledged_at?: string | null;
+  /** Initials entered for high-risk / inherent-risk disclosure acknowledgment. */
+  liability_risk_initials?: string | null;
+  rental_agreement_intro_seen_at?: string | null;
 };
 
 export type RentalWizardRentalRow = {
@@ -90,7 +116,16 @@ export type RentalWizardRentalRow = {
   physical_possession_confirmed_at?: string | null;
   rental_activated_at?: string | null;
   agreement_acknowledged_at?: string | null;
+  signed_agreement_version?: number | null;
+  signed_liability_disclosure_version?: number | null;
+  signed_agreement_user_id?: string | null;
+  equipment_condition_acknowledged_at?: string | null;
+  liability_disclosure_acknowledged_at?: string | null;
+  late_fee_policy_acknowledged_at?: string | null;
+  protection_declined_acknowledged_at?: string | null;
+  protection_coverage_acknowledged?: boolean | null;
   preauth_status?: string | null;
+  preauth_amount?: number | null;
   preauth_authorized_at?: string | null;
   signed_at?: string | null;
   signed_name?: string | null;
@@ -116,7 +151,9 @@ export type RentalWizardRentalRow = {
 export type RentalWizardContext = {
   rentalId: string;
   viewerUserId: string;
-  viewerRole: 'renter';
+  viewerRole: 'renter' | 'owner';
+  /** Counterparty display name (renter name on owner wizard, owner name on renter wizard). */
+  counterpartyDisplayName: string;
   rental: RentalWizardRentalRow;
   displayTitle: string;
   ownerDisplayName: string;

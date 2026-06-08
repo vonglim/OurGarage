@@ -324,8 +324,9 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
       }
     }
     try {
-      const { tryArmPickupAcceptedFromNotification, tryArmReturnAcceptedFromNotification } =
+      const { tryArmPickupAcceptedFromNotification, tryArmReturnAcceptedFromNotification, tryArmCoordinationProposalBannerFromNotification } =
         require('@/lib/rentalWizard/wizardLifecyclePromptFromNotification') as typeof import('@/lib/rentalWizard/wizardLifecyclePromptFromNotification');
+      tryArmCoordinationProposalBannerFromNotification(row);
       tryArmPickupAcceptedFromNotification(row);
       tryArmReturnAcceptedFromNotification(row);
     } catch {

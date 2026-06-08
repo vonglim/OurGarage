@@ -41,6 +41,7 @@ import {
   acceptRentalMeetupProposal,
   declineRentalMeetupProposal,
 } from '@/lib/rentalMeetupProposalLifecycle';
+import { openGuidedRentalFlow } from '@/lib/rentalNavigation';
 import { getProfileNameForUserId } from '@/lib/profileDisplayName';
 import { resolveAgreementBaselineDurationHours } from '@/lib/proposalDurationChange';
 import { evaluateMeetupProposalDurationWarning } from '@/lib/rentalDurationValidation';
@@ -1111,14 +1112,7 @@ export default function ChatDetailScreen() {
                     onConfirm={onConfirmRentalDetails}
                     onProposeChange={onProposeRentalDetails}
                     onPrepareMeetup={() => {
-                      if (rental.renter_user_id === meId) {
-                        router.push(`/rental-wizard/${rental.id}`);
-                      } else {
-                        router.push({
-                          pathname: '/rental/[id]',
-                          params: { id: rental.id },
-                        });
-                      }
+                      openGuidedRentalFlow(router, rental.id, meId, rental);
                     }}
                   />
                 </View>

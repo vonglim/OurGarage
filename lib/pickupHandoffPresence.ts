@@ -51,11 +51,9 @@ function parseTs(v: string | null | undefined): boolean {
 export function resolvePickupHandoffPresence(
   input: PickupHandoffPresenceInput
 ): PickupHandoffPresenceSnapshot {
+  /** Owner explicitly confirmed ready — not renter preauth or prep-complete alone. */
   const ownerReady =
-    input.rental.owner_pickup_ready === true ||
-    input.rental.handoff_approved_by_owner === true ||
-    Boolean(input.rental.handoff_approval_started_at?.trim()) ||
-    input.ownerPickupPrepComplete;
+    input.rental.owner_pickup_ready === true || input.rental.handoff_approved_by_owner === true;
 
   const renterEvidenceApproved =
     parseTs(input.renterApprovedPickupPhotosAt) || input.rental.handoff_approved_by_renter === true;

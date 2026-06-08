@@ -1,14 +1,15 @@
 import { Alert } from 'react-native';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { getProfileNameForUserId } from '@/lib/profileDisplayName';
 import { insertMeetupProposalOfferMessage } from '@/lib/meetupProposalThreadEvent';
 import { insertMeetupCoordinationTimelineForRental } from '@/lib/meetupCoordinationTimeline';
+import { getProfileNameForUserId } from '@/lib/profileDisplayName';
 import { insertServerNotificationToRecipient } from '@/lib/insertServerNotification';
 import { evaluateMeetupProposalDurationWarning } from '@/lib/rentalDurationValidation';
 import { persistMeetupProposalRow, type MeetupProposalPersistPhase } from '@/lib/rentalMeetupPersist';
 import { isUuidString } from '@/lib/requestOwnership';
 import { clearWizardCoordinateDraftsForRental } from '@/lib/rentalWizard/rentalWizardSeenState';
+import { insertMeetupCoordinationNotification } from '@/lib/rentalWizard/coordinationNotifications';
 import type { RentalWizardRentalRow } from '@/lib/rentalWizard/types';
 
 export type SubmitRentalMeetupProposalInput = {
@@ -123,6 +124,25 @@ export async function submitRentalMeetupProposal(
   const offerId =
     rental.offer_id != null && isUuidString(String(rental.offer_id)) ? String(rental.offer_id) : null;
 
+  const notificationKind = isReturnOnly
+    ? 'return_proposal_received'
+    : isPickupOnly
+      ? 'pickup_proposal_received'
+      : 'pickup_proposal_received';
+  const notificationLane = isReturnOnly ? 'return' : 'pickup';
+
+  if (receiverId && receiverId !== viewerUserId) {
+    void insertMeetupCoordinationNotification({
+      rental,
+      actorId: viewerUserId,
+      recipientUserId: receiverId,
+      kind: notificationKind,
+      lane: notificationLane,
+      proposalVersion: nextProposalVersion,
+      itemTitle: options?.rentalTitle ?? null,
+    });
+  }
+
   let messageId: string | null = null;
   if (offerId && receiverId && receiverId !== viewerUserId) {
     messageId = await insertMeetupProposalOfferMessage({
@@ -145,33 +165,25 @@ export async function submitRentalMeetupProposal(
       Alert.alert('Could not post proposal', 'Chat proposal message could not be created.');
       return { ok: false, reason: 'message' };
     }
-    insertServerNotificationToRecipient({
-      actorId: viewerUserId,
-      recipientUserId: receiverId,
-      type: 'message',
-      title: durationEval.isExtensionRequest
-        ? `${getProfileNameForUserId(viewerUserId)} requested a rental extension`
-        : durationEval.warningTriggered
-          ? `${getProfileNameForUserId(viewerUserId)} proposed meetup times outside the rental dates`
-        : isReturnOnly
-          ? `${getProfileNameForUserId(viewerUserId)} proposed return details`
-          : isPickupOnly
-            ? `${getProfileNameForUserId(viewerUserId)} proposed pickup details`
+    if (!isPickupOnly && !isReturnOnly) {
+      insertServerNotificationToRecipient({
+        actorId: viewerUserId,
+        recipientUserId: receiverId,
+        type: 'message',
+        title: durationEval.isExtensionRequest
+          ? `${getProfileNameForUserId(viewerUserId)} requested a rental extension`
+          : durationEval.warningTriggered
+            ? `${getProfileNameForUserId(viewerUserId)} proposed meetup times outside the rental dates`
             : `${getProfileNameForUserId(viewerUserId)} proposed a pickup time`,
-      body: (() => {
-        const title = String(options?.rentalTitle ?? '').trim();
-        if (isReturnOnly) {
-          return title ? `Return time or location change for ${title}` : 'Return details were proposed.';
-        }
-        if (isPickupOnly) {
-          return title ? `Pickup proposal for ${title}` : 'Pickup details were proposed.';
-        }
-        return title ? `New meetup proposal for ${title}` : 'A meetup time was proposed.';
-      })(),
-      offerId,
-      requestId: requestRowId,
-      rentalId: rental.id,
-    });
+        body: (() => {
+          const title = String(options?.rentalTitle ?? '').trim();
+          return title ? `New meetup proposal for ${title}` : 'A meetup time was proposed.';
+        })(),
+        offerId,
+        requestId: requestRowId,
+        rentalId: rental.id,
+      });
+    }
     void insertMeetupCoordinationTimelineForRental({
       rental,
       authorId: viewerUserId,

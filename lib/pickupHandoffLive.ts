@@ -132,14 +132,18 @@ export function resolvePickupHandoffPresenceState(
   else if (!base.renterArrived && base.ownerArrived) livePresencePhase = 'waiting_for_owner';
   else if (handoffStarted && !base.renterArrived) livePresencePhase = 'waiting_for_renter';
 
+  const ownerMarkedPickupReady =
+    input.rental.owner_pickup_ready === true || input.rental.handoff_approved_by_owner === true;
+
   let ownerLivePhase: PickupHandoffPresenceState['ownerLivePhase'] = 'idle';
   if (!handoffCompleted && presenceRoutingActive) {
     if (canConfirmHandoff) ownerLivePhase = 'handoff_ready';
     else if (base.bothPresent && !ack.owner) ownerLivePhase = 'both_present';
     else if (base.renterArrived && !base.ownerArrived) ownerLivePhase = 'renter_arrived';
-    else if (handoffStarted && !base.renterArrived) ownerLivePhase = 'waiting_for_renter';
+    else if (!ownerMarkedPickupReady && input.ownerPickupPrepComplete) {
+      ownerLivePhase = 'confirm_ready';
+    } else if (handoffStarted && !base.renterArrived) ownerLivePhase = 'waiting_for_renter';
     else if (ack.owner && !ack.renter) ownerLivePhase = 'waiting_receipt';
-    else if (!handoffStarted && input.ownerPickupPrepComplete) ownerLivePhase = 'confirm_ready';
   }
 
   let renterLivePhase: PickupHandoffPresenceState['renterLivePhase'] = 'idle';

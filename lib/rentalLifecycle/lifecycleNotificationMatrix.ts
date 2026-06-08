@@ -1,6 +1,9 @@
 /**
  * Notification audit matrix — lifecycle transition → server type → recipient → route → copy intent.
  * Keep in sync with lib/rentalCancellation/rentalCancellationActions.ts and lib/rentalMeetupProposalLifecycle.ts.
+ *
+ * Primary rental journey entry: guided wizard (`/rental-wizard` or `/owner-rental-wizard`) via
+ * `pushRentalJourneyEntry` / `openGuidedRentalFlow`. Legacy `/rental/[id]` is manual/secondary only.
  */
 
 export type LifecycleNotificationSpec = {
@@ -16,42 +19,49 @@ export const LIFECYCLE_NOTIFICATION_MATRIX: LifecycleNotificationSpec[] = [
     lifecycleTransition: 'rental approved',
     serverType: 'rental_confirmed / offer_accepted',
     recipient: 'renter',
-    route: '/rental-wizard/{id} (renter) | /rental/[id] (owner)',
+    route: '/rental-wizard/{id} | /owner-rental-wizard/{id} (role-resolved)',
     copyIntent: 'Booking confirmed — coordinate pickup',
   },
   {
     lifecycleTransition: 'pickup proposal sent',
-    serverType: 'message + meetup proposal thread',
+    serverType: 'pickup_proposal_received → message',
     recipient: 'counterparty',
-    route: '/chat/[offerId] or rental chat',
-    copyIntent: 'Meetup proposal card in thread',
+    route: '/rental-wizard/{id} | /owner-rental-wizard/{id} (role-resolved)',
+    copyIntent: 'Review pickup proposal in wizard',
+  },
+  {
+    lifecycleTransition: 'return proposal sent',
+    serverType: 'return_proposal_received → message',
+    recipient: 'counterparty',
+    route: '/rental-wizard/{id} | /owner-rental-wizard/{id} (role-resolved)',
+    copyIntent: 'Review return proposal in wizard',
   },
   {
     lifecycleTransition: 'pickup proposal accepted',
-    serverType: 'message / rental lifecycle',
-    recipient: 'renter',
-    route: '/rental-wizard/{id} → coordinate_return or transition',
+    serverType: 'pickup_confirmed / message / rental lifecycle',
+    recipient: 'counterparty',
+    route: '/rental-wizard/{id} | /owner-rental-wizard/{id} resolved step',
     copyIntent: 'Pickup confirmed — continue wizard',
   },
   {
     lifecycleTransition: 'cancellation requested',
     serverType: 'rental_cancellation_requested',
     recipient: 'counterparty',
-    route: '/rental-wizard/{id} resolved step + banner | /rental/[id] owner',
+    route: '/rental-wizard/{id} | /owner-rental-wizard/{id} resolved step + banner',
     copyIntent: 'Asked to cancel — rental stays active until response',
   },
   {
     lifecycleTransition: 'cancellation accepted',
     serverType: 'rental_cancellation_accepted',
-    recipient: 'requester',
-    route: '/rental-wizard/{id}/s/cancelled (renter)',
+    recipient: 'counterparty',
+    route: '/rental-wizard/{id}/s/cancelled | /owner-rental-wizard/{id}/s/cancelled',
     copyIntent: 'Cancellation accepted',
   },
   {
     lifecycleTransition: 'cancellation declined',
     serverType: 'rental_cancellation_declined',
     recipient: 'requester',
-    route: '/rental-wizard/{id} current step',
+    route: '/rental-wizard/{id} | /owner-rental-wizard/{id} current step',
     copyIntent: 'Cancellation declined — continue coordinating',
   },
   {

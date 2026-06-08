@@ -35,6 +35,10 @@ Three canonical shell categories — use these instead of one-off layout per scr
 
 **Layout source of truth:** `constants/wizardLayout.ts`
 
+- **Standard steps:** `ScreenWrapper` applies 16px horizontal inset (`wizardLayout.screenPaddingHorizontal`).
+- **Full-bleed bands** (dark transitions, authorization hero): `wizardScreenBleedStyle` on the screen root + `wizardContentGutterStyle` on header, scroll, and footer.
+- **Edge-to-edge media** inside a guttered scroll: negative `marginHorizontal: -screenPaddingHorizontal` on the asset only (see `ConditionInspectionPremium` hero).
+
 **Dark legacy:** `WizardTransitionShell` — migrate remaining dark transitions to `WizardCelebrationTransitionShell` when touched.
 
 ## Realtime lifecycle prompts

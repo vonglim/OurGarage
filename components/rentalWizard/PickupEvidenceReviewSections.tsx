@@ -3,6 +3,7 @@ import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Pressable } from '@/components/Pressable';
+import { RentalEvidenceVideoThumb } from '@/components/rentalEvidence/RentalEvidenceVideoThumb';
 import { RentalEvidenceThumbnail } from '@/components/RentalEvidenceThumbnail';
 import { ui } from '@/constants/appUi';
 import type { PickupEvidencePhoto } from '@/lib/pickupEvidenceDisplay';
@@ -207,15 +208,37 @@ export function PickupEvidenceReviewSections({
       />
 
       {buckets.additional.length > 0 ? (
-        <EvidenceGroup
-          label="Additional photos"
-          photos={buckets.additional}
-          emptyTitle=""
-          emptyBody=""
-          thumbnailSize="handoffSquare"
-          category="additional"
-          onPressPhoto={onPressPhoto}
-        />
+        <View style={styles.group}>
+          <Text style={styles.groupLabel}>Video (Optional)</Text>
+          <Text style={styles.groupHelper}>Short clip showing the item operating before pickup.</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.gallery}>
+            {buckets.additional.map((p) =>
+              p.mediaKind === 'video' ? (
+                <RentalEvidenceVideoThumb
+                  key={p.id}
+                  size="handoffSquare"
+                  onPress={() => onPressPhoto(p.id)}
+                />
+              ) : (
+                <RentalEvidenceThumbnail
+                  key={p.id}
+                  uri={p.signedUrl}
+                  size="handoffSquare"
+                  category="additional"
+                  canDelete={false}
+                  onPress={() => onPressPhoto(p.id)}
+                  onDelete={() => {}}
+                />
+              )
+            )}
+          </ScrollView>
+          <Text style={styles.uploadedMeta}>
+            {buckets.additional.some((p) => p.mediaKind === 'video') ? '1 video' : `${buckets.additional.length} photo${buckets.additional.length === 1 ? '' : 's'}`}
+            {formatEvidenceUploadedAt(buckets.additional[buckets.additional.length - 1]?.createdAt)
+              ? ` · latest ${formatEvidenceUploadedAt(buckets.additional[buckets.additional.length - 1]?.createdAt)}`
+              : ''}
+          </Text>
+        </View>
       ) : null}
     </View>
   );

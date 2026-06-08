@@ -35,6 +35,10 @@ const SERVER_TYPE_TO_APP: Record<string, AppNotificationType> = {
   rental_cancellation_requested: 'rental_cancellation_requested',
   rental_cancellation_accepted: 'rental_cancellation_accepted',
   rental_cancellation_declined: 'rental_cancellation_declined',
+  pickup_proposal_received: 'message',
+  return_proposal_received: 'message',
+  pickup_confirmed: 'accepted',
+  return_confirmed: 'accepted',
 };
 
 function mapServerType(raw: string): AppNotificationType {
@@ -129,13 +133,16 @@ export function mapSupabaseNotificationToApp(
     listingId,
     rentalRequestId,
     forUserId: (forUserId || '').trim() || null,
-    meetupAcceptanceKind: parseMeetupAcceptanceKind(data),
+    meetupAcceptanceKind: parseMeetupAcceptanceKind(data, st),
   };
 }
 
 function parseMeetupAcceptanceKind(
-  data: unknown
+  data: unknown,
+  serverType?: string
 ): 'pickup' | 'return' | 'extension' | null {
+  if (serverType === 'pickup_confirmed') return 'pickup';
+  if (serverType === 'return_confirmed') return 'return';
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
   const raw = String((data as Record<string, unknown>).meetupAcceptanceKind ?? '').trim();
   if (raw === 'pickup' || raw === 'return' || raw === 'extension') return raw;

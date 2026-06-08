@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { inferEvidenceMediaKindFromPath, type EvidenceMediaKind } from '@/lib/evidenceMediaKind';
 import {
   normalizePickupPhotoCategory,
   type PickupPhotoCategory,
@@ -18,6 +19,7 @@ export type PickupEvidencePhoto = {
   createdAt: string;
   pickupPhotoCategory: PickupPhotoCategory | null;
   uploadedBy: string;
+  mediaKind: EvidenceMediaKind;
 };
 
 export async function fetchOwnerPickupEvidenceDisplay(
@@ -46,6 +48,7 @@ export function mapPickupEvidencePhoto(
     createdAt: row.created_at,
     pickupPhotoCategory: normalizePickupPhotoCategory(row.pickup_photo_category),
     uploadedBy: row.uploaded_by,
+    mediaKind: inferEvidenceMediaKindFromPath(row.storage_path),
   };
 }
 

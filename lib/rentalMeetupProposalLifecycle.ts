@@ -5,8 +5,9 @@ import { insertMeetupCoordinationTimelineForRental } from '@/lib/meetupCoordinat
 import { resolveRentalReturnIso } from '@/lib/rentalExtensionProposal';
 import {
   insertServerNotificationToRecipient,
-  insertServerNotificationToRecipientAsync,
 } from '@/lib/insertServerNotification';
+import { insertMeetupCoordinationNotification } from '@/lib/rentalWizard/coordinationNotifications';
+import type { CoordinationNotificationKind } from '@/lib/rentalWizard/coordinationInstrumentation';
 import { logRentalRowAfterAccept } from '@/lib/rentalWizard/pickupCoordinationDiagnostics';
 import {
   resolveProposedMeetupLocation,
@@ -125,46 +126,17 @@ async function notifyMeetupProposalAccepted(
         : null;
   if (!recipientId || recipientId === accepterId) return false;
 
-  const accepterName = getProfileNameForUserId(accepterId);
-  const title =
-    kind === 'return'
-      ? accepterId === rental.owner_user_id
-        ? 'Return details confirmed'
-        : `${accepterName} accepted your return proposal`
-      : kind === 'extension'
-        ? `${accepterName} approved the extension request`
-        : accepterId === rental.owner_user_id
-          ? 'Pickup details confirmed'
-          : `${accepterName} accepted your meetup proposal`;
-  const body =
-    kind === 'return'
-      ? typeof itemTitle === 'string' && itemTitle.trim() !== ''
-        ? `${itemTitle.trim()} — return meetup details are confirmed. Open your rental guide to continue.`
-        : 'Your return meetup details were approved. Open your rental guide to continue.'
-      : kind === 'extension'
-        ? 'The rental return window was updated. Open your rental guide to review.'
-        : typeof itemTitle === 'string' && itemTitle.trim() !== ''
-          ? `${itemTitle.trim()} — open your rental guide to continue.`
-          : 'Your meetup proposal was accepted. Open your rental guide to continue.';
+  const notificationKind: CoordinationNotificationKind =
+    kind === 'return' || kind === 'extension' ? 'return_confirmed' : 'pickup_confirmed';
+  const lane = kind === 'return' || kind === 'extension' ? 'return' : 'pickup';
 
-  return insertServerNotificationToRecipientAsync({
+  return insertMeetupCoordinationNotification({
+    rental,
     actorId: accepterId,
     recipientUserId: recipientId,
-    type: 'rental_confirmed',
-    title,
-    body,
-    requestId:
-      rental.request_id != null && isUuidString(String(rental.request_id))
-        ? String(rental.request_id)
-        : null,
-    offerId:
-      rental.offer_id != null && isUuidString(String(rental.offer_id)) ? String(rental.offer_id) : null,
-    rentalId: rental.id,
-    listingId:
-      rental.listing_id != null && isUuidString(String(rental.listing_id))
-        ? String(rental.listing_id)
-        : null,
-    meetupAcceptanceKind: kind,
+    kind: notificationKind,
+    lane,
+    itemTitle,
   });
 }
 
