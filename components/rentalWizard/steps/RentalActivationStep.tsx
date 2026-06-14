@@ -1,11 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Alert, StyleSheet, Text, View } from 'react-native';
 
 import { MeetupLifecycleShell } from '@/components/rentalLifecycle/MeetupLifecycleShell';
 import { useRentalWizard } from '@/components/rentalWizard/RentalWizardProvider';
+import { INSPECTION_INCOMPLETE_AUTH_MESSAGE } from '@/lib/rentalAuthorization/bindingAuthorizationGate';
 import { resolveAuthorizationProgress } from '@/lib/rentalAuthorization/authorizationProgress';
+import { canAccessBindingAuthorizationForContext } from '@/lib/pickupHandoffCompletion';
 import { formatWizardDateTime, formatWizardLocation } from '@/lib/rentalWizard/formatWizardSchedule';
 
 /** Green phase — final activation tap before enjoy-rental (usually skipped if sign step auto-activates). */
@@ -14,6 +16,22 @@ export function RentalActivationStep() {
   const w = useRentalWizard();
   const { ctx } = w;
   const progress = useMemo(() => resolveAuthorizationProgress(ctx), [ctx]);
+  const inspectionComplete = useMemo(
+    () => canAccessBindingAuthorizationForContext(ctx),
+    [ctx]
+  );
+
+  const onPrimary = () => {
+    if (!inspectionComplete) {
+      Alert.alert('Inspection required', INSPECTION_INCOMPLETE_AUTH_MESSAGE);
+      return;
+    }
+    if (progress.rentalActivated) {
+      void w.goToResolvedNext();
+    } else {
+      void w.activateRentalStep();
+    }
+  };
 
   return (
     <MeetupLifecycleShell
@@ -30,16 +48,14 @@ export function RentalActivationStep() {
             ? 'Activating…'
             : 'Activate rental'
       }
-      primaryDisabled={!progress.activationReady || w.authorizationBusy}
+      primaryDisabled={!progress.activationReady || w.authorizationBusy || !inspectionComplete}
       primaryBusy={w.authorizationBusy}
-      onPrimary={() => {
-        if (progress.rentalActivated) {
-          void w.goToResolvedNext();
-        } else {
-          void w.activateRentalStep();
-        }
-      }}
-      footerNote="Protection becomes active when your rental starts."
+      onPrimary={onPrimary}
+      footerNote={
+        inspectionComplete
+          ? 'Protection becomes active when your rental starts.'
+          : INSPECTION_INCOMPLETE_AUTH_MESSAGE
+      }
     >
       <View style={styles.hero}>
         <Ionicons name="shield-checkmark" size={48} color="#16A34A" />

@@ -1,5 +1,5 @@
 import type { RentalWizardContext } from '@/lib/rentalWizard/types';
-import type { CoordinationMeetupLane } from '@/lib/rentalWizard/coordinationInstrumentation';
+import { resolveCounterpartyProposalChangeFlags } from '@/lib/rentalWizard/coordinateProposalFieldDiff';
 
 export type CoordinateProposalPhase = 'pickup' | 'return';
 
@@ -55,14 +55,34 @@ export function coordinateScheduleFieldTitle(input: {
 
 export function proposalBannerDetails(input: {
   ctx: RentalWizardContext;
-  lane: CoordinationMeetupLane;
+  phase: CoordinateProposalPhase;
 }): {
   headline: string;
   summaryLine: string;
 } {
-  const phase: CoordinateProposalPhase = input.lane;
-  const counterparty = counterpartyLabelForViewer(input.ctx);
+  const { ctx, phase } = input;
+  const counterparty = counterpartyLabelForViewer(ctx);
   const phaseLabel = phase === 'pickup' ? 'pickup' : 'return';
+  const laneState = phase === 'pickup' ? ctx.meetupCoordination.pickup : ctx.meetupCoordination.return;
+  const { locationChanged, timeChanged, confirmOnly } = resolveCounterpartyProposalChangeFlags({
+    phase,
+    lane: laneState,
+    ctx,
+  });
+
+  if (confirmOnly) {
+    return {
+      headline: phase === 'pickup' ? 'Pickup details to confirm' : 'Return details to confirm',
+      summaryLine: `${counterparty} confirmed the ${phaseLabel} location and time. Review below and confirm.`,
+    };
+  }
+
+  if (!locationChanged && !timeChanged) {
+    return {
+      headline: newProposalHeadline(phase),
+      summaryLine: `${counterparty} sent ${phaseLabel} details to review.`,
+    };
+  }
 
   return {
     headline: newProposalHeadline(phase),

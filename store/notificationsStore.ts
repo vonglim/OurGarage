@@ -2,6 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useMemo } from 'react';
 import { create } from 'zustand';
 
+import { isActionableOwnerNotificationType } from '@/lib/notificationActionableTypes';
+
 import { getAuthUserIdSync, useAuthUserId } from '@/lib/authUser';
 import { nextLocalId } from '@/lib/idFactory';
 import { shouldBlockSelfNotificationToUserId } from '@/lib/notificationRecipientGuard';
@@ -161,6 +163,20 @@ function newId(): string {
   return nextLocalId('notif');
 }
 
+function isListingLinkedOfferNotification(n: AppNotification): boolean {
+  const offerId = typeof n.offerId === 'string' ? n.offerId.trim() : '';
+  if (!isUuidString(offerId)) return false;
+  if (n.requestId != null) {
+    const rid = n.requestId;
+    if (typeof rid === 'number' && Number.isFinite(rid) && rid !== 0) return false;
+    if (typeof rid === 'string' && rid.trim() !== '') return false;
+  }
+  const listingId = typeof n.listingId === 'string' ? n.listingId.trim() : '';
+  if (isUuidString(listingId)) return true;
+  /** Listing offers use `offers.listing_id` — no browse `requests` row. */
+  return true;
+}
+
 /** Lazy deps avoid static import cycle (requests/chat → notifications). */
 function filterStaleNotifications(list: AppNotification[]): AppNotification[] {
   const { resolveRequestFromRouteId } =
@@ -176,6 +192,7 @@ function filterStaleNotifications(list: AppNotification[]): AppNotification[] {
       n.type === 'declined'
     ) {
       if (typeof n.rentalId === 'string' && isUuidString(n.rentalId)) return true;
+      if (isListingLinkedOfferNotification(n)) return true;
       if (n.requestId == null) return false;
       return resolveRequestFromRouteId(n.requestId) != null;
     }
@@ -369,7 +386,9 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
   markAllAsReadExceptMessages: () => {
     set((state) => ({
       notifications: state.notifications.map((n) =>
-        n.type === 'message' ? n : { ...n, read: true }
+        n.type === 'message' || isActionableOwnerNotificationType(n.type)
+          ? n
+          : { ...n, read: true }
       ),
     }));
     void persistNotifications(get().notifications);

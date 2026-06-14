@@ -216,7 +216,7 @@ export function OfferDeepDetailBody({
                 pressOpacityFeedback={false}
                 onPress={openVerification}
                 accessibilityRole="button"
-                accessibilityLabel="Verification photo. Username and date on the image."
+                accessibilityLabel="Timestamp proof required. Username and date on note beside item in same photo."
                 style={({ pressed }) => [
                   styles.thumbShell,
                   styles.verificationShell,
@@ -228,7 +228,7 @@ export function OfferDeepDetailBody({
                   aspect="square"
                   width={PHOTO_THUMB}
                   rounded={THUMB_RADIUS}
-                  accessibilityLabel="Verification photo thumbnail"
+                  accessibilityLabel="Timestamp proof required thumbnail"
                 />
                 <View style={styles.verificationStrip} pointerEvents="none">
                   <Ionicons name="shield-checkmark" size={9} color="#FFFFFF" />
@@ -240,7 +240,7 @@ export function OfferDeepDetailBody({
             ) : (
               <View
                 style={[styles.thumbShell, styles.verificationShell, styles.verificationEmpty]}
-                accessibilityLabel="Verification photo placeholder. Username and date verification."
+                accessibilityLabel="Timestamp proof required placeholder. Note with username and date beside item."
               >
                 <Ionicons name="shield-checkmark-outline" size={18} color="rgba(107, 114, 128, 0.5)" />
                 <Text style={styles.verificationEmptyLabel} numberOfLines={1}>

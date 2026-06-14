@@ -18,6 +18,7 @@ import {
   type AppNotification,
   type AppNotificationType,
 } from '@/store/notificationsStore';
+import { usePendingRentalRequestsActivityStore } from '@/store/pendingRentalRequestsActivityStore';
 import { useUnifiedRentalsActivityStore } from '@/store/unifiedRentalsActivityStore';
 
 const SERVER_TYPE_TO_APP: Record<string, AppNotificationType> = {
@@ -183,6 +184,7 @@ function runInitialServerFetch(
         addNotificationToStore(n);
       }
     }
+    void usePendingRentalRequestsActivityStore.getState().refreshFromServer(currentUserId);
   })();
 }
 
@@ -292,11 +294,15 @@ export function startNotificationsServerSync(userId: string): () => void {
               Platform.OS !== 'web' &&
               (rawType === 'rental_cancellation_requested' ||
                 rawType === 'rental_cancellation_accepted' ||
-                rawType === 'rental_cancellation_declined')
+                rawType === 'rental_cancellation_declined' ||
+                rawType === 'rental_request')
             ) {
               const titleStr = typeof r.title === 'string' ? r.title.trim() : '';
               const bodyStr = typeof r.body === 'string' ? r.body.trim() : '';
               void presentLocalLifecycleBanner(titleStr || 'Rental update', bodyStr || n.message);
+            }
+            if (rawType === 'rental_request') {
+              void usePendingRentalRequestsActivityStore.getState().refreshFromServer(currentUserId);
             }
             const offerIdRaw = r.offer_id;
             const offerId =

@@ -16,6 +16,7 @@ import {
   resolveRenterPreparePickupStepState,
 } from '@/lib/pickupEvidenceReadiness';
 import { canReviewAgreementBeforeMeetup } from '@/lib/rentalAuthorization/authorizationProgress';
+import { TIMESTAMP_POSSESSION_PROOF_EVIDENCE_BUNDLE } from '@/lib/timestampPossessionProofCopy';
 import { WIZARD_STEP_META } from '@/lib/rentalWizard/wizardStepMeta';
 
 function StatusBanner({
@@ -97,6 +98,17 @@ export function PreparePickupStep() {
     });
   }, [ctx.rentalId, readiness, w]);
 
+  useEffect(() => {
+    if (!w.pickupEvidenceReviewAfterPromptAck || !readiness.renterEvidenceReady) return;
+    w.clearPickupEvidenceReviewAfterPromptAck();
+    void openReview();
+  }, [
+    openReview,
+    readiness.renterEvidenceReady,
+    w,
+    w.pickupEvidenceReviewAfterPromptAck,
+  ]);
+
   const handleApproveFromModal = useCallback(async () => {
     setBusy(true);
     try {
@@ -169,7 +181,7 @@ export function PreparePickupStep() {
               : 'Waiting on owner',
           body:
             readiness.ownerPhotoCount > 0
-              ? `The owner has ${readiness.ownerPhotoCount} photo${readiness.ownerPhotoCount === 1 ? '' : 's'} so far. You'll be notified here when item, serial, and live possession proof are complete.`
+              ? `The owner has ${readiness.ownerPhotoCount} photo${readiness.ownerPhotoCount === 1 ? '' : 's'} so far. You'll be notified here when all required pickup evidence is complete.`
               : 'The owner will upload fresh photos of the exact item before pickup.',
         }
       : prepareState === 'ready_for_review'
@@ -207,7 +219,7 @@ export function PreparePickupStep() {
           ...(canReviewAgreementBeforeMeetup(ctx)
             ? [
                 {
-                  label: 'Review rental agreement',
+                  label: 'Preview rental agreement',
                   onPress: () => setAgreementSheetOpen(true),
                   disabled: hasPendingLifecyclePrompt,
                 },
@@ -241,12 +253,7 @@ export function PreparePickupStep() {
             <Ionicons name="images-outline" size={22} color={ui.primary} />
             <View style={styles.reviewCardText}>
               <Text style={styles.reviewCardTitle}>Evidence review</Text>
-              <Text style={styles.reviewCardBody}>
-                Item · Serial · Live possession proof
-                {readiness.bucketCounts.additional > 0
-                  ? ' · optional video included'
-                  : ''}
-              </Text>
+              <Text style={styles.reviewCardBody}>{TIMESTAMP_POSSESSION_PROOF_EVIDENCE_BUNDLE}</Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={ui.textSecondary} />
           </Pressable>

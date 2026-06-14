@@ -3,10 +3,10 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
 import { Alert, Image, StyleSheet, Text, View } from 'react-native';
 
+import { MeetupInspectionEvidenceViewer } from '@/components/rentalWizard/MeetupInspectionEvidenceViewer';
 import { MeetupLifecycleShell } from '@/components/rentalLifecycle/MeetupLifecycleShell';
-import { PickupEvidenceReviewModal } from '@/components/rentalWizard/PickupEvidenceReviewModal';
 import { useRentalWizard } from '@/components/rentalWizard/RentalWizardProvider';
-import { Pressable } from '@/components/Pressable';
+import { WizardPickupChecklistRow } from '@/components/rentalWizard/WizardPickupChecklistRow';
 import {
   buildPickupHandoffCompletionInputFromWizard,
   resolvePickupHandoffCompletionState,
@@ -16,25 +16,21 @@ import { evaluatePickupInspectionFlow } from '@/lib/pickupInspectionFlow';
 import { resolveMeetupLifecyclePresentation } from '@/lib/rentalLifecycle/meetupLifecycle';
 import {
   deriveWizardRenterViewerFlags,
+  pickupAutoRowHelper,
   RENTER_PICKUP_ITEMS,
   renterPickupManualFromVerificationRows,
 } from '@/lib/rentalPickupChecklist';
 import { formatBorrowingFromOwner } from '@/lib/rentalWizard/formatBorrowingFromOwner';
 import { formatWizardDateTime } from '@/lib/rentalWizard/formatWizardSchedule';
-
-const INSPECTION_ROW_LABELS: Record<string, string> = {
-  'rp-review-photos': 'Equipment matches listing photos',
-  'rp-verify-serial': 'Serial number verified',
-  'rp-verify-accessories': 'Accessories included',
-  'rp-condition-ok': 'Condition acceptable at pickup',
-  'rp-verify-note': 'Live possession photo reviewed',
-};
+import {
+  buildPickupInspectionCompletionAudit,
+  logPickupInspectionCompletionAudit,
+} from '@/lib/pickupInspectionCompletionAudit';
 
 export function EquipmentInspectionStep() {
   const router = useRouter();
   const w = useRentalWizard();
   const { ctx } = w;
-  const [reviewOpen, setReviewOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const presentation = useMemo(
@@ -115,6 +111,14 @@ export function EquipmentInspectionStep() {
   ).length;
 
   const onComplete = useCallback(async () => {
+    logPickupInspectionCompletionAudit(
+      buildPickupInspectionCompletionAudit({
+        ctx,
+        surface: 'equipment_inspection_onComplete_tap',
+        currentWizardStep: 'owner_confirmed_arrival',
+      }),
+      { phase: 'before_local_gates' }
+    );
     if (!presence.bothPresent) {
       Alert.alert('Waiting for owner', 'Both parties need to be at the meetup before completing inspection.');
       return;
@@ -123,18 +127,34 @@ export function EquipmentInspectionStep() {
       Alert.alert(
         'Finish inspection',
         !evidenceReviewed
-          ? 'Review the owner’s pickup photos first.'
+          ? 'Review the verification photos above first.'
           : `Complete all inspection items (${requiredDone}/${requiredTotal}).`
       );
       return;
     }
     setBusy(true);
     try {
+      logPickupInspectionCompletionAudit(
+        buildPickupInspectionCompletionAudit({
+          ctx,
+          surface: 'equipment_inspection_onComplete_tap',
+          currentWizardStep: 'owner_confirmed_arrival',
+        }),
+        { phase: 'calling_confirmPickupReceipt' }
+      );
       await w.confirmPickupReceipt();
     } finally {
       setBusy(false);
     }
-  }, [evidenceReviewed, inspection.receiptButtonEnabled, presence.bothPresent, requiredDone, requiredTotal, w]);
+  }, [
+    ctx,
+    evidenceReviewed,
+    inspection.receiptButtonEnabled,
+    presence.bothPresent,
+    requiredDone,
+    requiredTotal,
+    w,
+  ]);
 
   const waitingForOwner = presence.renterArrived && !presence.ownerArrived;
   const primaryLabel = completion.renterConfirmedReceipt
@@ -154,109 +174,97 @@ export function EquipmentInspectionStep() {
 
   const showInspectionComplete = completion.renterConfirmedReceipt;
 
+  const onEvidenceOpened = useCallback(() => {
+    if (!ctx.wizardProgress.renter_pickup_evidence_review_opened_at?.trim()) {
+      void w.markPickupEvidenceReviewOpened();
+    }
+  }, [ctx.wizardProgress.renter_pickup_evidence_review_opened_at, w]);
+
+  const onTimestampProofViewed = useCallback(() => {
+    if (!ctx.wizardProgress.renter_viewed_timestamp_proof_at?.trim()) {
+      void w.markViewedTimestampProof();
+    }
+  }, [ctx.wizardProgress.renter_viewed_timestamp_proof_at, w]);
+
   return (
-    <>
-      <MeetupLifecycleShell
-        phase="equipment_inspection"
-        progressIndex={0}
-        title={showInspectionComplete ? 'Inspection complete' : 'Equipment inspection'}
-        subtitle={
-          showInspectionComplete
-            ? 'You confirmed the equipment in person. Next: review the agreement and authorize your rental.'
-            : presentation.renterSupport
-        }
-        onBack={() => router.back()}
-        onOpenMessages={w.openMessages}
-        primaryLabel={primaryLabel}
-        onPrimary={primaryOnPress}
-        primaryDisabled={primaryDisabled}
-        primaryBusy={busy}
-        secondaryLabel="Message owner"
-        onSecondary={w.openMessages}
-        footerNote={
-          !completion.renterConfirmedReceipt && presence.bothPresent
-            ? `${requiredDone} of ${requiredTotal} checks complete`
-            : undefined
-        }
-      >
-        {showInspectionComplete ? (
-          <View style={styles.completeHero}>
-            <Ionicons name="checkmark-circle" size={56} color={presentation.theme.primary} />
-            <Text style={styles.completeTitle}>Inspection complete</Text>
-            <Text style={styles.completeBody}>
-              Equipment verified and received. Continue to authorization when you are ready.
-            </Text>
-          </View>
-        ) : null}
-
-        <View style={styles.itemCard}>
-          {ctx.heroImageUrl ? (
-            <Image source={{ uri: ctx.heroImageUrl }} style={styles.thumb} />
-          ) : (
-            <View style={[styles.thumb, styles.thumbPlaceholder]}>
-              <Ionicons name="cube-outline" size={28} color="#94A3B8" />
-            </View>
-          )}
-          <View style={styles.itemText}>
-            <Text style={styles.itemTitle}>{ctx.displayTitle}</Text>
-            <Text style={styles.itemSub}>{formatBorrowingFromOwner(ctx.ownerDisplayName)}</Text>
-            <Text style={styles.itemMeta}>{ctx.rentalCodeLabel}</Text>
-            <Text style={styles.itemMeta}>{formatWizardDateTime(ctx.pickupIso)}</Text>
-          </View>
+    <MeetupLifecycleShell
+      phase="equipment_inspection"
+      progressIndex={0}
+      title={showInspectionComplete ? 'Inspection complete' : 'Equipment inspection'}
+      subtitle={
+        showInspectionComplete
+          ? 'You confirmed the equipment in person. Next: review the agreement and authorize your rental.'
+          : presentation.renterSupport
+      }
+      onBack={() => router.back()}
+      onOpenMessages={w.openMessages}
+      primaryLabel={primaryLabel}
+      onPrimary={primaryOnPress}
+      primaryDisabled={primaryDisabled}
+      primaryBusy={busy}
+      secondaryLabel="Message owner"
+      onSecondary={w.openMessages}
+      footerNote={
+        !completion.renterConfirmedReceipt && presence.bothPresent
+          ? `${requiredDone} of ${requiredTotal} checks complete`
+          : undefined
+      }
+    >
+      {showInspectionComplete ? (
+        <View style={styles.completeHero}>
+          <Ionicons name="checkmark-circle" size={56} color={presentation.theme.primary} />
+          <Text style={styles.completeTitle}>Inspection complete</Text>
+          <Text style={styles.completeBody}>
+            Equipment verified and received. Continue to authorization when you are ready.
+          </Text>
         </View>
+      ) : null}
 
-        {!showInspectionComplete ? (
-        <View style={styles.checklistCard}>
-          {RENTER_PICKUP_ITEMS.map((item) => {
-            const done = Boolean(inspection.checklistCompletionState[item.id]);
-            const label = INSPECTION_ROW_LABELS[item.id] ?? item.label;
-            const isPhotos = item.id === 'rp-review-photos';
-            return (
-              <Pressable
+      <View style={styles.itemCard}>
+        {ctx.heroImageUrl ? (
+          <Image source={{ uri: ctx.heroImageUrl }} style={styles.thumb} />
+        ) : (
+          <View style={[styles.thumb, styles.thumbPlaceholder]}>
+            <Ionicons name="cube-outline" size={28} color="#94A3B8" />
+          </View>
+        )}
+        <View style={styles.itemText}>
+          <Text style={styles.itemTitle}>{ctx.displayTitle}</Text>
+          <Text style={styles.itemSub}>{formatBorrowingFromOwner(ctx.ownerDisplayName)}</Text>
+          <Text style={styles.itemMeta}>{ctx.rentalCodeLabel}</Text>
+          <Text style={styles.itemMeta}>{formatWizardDateTime(ctx.pickupIso)}</Text>
+        </View>
+      </View>
+
+      {!showInspectionComplete ? (
+        <>
+          <MeetupInspectionEvidenceViewer
+            photos={ctx.ownerPickupEvidence}
+            ownerDisplayName={ctx.ownerDisplayName}
+            onEvidenceOpened={onEvidenceOpened}
+            onTimestampProofViewed={onTimestampProofViewed}
+          />
+
+          <View style={styles.checklistCard}>
+            <Text style={styles.checklistTitle}>In-person inspection</Text>
+            {RENTER_PICKUP_ITEMS.map((item) => (
+              <WizardPickupChecklistRow
                 key={item.id}
-                pressOpacityFeedback={false}
-                disabled={item.control === 'auto' && !isPhotos}
-                onPress={() => {
-                  if (isPhotos) setReviewOpen(true);
-                  else if (item.control === 'manual') {
-                    void w.toggleRenterPickupChecklistItem(item.id);
-                  }
-                }}
-                style={styles.checkRow}
-              >
-                <Ionicons
-                  name={done ? 'checkmark-circle' : 'ellipse-outline'}
-                  size={22}
-                  color={done ? presentation.theme.primary : '#CBD5E1'}
-                />
-                <Text style={[styles.checkLabel, done && styles.checkLabelDone]}>{label}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-        ) : null}
-      </MeetupLifecycleShell>
-
-      <PickupEvidenceReviewModal
-        visible={reviewOpen}
-        photos={ctx.ownerPickupEvidence}
-        ownerDisplayName={ctx.ownerDisplayName}
-        onClose={() => setReviewOpen(false)}
-        onApprove={async () => {
-          await w.markPickupEvidenceReviewOpened();
-          if (!ctx.wizardProgress.renter_approved_pickup_photos_at) {
-            await w.markPhotosApproved();
-          }
-          setReviewOpen(false);
-        }}
-        onRequestNewPhotos={() => {
-          setReviewOpen(false);
-          w.openMessages();
-        }}
-        approveDisabled={!ctx.pickupEvidenceReadiness.renterEvidenceReady}
-        busy={w.proposalBusy}
-      />
-    </>
+                label={item.label}
+                checked={Boolean(inspection.checklistCompletionState[item.id])}
+                readOnly={item.control === 'auto'}
+                helperText={item.control === 'auto' ? pickupAutoRowHelper(item.id) : undefined}
+                onToggle={
+                  item.control === 'manual'
+                    ? () => void w.toggleRenterPickupChecklistItem(item.id)
+                    : undefined
+                }
+              />
+            ))}
+          </View>
+        </>
+      ) : null}
+    </MeetupLifecycleShell>
   );
 }
 
@@ -288,13 +296,12 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0',
     gap: 2,
   },
-  checkRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 12,
+  checklistTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0F172A',
     paddingHorizontal: 10,
+    paddingTop: 8,
+    paddingBottom: 4,
   },
-  checkLabel: { flex: 1, fontSize: 15, color: '#0F172A', lineHeight: 21 },
-  checkLabelDone: { color: '#475569' },
 });

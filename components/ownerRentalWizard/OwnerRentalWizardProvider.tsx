@@ -19,10 +19,10 @@ import { acceptRentalMeetupProposal, declineRentalMeetupProposal } from '@/lib/r
 import { evaluatePickupEvidenceReadiness } from '@/lib/pickupEvidenceReadiness';
 import { resolvePickupHandoffPresenceState } from '@/lib/pickupHandoffLive';
 import { markWizardTransitionSeen, updateWizardProgress } from '@/lib/rentalWizard';
-import { saveReturnCoordinationToRental } from '@/lib/rentalWizard/saveReturnCoordination';
 import { submitRentalMeetupProposal } from '@/lib/rentalWizard/submitRentalMeetupProposal';
 import { transitionKeyForStep } from '@/lib/rentalWizard/rentalWizardTransitionResolver';
 import {
+  hasPendingWizardLifecyclePrompt,
   type WizardLifecyclePromptGateState,
   type WizardLifecyclePromptId,
 } from '@/lib/rentalWizard/wizardLifecyclePromptGate';
@@ -40,6 +40,8 @@ import {
   type WizardMeetupProposalDraft,
 } from '@/lib/rentalWizard/wizardMeetupDraft';
 import type { RentalWizardStep } from '@/lib/rentalWizard/types';
+import { buildMeetupDayPickupExtensionProposalInput } from '@/lib/meetupDayLateExtension';
+import { setRentalOperationalState } from '@/lib/rentalOperationalAttention';
 import { getSupabase } from '@/lib/supabase';
 
 type OwnerRentalWizardContextValue = {
@@ -47,6 +49,11 @@ type OwnerRentalWizardContextValue = {
   refresh: () => Promise<void>;
   proposalBusy: boolean;
   actionBusy: boolean;
+  lifecycleGate: WizardLifecyclePromptGateState;
+  hasPendingLifecyclePrompt: boolean;
+  acknowledgeLifecyclePrompt: (id: WizardLifecyclePromptId) => Promise<void>;
+  confirmReturnCoordinationFromPrompt: () => Promise<void>;
+  dismissReturnCoordinationConfirmPrompt: () => void;
   openMessages: () => void;
   openWorkspaceDetails: (focus?: string) => void;
   goToResolvedNext: () => Promise<void>;
@@ -62,6 +69,9 @@ type OwnerRentalWizardContextValue = {
   confirmItemReady: () => Promise<boolean>;
   markOwnerImHere: () => Promise<boolean>;
   confirmHandoff: () => Promise<boolean>;
+  submitMeetupDayPickupExtension: (newPickupIso: string) => Promise<boolean>;
+  acceptMeetupDayPickupProposal: () => Promise<boolean>;
+  declineMeetupDayPickupProposal: () => Promise<boolean>;
 };
 
 const Ctx = createContext<OwnerRentalWizardContextValue | null>(null);
@@ -93,6 +103,7 @@ export function OwnerRentalWizardProvider({
   const [proposalBusy, setProposalBusy] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
   const lifecyclePromptId = lifecycleGate.id;
+  const hasPendingLifecyclePrompt = hasPendingWizardLifecyclePrompt(lifecycleGate);
 
   const openMessages = useCallback(() => {
     router.push({ pathname: '/chat/[id]', params: { id: ctx.rentalId } });
@@ -271,31 +282,9 @@ export function OwnerRentalWizardProvider({
 
   const completeReturnCoordination = useCallback(
     async (draft: WizardMeetupProposalDraft): Promise<boolean> => {
-      const returnTimeIso = draft.meetupTimeIso?.trim();
-      const returnLocation = draft.location.trim();
-      if (!returnTimeIso || !returnLocation) {
-        Alert.alert('Missing details', 'Choose a return location and time before continuing.');
-        return false;
-      }
-      setProposalBusy(true);
-      try {
-        const live = ctxRef.current;
-        const result = await saveReturnCoordinationToRental(getSupabase(), live.rental, {
-          returnTimeIso,
-          returnLocation,
-        });
-        if (!result.ok) {
-          Alert.alert('Could not save', result.message ?? 'Try again.');
-          return false;
-        }
-        await onRefresh();
-        await goToResolvedNext();
-        return true;
-      } finally {
-        setProposalBusy(false);
-      }
+      return submitCoordinateReturnProposal(draft);
     },
-    [goToResolvedNext, onRefresh]
+    [submitCoordinateReturnProposal]
   );
 
   const acceptPickupProposal = useCallback(async () => {
@@ -353,6 +342,94 @@ export function OwnerRentalWizardProvider({
   }, [goToOwnerStep, onRefresh]);
 
   const declineReturnProposal = useCallback(async () => {
+    setProposalBusy(true);
+    try {
+      const live = ctxRef.current;
+      const result = await declineRentalMeetupProposal(getSupabase(), live.rental, live.viewerUserId);
+      if (!result.ok) {
+        Alert.alert('Could not decline', result.message ?? 'Try again.');
+        return false;
+      }
+      await onRefresh();
+      return true;
+    } finally {
+      setProposalBusy(false);
+    }
+  }, [onRefresh]);
+
+  const confirmReturnCoordinationFromPrompt = useCallback(async () => {
+    if (lifecyclePromptId !== 'return_coordination_confirm_requested') return;
+    setProposalBusy(true);
+    try {
+      const ok = await acceptReturnProposal();
+      if (ok) onClearLifecyclePrompt?.();
+    } finally {
+      setProposalBusy(false);
+    }
+  }, [acceptReturnProposal, lifecyclePromptId, onClearLifecyclePrompt]);
+
+  const dismissReturnCoordinationConfirmPrompt = useCallback(() => {
+    if (lifecyclePromptId !== 'return_coordination_confirm_requested') return;
+    onClearLifecyclePrompt?.();
+  }, [lifecyclePromptId, onClearLifecyclePrompt]);
+
+  const submitMeetupDayPickupExtension = useCallback(
+    async (newPickupIso: string): Promise<boolean> => {
+      const live = ctxRef.current;
+      const input = buildMeetupDayPickupExtensionProposalInput(live, newPickupIso);
+      if (!input) {
+        Alert.alert('Missing details', 'Could not build pickup extension request.');
+        return false;
+      }
+      setProposalBusy(true);
+      try {
+        const result = await submitRentalMeetupProposal(
+          getSupabase(),
+          live.rental,
+          live.viewerUserId,
+          {
+            meetupTimeIso: input.meetupTimeIso,
+            returnTimeIso: input.returnTimeIso,
+            meetupLocation: input.meetupLocation,
+            proposalMeta: { phase: 'pickup' },
+          },
+          {
+            requestSchedulingMeta: live.requestSchedulingMeta,
+            scheduleHints: live.scheduleHints,
+            rentalTitle: live.displayTitle,
+          }
+        );
+        if (!result.ok) return false;
+        await setRentalOperationalState(getSupabase(), live.rentalId, 'pickup', 'running_late');
+        await onRefresh();
+        return true;
+      } finally {
+        setProposalBusy(false);
+      }
+    },
+    [onRefresh]
+  );
+
+  const acceptMeetupDayPickupProposal = useCallback(async (): Promise<boolean> => {
+    setProposalBusy(true);
+    try {
+      const live = ctxRef.current;
+      const result = await acceptRentalMeetupProposal(getSupabase(), live.rental, live.viewerUserId, {
+        itemTitle: live.displayTitle,
+      });
+      if (!result.ok) {
+        Alert.alert('Could not accept', result.message ?? 'Try again.');
+        return false;
+      }
+      await setRentalOperationalState(getSupabase(), live.rentalId, 'pickup', null);
+      await onRefresh();
+      return true;
+    } finally {
+      setProposalBusy(false);
+    }
+  }, [onRefresh]);
+
+  const declineMeetupDayPickupProposal = useCallback(async (): Promise<boolean> => {
     setProposalBusy(true);
     try {
       const live = ctxRef.current;
@@ -445,6 +522,11 @@ export function OwnerRentalWizardProvider({
     refresh: onRefresh,
     proposalBusy,
     actionBusy,
+    lifecycleGate,
+    hasPendingLifecyclePrompt,
+    acknowledgeLifecyclePrompt,
+    confirmReturnCoordinationFromPrompt,
+    dismissReturnCoordinationConfirmPrompt,
     openMessages,
     openWorkspaceDetails,
     goToResolvedNext,
@@ -460,6 +542,9 @@ export function OwnerRentalWizardProvider({
     confirmItemReady,
     markOwnerImHere,
     confirmHandoff,
+    submitMeetupDayPickupExtension,
+    acceptMeetupDayPickupProposal,
+    declineMeetupDayPickupProposal,
   };
 
   const bindings = useMemo(
@@ -475,6 +560,8 @@ export function OwnerRentalWizardProvider({
           lifecyclePromptId={lifecyclePromptId}
           acknowledgeLifecyclePrompt={(id) => void acknowledgeLifecyclePrompt(id)}
           openMessages={openMessages}
+          confirmReturnCoordinationFromPrompt={() => void confirmReturnCoordinationFromPrompt()}
+          dismissReturnCoordinationConfirmPrompt={dismissReturnCoordinationConfirmPrompt}
         />
         {children}
       </GuidedRentalWizardBindingsProvider>

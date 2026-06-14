@@ -5,18 +5,18 @@ import { Modal, Platform, StyleSheet, Text, View } from 'react-native';
 
 import { Pressable } from '@/components/Pressable';
 import { ui } from '@/constants/appUi';
+import {
+  TIMESTAMP_POSSESSION_PROOF_EXAMPLE_ACCESSIBILITY,
+  TIMESTAMP_POSSESSION_PROOF_EXAMPLE_PANEL_BODY,
+  TIMESTAMP_POSSESSION_PROOF_TILE_LABEL,
+  TIMESTAMP_POSSESSION_PROOF_REQUIREMENT,
+  TIMESTAMP_POSSESSION_PROOF_SECTION_SUB,
+} from '@/lib/timestampPossessionProofCopy';
 
 const PICKUP_VERIFICATION_EXAMPLE = require('@/assets/images/possession-verification-example.png');
 
-/** Same owner-facing copy as Pickup / Handoff Details → verification example panel (`app/rental/[id].tsx`). */
-const VERIFICATION_PANEL_TITLE = 'Live possession check';
-const VERIFICATION_PANEL_BODY =
-  "Take a fresh verification photo of the full item with your handwritten @username and today's date visible next to it.";
-const VERIFICATION_PANEL_MUTED =
-  'Confirms the item is currently with you, helps renters feel confident, and keeps the marketplace reliable.';
-
 const VERIFICATION_MODAL_CAPTION =
-  "Same idea as the sample: handwritten @username and today's date beside the item — a quick, human way to show what's in your hands for this rental.";
+  "Same idea as the sample: handwritten @username and today's date on a note beside the full item — proof you had it in hand for this offer.";
 
 export function MakeOfferVerificationRequiredAccordion() {
   const [expanded, setExpanded] = useState(false);
@@ -33,7 +33,7 @@ export function MakeOfferVerificationRequiredAccordion() {
       >
         <Ionicons name="shield-checkmark-outline" size={18} color={ui.textSecondary} />
         <View style={styles.titleBlock}>
-          <Text style={styles.title}>{VERIFICATION_PANEL_TITLE}</Text>
+          <Text style={styles.title}>{TIMESTAMP_POSSESSION_PROOF_TILE_LABEL}</Text>
           <Text style={styles.helper}>{expanded ? 'Tap to collapse' : 'Tap for requirements and example'}</Text>
         </View>
         <Ionicons
@@ -47,16 +47,16 @@ export function MakeOfferVerificationRequiredAccordion() {
         <View style={styles.body}>
           <View style={styles.examplePanel}>
             <View style={styles.exampleLeft}>
-              <Text style={styles.exampleTitle}>{VERIFICATION_PANEL_TITLE}</Text>
-              <Text style={styles.exampleBody}>{VERIFICATION_PANEL_BODY}</Text>
-              <Text style={styles.exampleMuted}>{VERIFICATION_PANEL_MUTED}</Text>
+              <Text style={styles.exampleTitle}>{TIMESTAMP_POSSESSION_PROOF_TILE_LABEL}</Text>
+              <Text style={styles.exampleBody}>{TIMESTAMP_POSSESSION_PROOF_REQUIREMENT}</Text>
+              <Text style={styles.exampleMuted}>{TIMESTAMP_POSSESSION_PROOF_SECTION_SUB}</Text>
             </View>
             <Pressable
               pressOpacityFeedback={false}
               onPress={() => setExampleModalVisible(true)}
               style={({ pressed }) => [styles.exampleImageWrap, pressed && styles.exampleImageWrapPressed]}
               accessibilityRole="button"
-              accessibilityLabel="View enlarged live possession check example"
+              accessibilityLabel={TIMESTAMP_POSSESSION_PROOF_EXAMPLE_ACCESSIBILITY}
             >
               <Image source={PICKUP_VERIFICATION_EXAMPLE} style={styles.exampleImage} contentFit="cover" />
               <View style={styles.exampleBadge}>

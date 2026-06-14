@@ -5,14 +5,18 @@ import {
   OWNER_PICKUP_REQUIRED_TIMESTAMP_MIN,
   type PickupPhotoLike,
 } from '@/lib/pickupVerificationPhotoBuckets';
+import {
+  CURRENT_CONDITION_PHOTOS_LABEL,
+  TIMESTAMP_POSSESSION_PROOF_TILE_LABEL,
+} from '@/lib/timestampPossessionProofCopy';
 
 export const OWNER_PICKUP_PREP_MANUAL_ITEM_ID = 'op-accessories';
 
 export const OWNER_PICKUP_PREP_CHECKLIST = [
   {
     id: 'prep-photos',
-    label: 'Upload verification photos',
-    detail: 'Item, serial, and live possession proof',
+    label: 'Upload pickup evidence photos',
+    detail: `${CURRENT_CONDITION_PHOTOS_LABEL}, serial, and ${TIMESTAMP_POSSESSION_PROOF_TILE_LABEL.toLowerCase()}`,
   },
   {
     id: OWNER_PICKUP_PREP_MANUAL_ITEM_ID,

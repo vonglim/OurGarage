@@ -43,7 +43,7 @@ export function RentalEvidenceThumbnail({
   const a11y =
     category != null && String(category).trim() !== ''
       ? category === 'timestamp_proof'
-        ? 'Evidence photo, verification photo'
+        ? 'Evidence photo, timestamp proof required'
         : `Evidence photo, ${String(category).replace(/_/g, ' ')}`
       : 'Evidence photo';
 

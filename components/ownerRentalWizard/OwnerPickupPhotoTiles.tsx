@@ -8,10 +8,12 @@ import type { PickupEvidencePhoto } from '@/lib/pickupEvidenceDisplay';
 import {
   bucketOwnerPickupPhotos,
   OWNER_ITEM_PHOTO_TARGET,
+  OWNER_PICKUP_REQUIRED_ITEM_MIN,
   OWNER_SERIAL_PHOTO_TARGET,
   OWNER_TIMESTAMP_PROOF_TARGET,
   type PickupPhotoCategory,
 } from '@/lib/pickupVerificationPhotoBuckets';
+import { TIMESTAMP_POSSESSION_PROOF_TILE_LABEL, CURRENT_CONDITION_PHOTOS_LABEL, OPERATIONAL_VIDEO_LABEL } from '@/lib/timestampPossessionProofCopy';
 
 type TileDef = {
   category: PickupPhotoCategory;
@@ -39,11 +41,11 @@ export function OwnerPickupPhotoTiles({
   const tiles: TileDef[] = [
     {
       category: 'item',
-      label: 'Item photos',
+      label: CURRENT_CONDITION_PHOTOS_LABEL,
       icon: 'camera-outline',
       target: OWNER_ITEM_PHOTO_TARGET,
       count: buckets.item.length,
-      complete: buckets.item.length >= 1,
+      complete: buckets.item.length >= OWNER_PICKUP_REQUIRED_ITEM_MIN,
     },
     {
       category: 'serial',
@@ -55,7 +57,7 @@ export function OwnerPickupPhotoTiles({
     },
     {
       category: 'timestamp_proof',
-      label: 'Live possession',
+      label: TIMESTAMP_POSSESSION_PROOF_TILE_LABEL,
       icon: 'shield-checkmark-outline',
       target: OWNER_TIMESTAMP_PROOF_TARGET,
       count: buckets.timestampProof.length,
@@ -63,19 +65,19 @@ export function OwnerPickupPhotoTiles({
     },
     {
       category: 'additional',
-      label: 'Video (Optional)',
+      label: OPERATIONAL_VIDEO_LABEL,
       subtitle: 'Show the item operating before pickup',
       icon: 'videocam-outline',
       target: 0,
       count: buckets.additional.length,
-      complete: buckets.additional.length > 0,
+      complete: buckets.additional.length >= 1,
     },
   ];
 
   return (
     <View style={styles.wrap}>
       <Text style={styles.helper}>
-        Tap a tile to add evidence for this rental. Optional video can show the item operating before pickup.
+        Tap a tile to add evidence for this rental. A short operating video is optional but helpful.
       </Text>
       <View style={styles.row}>
         {tiles.map((tile) => (

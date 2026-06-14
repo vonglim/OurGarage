@@ -12,6 +12,7 @@ import {
   bucketOwnerPickupPhotos,
   type PickupPhotoCategory,
 } from '@/lib/pickupVerificationPhotoBuckets';
+import { pickupPhotoCategoryDisplayLabel, OPERATIONAL_VIDEO_LABEL } from '@/lib/timestampPossessionProofCopy';
 
 export type PickupEvidenceReviewModalProps = {
   visible: boolean;
@@ -26,17 +27,7 @@ export type PickupEvidenceReviewModalProps = {
 };
 
 function slideLabel(category: PickupPhotoCategory | null | undefined, index: number, total: number): string {
-  const name =
-    category === 'item'
-      ? 'Item'
-      : category === 'serial'
-        ? 'Serial'
-        : category === 'timestamp_proof'
-          ? 'Live check'
-          : category === 'additional'
-            ? 'Video (Optional)'
-            : 'Photo';
-  return `${name} · ${index + 1} of ${total}`;
+  return `${pickupPhotoCategoryDisplayLabel(category)} · ${index + 1} of ${total}`;
 }
 
 export function PickupEvidenceReviewModal({
@@ -154,7 +145,7 @@ export function PickupEvidenceReviewModal({
       <RentalEvidenceVideoPlaybackModal
         visible={videoOpen}
         uri={videoUri}
-        title="Video (Optional)"
+        title={OPERATIONAL_VIDEO_LABEL}
         onClose={() => {
           setVideoOpen(false);
           setVideoUri(null);

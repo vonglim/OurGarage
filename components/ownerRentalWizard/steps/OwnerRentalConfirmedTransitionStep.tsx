@@ -22,7 +22,7 @@ const OWNER_CONFIRMED_JOURNEY = [
   },
   {
     icon: 'camera-outline' as const,
-    title: 'Upload verification photos',
+    title: 'Upload timestamp proof (Required)',
     body: "Document the item's condition before pickup.",
   },
   {

@@ -15,6 +15,8 @@ export function WizardLifecyclePromptHost() {
       lifecyclePromptId={w.lifecyclePromptId}
       acknowledgeLifecyclePrompt={w.acknowledgeLifecyclePrompt}
       openMessages={w.openMessages}
+      confirmReturnCoordinationFromPrompt={w.confirmReturnCoordinationFromPrompt}
+      dismissReturnCoordinationConfirmPrompt={w.dismissReturnCoordinationConfirmPrompt}
     />
   );
 }

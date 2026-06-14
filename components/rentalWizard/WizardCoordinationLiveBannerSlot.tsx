@@ -35,7 +35,7 @@ export function WizardCoordinationLiveBannerSlot({
   const details = useMemo(() => {
     if (!bindings?.ctx || !banner || banner.lane !== lane) return null;
     if (!isProposalReceivedKind(banner.kind)) return null;
-    return proposalBannerDetails({ ctx: bindings.ctx, lane });
+    return proposalBannerDetails({ ctx: bindings.ctx, phase: lane });
   }, [banner, bindings?.ctx, lane]);
 
   useEffect(() => {

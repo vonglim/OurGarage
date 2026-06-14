@@ -1,3 +1,7 @@
+import {
+  TIMESTAMP_POSSESSION_PROOF_CHECKLIST_RENTER,
+  TIMESTAMP_POSSESSION_PROOF_CHECKLIST_RENTER_AUTO,
+} from '@/lib/timestampPossessionProofCopy';
 import type { RentalVerificationRow } from '@/lib/rentalVerification';
 import { mergeChecklistMapsFromRows } from '@/lib/rentalVerification';
 
@@ -36,7 +40,7 @@ export const RENTER_PICKUP_ITEMS: readonly PickupChecklistItemDef[] = [
   },
   {
     id: 'rp-verify-note',
-    label: 'Confirm @username + date on the live possession photo',
+    label: TIMESTAMP_POSSESSION_PROOF_CHECKLIST_RENTER,
     required: true,
     control: 'auto',
   },
@@ -98,7 +102,7 @@ export function manualRenterPickupMapOnly(map: Record<string, boolean>): Record<
 
 export function pickupAutoRowHelper(itemId: string): string | undefined {
   if (itemId === 'rp-review-photos') return 'Automatically checked when you view owner photos';
-  if (itemId === 'rp-verify-note') return 'Automatically checked when you open the live possession photo';
+  if (itemId === 'rp-verify-note') return TIMESTAMP_POSSESSION_PROOF_CHECKLIST_RENTER_AUTO;
   return undefined;
 }
 

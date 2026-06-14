@@ -49,12 +49,20 @@ function dateRangeLabel(row: PendingListingRentalRow): string {
 type Props = {
   row: PendingListingRentalRow;
   busy?: boolean;
+  highlighted?: boolean;
   onApprove: () => void;
   onDecline: () => void;
   onMessage?: () => void;
 };
 
-export function ActivityOwnerBookingRequestCard({ row, busy, onApprove, onDecline, onMessage }: Props) {
+export function ActivityOwnerBookingRequestCard({
+  row,
+  busy,
+  highlighted = false,
+  onApprove,
+  onDecline,
+  onMessage,
+}: Props) {
   const snapshot = row.listing_snapshot;
   const title = snapshot?.title?.trim() || row.listings?.title?.trim() || 'Listing';
   const hero = snapshot?.hero_image_url?.trim() ?? null;
@@ -71,8 +79,10 @@ export function ActivityOwnerBookingRequestCard({ row, busy, onApprove, onDeclin
   }, [priceNum]);
 
   return (
-    <ExpandableBookingCardShell
-      expandedContent={
+    <View style={highlighted ? styles.highlightWrap : undefined}>
+      <ExpandableBookingCardShell
+        defaultExpanded={highlighted}
+        expandedContent={
         <>
           <BookingDetailRow label="Area" value={snapshot?.service_area?.trim() || '—'} />
           <BookingDetailRow label="Handoff" value={snapshot?.handoff_summary?.trim() || '—'} />
@@ -145,10 +155,17 @@ export function ActivityOwnerBookingRequestCard({ row, busy, onApprove, onDeclin
         </View>
       </View>
     </ExpandableBookingCardShell>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  highlightWrap: {
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: '#F59E0B',
+    marginBottom: 4,
+  },
   body: { padding: 12 },
   topRow: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
   thumb: { width: 56, height: 56, borderRadius: 10, backgroundColor: '#E2E8F0' },

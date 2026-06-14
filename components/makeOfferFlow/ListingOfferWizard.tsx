@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ScrollView } from 'react-native';
-import { Image, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, StyleSheet, Text, TextInput, View, Alert } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
 
@@ -22,6 +22,13 @@ import {
 import type { ListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
 import { formatIsoDateMedium } from '@/lib/listingAvailabilityDates';
 import { formatUsd, parseMoneyToNumber, sanitizeMoneyDigits } from '@/lib/money';
+import {
+  defaultReceivePreferenceForOwnerHandoff,
+  listingHandoffMismatchPromptMessage,
+  parseOwnerHandoffFromListing,
+  renterReceivePreferenceLabel,
+  renterReceivePreferenceMatchesOwner,
+} from '@/lib/listingOwnerHandoffPreference';
 import { submitInitialListingOffer } from '@/lib/submitListingOffer';
 import { showFeedbackToast } from '@/store/feedbackToastStore';
 import type { ToolListing } from '@/store/listingsStore';
@@ -43,6 +50,7 @@ const RECEIVE_OPTIONS: readonly ThreeLineOption<ReceivePreference>[] = [
 ];
 
 function seedDraft(listing: ToolListing): ListingRenterOfferDraft {
+  const ownerHandoffMode = parseOwnerHandoffFromListing(listing);
   const rv =
     listing.meta?.marketValue != null && Number.isFinite(listing.meta.marketValue)
       ? listing.meta.marketValue
@@ -52,7 +60,7 @@ function seedDraft(listing: ToolListing): ListingRenterOfferDraft {
   return {
     rentalStartIso: null,
     rentalEndIso: null,
-    receivePreference: 'either',
+    receivePreference: defaultReceivePreferenceForOwnerHandoff(ownerHandoffMode),
     deliveryBudgetMax: '',
     dailyOfferRate: String(listing.price > 0 ? listing.price : ''),
     replacementValue: rv > 0 ? String(rv) : '',
@@ -109,6 +117,25 @@ export function ListingOfferWizard({
   const updateDraft = useCallback((patch: Partial<ListingRenterOfferDraft>) => {
     setDraft((prev) => ({ ...prev, ...patch }));
   }, []);
+
+  const ownerHandoffMode = useMemo(() => parseOwnerHandoffFromListing(listing), [listing]);
+
+  const onReceivePreferenceChange = useCallback(
+    (key: ReceivePreference) => {
+      if (
+        ownerHandoffMode != null &&
+        ownerHandoffMode !== 'both' &&
+        !renterReceivePreferenceMatchesOwner(ownerHandoffMode, key)
+      ) {
+        Alert.alert(
+          'Handoff preference',
+          listingHandoffMismatchPromptMessage(ownerHandoffMode, renterReceivePreferenceLabel(key))
+        );
+      }
+      updateDraft({ receivePreference: key });
+    },
+    [ownerHandoffMode, updateDraft]
+  );
 
   const onChangeDates = useCallback((start: string | null, end: string | null) => {
     setDraft((prev) => ({ ...prev, rentalStartIso: start, rentalEndIso: end }));
@@ -235,7 +262,7 @@ export function ListingOfferWizard({
           <ThreeLinePreferenceCards
             options={RECEIVE_OPTIONS}
             value={draft.receivePreference}
-            onChange={(key) => updateDraft({ receivePreference: key })}
+            onChange={onReceivePreferenceChange}
           />
           {draft.receivePreference === 'delivery' ? (
             <View style={styles.budgetBlock}>

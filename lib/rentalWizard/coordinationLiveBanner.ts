@@ -69,7 +69,7 @@ export function detectCoordinationAcceptanceArming(input: {
   next: RentalWizardContext;
   viewerUserId: string;
   pathname: string;
-}): 'pickup_coordination_accepted' | 'return_coordination_accepted' | null {
+}): 'pickup_coordination_accepted' | 'return_coordination_accepted' | 'return_coordination_confirm_requested' | null {
   const me = input.viewerUserId.trim();
   if (isOnCoordinatePickupPath(input.pathname)) {
     const pickupEval = evaluatePickupCoordinationAcceptedPrompt(
@@ -86,6 +86,13 @@ export function detectCoordinationAcceptanceArming(input: {
       me
     );
     if (returnEval.show) return 'return_coordination_accepted';
+
+    if (
+      !input.next.seenTransitions.has('return_confirmed_seen') &&
+      counterpartyProposedLane(input.prev, input.next, 'return')
+    ) {
+      return 'return_coordination_confirm_requested';
+    }
   }
   return null;
 }

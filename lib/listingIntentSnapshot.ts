@@ -1,3 +1,4 @@
+import { resolveListingHandoffSummaryFromListing } from '@/lib/listingOwnerHandoffPreference';
 import type { ToolListing } from '@/store/listingsStore';
 
 /**
@@ -48,7 +49,7 @@ export function buildListingIntentSnapshot(
 ): ListingIntentSnapshot {
   const hero = normalizedImageUrls.map((u) => u.trim()).filter(Boolean)[0] ?? null;
   const meta = listing.meta;
-  const handoff = meta?.handoffSummary?.trim() ?? null;
+  const handoff = resolveListingHandoffSummaryFromListing(listing);
   const deliveryGuess =
     handoff != null
       ? /\bdeliver/i.test(handoff) || /\bmeet/i.test(handoff) || /\bring/i.test(handoff)

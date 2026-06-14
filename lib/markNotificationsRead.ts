@@ -23,7 +23,7 @@ export async function markAllServerNotificationsAsReadForCurrentUser(): Promise<
   }
 }
 
-/** Marks all non-message notifications read; message notifications stay unread until thread open. */
+/** Marks actionable alerts read; message notifications stay unread until thread open. */
 export async function markAllServerNonMessageNotificationsAsReadForCurrentUser(): Promise<void> {
   if (!isSupabaseConfigured()) return;
   const me = getAuthUserIdSync().trim();
@@ -31,12 +31,16 @@ export async function markAllServerNonMessageNotificationsAsReadForCurrentUser()
     return;
   }
   const supabase = getSupabase();
-  const { error } = await supabase
+  let query = supabase
     .from('notifications')
     .update({ read: true })
     .eq('user_id', me)
     .eq('read', false)
     .neq('type', 'message');
+  for (const actionableType of ['rental_request', 'rental_declined'] as const) {
+    query = query.neq('type', actionableType);
+  }
+  const { error } = await query;
   if (error != null && __DEV__) {
     console.warn('[notifications] bulk non-message mark read failed:', error.message);
   }

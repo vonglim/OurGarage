@@ -2,10 +2,10 @@ import { useRouter } from 'expo-router';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 
+import { RentalAgreementReviewSheet } from '@/components/rentalWizard/modals/RentalAgreementReviewSheet';
 import { GuidedRentalWizardBindingsProvider } from '@/components/rentalWizard/GuidedRentalWizardBindingsContext';
 import { WizardLifecyclePromptHost } from '@/components/rentalWizard/WizardLifecyclePromptHost';
 import {
-  clearCoordinateReturnDraft,
   markWizardTransitionSeen,
   resolveRentalWizardDestination,
   updateWizardProgress,
@@ -19,8 +19,9 @@ import {
   resolveAcceptedRentalPickupIso,
 } from '@/lib/rentalWizard/acceptedPickupCoordination';
 import { submitRentalMeetupProposal } from '@/lib/rentalWizard/submitRentalMeetupProposal';
-import { acceptRentalMeetupProposal } from '@/lib/rentalMeetupProposalLifecycle';
-import { saveReturnCoordinationToRental } from '@/lib/rentalWizard/saveReturnCoordination';
+import { acceptRentalMeetupProposal, declineRentalMeetupProposal } from '@/lib/rentalMeetupProposalLifecycle';
+import { buildMeetupDayPickupExtensionProposalInput } from '@/lib/meetupDayLateExtension';
+import { setRentalOperationalState } from '@/lib/rentalOperationalAttention';
 import {
   resolveProposalReturnIsoForPickup,
   viewerLastMeetupSubmissionPatch,
@@ -54,11 +55,17 @@ import {
   patchLiabilityDisclosuresOnCtx,
   patchSecurityHoldOnCtx,
 } from '@/lib/rentalAuthorization/patchAuthorizationCtx';
+import { INSPECTION_INCOMPLETE_AUTH_MESSAGE } from '@/lib/rentalAuthorization/bindingAuthorizationGate';
 import { resolveAuthorizationWizardStep } from '@/lib/rentalAuthorization/resolveAuthorizationWizardStep';
+import { canAccessBindingAuthorizationForContext } from '@/lib/pickupHandoffCompletion';
 import { calculatePreauthAmount } from '@/lib/rentalProtection';
 import { normalizeLegalName } from '@/lib/legalName';
 import { evaluatePickupInspectionFlow } from '@/lib/pickupInspectionFlow';
 import { persistRenterConfirmedPickupReceipt } from '@/lib/pickupHandoffMilestones';
+import {
+  buildPickupInspectionCompletionAudit,
+  logPickupInspectionCompletionAudit,
+} from '@/lib/pickupInspectionCompletionAudit';
 import {
   deriveWizardRenterViewerFlags,
   manualRenterPickupMapOnly,
@@ -86,6 +93,8 @@ type RentalWizardContextValue = {
   /** @deprecated Use hasPendingLifecyclePrompt — same gate blocks step correction. */
   holdStepAutoCorrection: boolean;
   acknowledgeLifecyclePrompt: (id: WizardLifecyclePromptId) => Promise<void>;
+  confirmReturnCoordinationFromPrompt: () => Promise<void>;
+  dismissReturnCoordinationConfirmPrompt: () => void;
   goToWizardStep: (step: RentalWizardStep) => void;
   openMessages: () => void;
   openAdvancedDetails: (focus?: string) => void;
@@ -113,9 +122,17 @@ type RentalWizardContextValue = {
   signAndActivateRental: (legalName: string) => Promise<boolean>;
   activateRentalStep: () => Promise<boolean>;
   openAuthorizationFlow: () => void;
+  openAgreementPreview: () => void;
+  agreementPreviewOpen: boolean;
+  closeAgreementPreview: () => void;
   beginRentalAgreementIntro: () => Promise<void>;
   markPhotosApproved: () => Promise<void>;
   markPickupEvidenceReviewOpened: () => Promise<void>;
+  pickupEvidenceReviewAfterPromptAck: boolean;
+  clearPickupEvidenceReviewAfterPromptAck: () => void;
+  submitMeetupDayPickupExtension: (newPickupIso: string) => Promise<boolean>;
+  acceptMeetupDayPickupProposal: () => Promise<boolean>;
+  declineMeetupDayPickupProposal: () => Promise<boolean>;
 };
 
 const Ctx = createContext<RentalWizardContextValue | null>(null);
@@ -153,6 +170,28 @@ export function RentalWizardProvider({
   const [proposalBusy, setProposalBusy] = useState(false);
   const [arrivalActionBusy, setArrivalActionBusy] = useState(false);
   const [authorizationBusy, setAuthorizationBusy] = useState(false);
+  const [agreementPreviewOpen, setAgreementPreviewOpen] = useState(false);
+  const [pickupEvidenceReviewAfterPromptAck, setPickupEvidenceReviewAfterPromptAck] = useState(false);
+
+  const clearPickupEvidenceReviewAfterPromptAck = useCallback(() => {
+    setPickupEvidenceReviewAfterPromptAck(false);
+  }, []);
+
+  const requireInspectionForBindingAuthorization = useCallback((): boolean => {
+    const live = ctxRef.current;
+    if (!live) return false;
+    if (canAccessBindingAuthorizationForContext(live)) return true;
+    Alert.alert('Inspection required', INSPECTION_INCOMPLETE_AUTH_MESSAGE);
+    return false;
+  }, []);
+
+  const openAgreementPreview = useCallback(() => {
+    setAgreementPreviewOpen(true);
+  }, []);
+
+  const closeAgreementPreview = useCallback(() => {
+    setAgreementPreviewOpen(false);
+  }, []);
 
   const navigateAuthorizationNext = useCallback(async () => {
     await onRefresh();
@@ -224,7 +263,24 @@ export function RentalWizardProvider({
   const goToResolvedNext = navigateToResolvedDestination;
 
   const confirmPickupReceipt = useCallback(async () => {
-    if (blockRedirectForLifecyclePrompt('confirmPickupReceipt')) return;
+    const lifecycleBlocked = hasPendingLifecyclePrompt;
+    logPickupInspectionCompletionAudit(
+      buildPickupInspectionCompletionAudit({
+        ctx,
+        surface: 'confirmPickupReceipt_entry',
+        lifecyclePromptBlocking: lifecycleBlocked,
+      })
+    );
+    if (blockRedirectForLifecyclePrompt('confirmPickupReceipt')) {
+      logPickupInspectionCompletionAudit(
+        buildPickupInspectionCompletionAudit({
+          ctx,
+          surface: 'confirmPickupReceipt_blocked_lifecycle_prompt',
+        }),
+        { exit: 'lifecycle_prompt' }
+      );
+      return;
+    }
     const evidenceReviewed = Boolean(
       ctx.wizardProgress.renter_approved_pickup_photos_at?.trim() ||
         ctx.wizardProgress.renter_pickup_evidence_review_opened_at?.trim()
@@ -252,6 +308,16 @@ export function RentalWizardProvider({
       pickupRenterConfirmed: ctx.pickupAck.renter,
     });
     if (!inspection.receiptButtonEnabled) {
+      logPickupInspectionCompletionAudit(
+        buildPickupInspectionCompletionAudit({
+          ctx,
+          surface: 'confirmPickupReceipt_provider_gate_failed',
+        }),
+        {
+          exit: 'provider_receiptButtonEnabled_false',
+          providerInspectionPhase: inspection.inspectionFlowPhase,
+        }
+      );
       Alert.alert(
         'Finish your inspection',
         !evidenceReviewed
@@ -260,6 +326,13 @@ export function RentalWizardProvider({
       );
       return;
     }
+    logPickupInspectionCompletionAudit(
+      buildPickupInspectionCompletionAudit({
+        ctx,
+        surface: 'confirmPickupReceipt_before_persist',
+      }),
+      { exit: 'persist_start' }
+    );
     const result = await persistRenterConfirmedPickupReceipt(
       getSupabase(),
       ctx.rentalId,
@@ -267,16 +340,39 @@ export function RentalWizardProvider({
       ctx.viewerUserId
     );
     if (!result.ok) {
+      logPickupInspectionCompletionAudit(
+        buildPickupInspectionCompletionAudit({
+          ctx,
+          surface: 'confirmPickupReceipt_persist_failed',
+        }),
+        { exit: 'persist_error', error: result.error }
+      );
       Alert.alert('Could not confirm receipt', result.error);
       return;
     }
     await onRefresh();
+    logPickupInspectionCompletionAudit(
+      buildPickupInspectionCompletionAudit({
+        ctx: ctxRef.current ?? ctx,
+        surface: 'confirmPickupReceipt_after_refresh',
+      }),
+      { exit: 'navigate_start', pickupAckAfterPersist: result.pickupAck }
+    );
+    if (blockRedirectForLifecyclePrompt('goToResolvedNext')) {
+      logPickupInspectionCompletionAudit(
+        buildPickupInspectionCompletionAudit({
+          ctx: ctxRef.current ?? ctx,
+          surface: 'confirmPickupReceipt_nav_blocked_lifecycle_prompt',
+        }),
+        { exit: 'nav_blocked_lifecycle_prompt' }
+      );
+      return;
+    }
     await navigateToResolvedDestination();
   }, [
     blockRedirectForLifecyclePrompt,
-    ctx.rental.owner_user_id,
-    ctx.rentalId,
-    ctx.viewerUserId,
+    ctx,
+    hasPendingLifecyclePrompt,
     navigateToResolvedDestination,
     onRefresh,
   ]);
@@ -294,6 +390,11 @@ export function RentalWizardProvider({
         logWizardNotificationPrompt(ctx.rentalId, 'notification_prompt_continue', { promptId: id });
         await onRefresh();
         goToWizardStep('transition_pickup_confirmed');
+        return;
+      }
+      if (id === 'pickup_evidence_ready') {
+        await onRefresh();
+        setPickupEvidenceReviewAfterPromptAck(true);
         return;
       }
       if (id === 'return_coordination_accepted') {
@@ -401,6 +502,78 @@ export function RentalWizardProvider({
     }
   }, [blockRedirectForLifecyclePrompt, ctx.displayTitle, ctx.rental, ctx.viewerUserId, goToWizardStep, onRefresh]);
 
+  const submitMeetupDayPickupExtension = useCallback(
+    async (newPickupIso: string): Promise<boolean> => {
+      const live = ctxRef.current;
+      const input = buildMeetupDayPickupExtensionProposalInput(live, newPickupIso);
+      if (!input) {
+        Alert.alert('Missing details', 'Could not build pickup extension request.');
+        return false;
+      }
+      setProposalBusy(true);
+      try {
+        const result = await submitRentalMeetupProposal(
+          getSupabase(),
+          live.rental,
+          live.viewerUserId,
+          {
+            meetupTimeIso: input.meetupTimeIso,
+            returnTimeIso: input.returnTimeIso,
+            meetupLocation: input.meetupLocation,
+            proposalMeta: { phase: 'pickup' },
+          },
+          {
+            requestSchedulingMeta: live.requestSchedulingMeta,
+            scheduleHints: live.scheduleHints,
+            rentalTitle: live.displayTitle,
+          }
+        );
+        if (!result.ok) return false;
+        await setRentalOperationalState(getSupabase(), live.rentalId, 'pickup', 'running_late');
+        await onRefresh();
+        return true;
+      } finally {
+        setProposalBusy(false);
+      }
+    },
+    [onRefresh]
+  );
+
+  const acceptMeetupDayPickupProposal = useCallback(async (): Promise<boolean> => {
+    setProposalBusy(true);
+    try {
+      const live = ctxRef.current;
+      const result = await acceptRentalMeetupProposal(getSupabase(), live.rental, live.viewerUserId, {
+        itemTitle: live.displayTitle,
+      });
+      if (!result.ok) {
+        Alert.alert('Could not accept pickup time', result.message ?? 'Please try again.');
+        return false;
+      }
+      await setRentalOperationalState(getSupabase(), live.rentalId, 'pickup', null);
+      await onRefresh();
+      return true;
+    } finally {
+      setProposalBusy(false);
+    }
+  }, [onRefresh]);
+
+  const declineMeetupDayPickupProposal = useCallback(async (): Promise<boolean> => {
+    setProposalBusy(true);
+    try {
+      const live = ctxRef.current;
+      const result = await declineRentalMeetupProposal(getSupabase(), live.rental, live.viewerUserId);
+      if (!result.ok) {
+        Alert.alert('Could not decline pickup time', result.message ?? 'Please try again.');
+        return false;
+      }
+      await onRefresh();
+      return true;
+    } finally {
+      setProposalBusy(false);
+    }
+  }, [onRefresh]);
+
   const submitCoordinateReturnProposal = useCallback(
     async (draft: WizardMeetupProposalDraft): Promise<boolean> => {
       const returnTimeIso = draft.meetupTimeIso?.trim();
@@ -464,36 +637,34 @@ export function RentalWizardProvider({
 
   const completeReturnCoordination = useCallback(
     async (draft: WizardMeetupProposalDraft): Promise<boolean> => {
-      const returnTimeIso = draft.meetupTimeIso?.trim();
-      const returnLocation = draft.location.trim();
-      if (!returnTimeIso || !returnLocation) {
-        Alert.alert('Missing details', 'Choose a return location and time before continuing.');
-        return false;
-      }
-      setProposalBusy(true);
-      try {
-        const result = await saveReturnCoordinationToRental(getSupabase(), ctx.rental, {
-          returnTimeIso,
-          returnLocation,
-        });
-        if (!result.ok) {
-          Alert.alert('Could not save return details', result.message ?? 'Please try again.');
-          return false;
-        }
-        const at = new Date().toISOString();
-        await clearCoordinateReturnDraft(ctx.rentalId, ctx.viewerUserId, {
-          pickup_return_coordination_ack_at: at,
-        });
-        ctx.wizardProgress.pickup_return_coordination_ack_at = at;
-        delete ctx.wizardProgress.coordinate_return_draft;
-        await onRefresh();
-        return true;
-      } finally {
-        setProposalBusy(false);
-      }
+      return submitCoordinateReturnProposal(draft);
     },
-    [acknowledgeReturnCoordination, ctx, onRefresh]
+    [submitCoordinateReturnProposal]
   );
+
+  const confirmReturnCoordinationFromPrompt = useCallback(async () => {
+    if (lifecyclePromptId !== 'return_coordination_confirm_requested') return;
+    setProposalBusy(true);
+    try {
+      const result = await acceptRentalMeetupProposal(getSupabase(), ctx.rental, ctx.viewerUserId, {
+        itemTitle: ctx.displayTitle,
+      });
+      if (!result.ok) {
+        Alert.alert('Could not confirm return details', result.message ?? 'Please try again.');
+        return;
+      }
+      onClearLifecyclePrompt();
+      await onRefresh();
+      goToWizardStep('transition_return_confirmed');
+    } finally {
+      setProposalBusy(false);
+    }
+  }, [ctx, goToWizardStep, lifecyclePromptId, onClearLifecyclePrompt, onRefresh]);
+
+  const dismissReturnCoordinationConfirmPrompt = useCallback(() => {
+    if (lifecyclePromptId !== 'return_coordination_confirm_requested') return;
+    onClearLifecyclePrompt();
+  }, [lifecyclePromptId, onClearLifecyclePrompt]);
 
   const toggleRenterPickupChecklistItem = useCallback(
     async (itemId: string) => {
@@ -639,6 +810,10 @@ export function RentalWizardProvider({
   const openAuthorizationFlow = useCallback(() => {
     const live = ctxRef.current;
     if (!live) return;
+    if (!canAccessBindingAuthorizationForContext(live)) {
+      setAgreementPreviewOpen(true);
+      return;
+    }
     const step = resolveAuthorizationWizardStep(live);
     router.replace(
       wizardPathForStep(live.rentalId, step) as `/rental-wizard/${string}/s/${string}`
@@ -648,6 +823,10 @@ export function RentalWizardProvider({
   const beginRentalAgreementIntro = useCallback(async () => {
     const live = ctxRef.current;
     if (!live) return;
+    if (!canAccessBindingAuthorizationForContext(live)) {
+      setAgreementPreviewOpen(true);
+      return;
+    }
     const at = new Date().toISOString();
     await updateWizardProgress(live.rentalId, live.viewerUserId, {
       rental_agreement_intro_seen_at: at,
@@ -662,6 +841,7 @@ export function RentalWizardProvider({
 
   const completeRentalAgreementStep = useCallback(
     async (input: { equipmentConditionAcknowledged: boolean }): Promise<boolean> => {
+      if (!requireInspectionForBindingAuthorization()) return false;
       if (!input.equipmentConditionAcknowledged) {
         Alert.alert(
           'Condition acknowledgment required',
@@ -700,10 +880,11 @@ export function RentalWizardProvider({
         setAuthorizationBusy(false);
       }
     },
-    [onRefresh, router]
+    [onRefresh, requireInspectionForBindingAuthorization, router]
   );
 
   const completeUnifiedAgreementReview = useCallback(async (): Promise<boolean> => {
+    if (!requireInspectionForBindingAuthorization()) return false;
     setAuthorizationBusy(true);
     try {
       const live = ctxRef.current;
@@ -742,10 +923,11 @@ export function RentalWizardProvider({
     } finally {
       setAuthorizationBusy(false);
     }
-  }, [onRefresh, router]);
+  }, [onRefresh, requireInspectionForBindingAuthorization, router]);
 
   const completeLiabilityDisclosuresStep = useCallback(
     async (input: LiabilityDisclosureInput): Promise<boolean> => {
+      if (!requireInspectionForBindingAuthorization()) return false;
       setAuthorizationBusy(true);
       try {
         const live = ctxRef.current;
@@ -771,11 +953,12 @@ export function RentalWizardProvider({
         setAuthorizationBusy(false);
       }
     },
-    [onRefresh, router]
+    [onRefresh, requireInspectionForBindingAuthorization, router]
   );
 
   const authorizeSecurityHoldStep = useCallback(
     async (replacementValue: number): Promise<boolean> => {
+      if (!requireInspectionForBindingAuthorization()) return false;
       setAuthorizationBusy(true);
       try {
         const live = ctxRef.current;
@@ -807,11 +990,12 @@ export function RentalWizardProvider({
         setAuthorizationBusy(false);
       }
     },
-    [onRefresh, router]
+    [onRefresh, requireInspectionForBindingAuthorization, router]
   );
 
   const submitDigitalSignatureStep = useCallback(
     async (legalName: string): Promise<boolean> => {
+      if (!requireInspectionForBindingAuthorization()) return false;
       setAuthorizationBusy(true);
       try {
         const live = ctxRef.current;
@@ -858,10 +1042,11 @@ export function RentalWizardProvider({
         setAuthorizationBusy(false);
       }
     },
-    [onRefresh, router]
+    [onRefresh, requireInspectionForBindingAuthorization, router]
   );
 
   const activateRentalStep = useCallback(async (): Promise<boolean> => {
+    if (!requireInspectionForBindingAuthorization()) return false;
     setAuthorizationBusy(true);
     try {
       const rentalId = ctxRef.current.rentalId;
@@ -884,10 +1069,11 @@ export function RentalWizardProvider({
     } finally {
       setAuthorizationBusy(false);
     }
-  }, [onRefresh, router]);
+  }, [onRefresh, requireInspectionForBindingAuthorization, router]);
 
   const signAndActivateRental = useCallback(
     async (legalName: string): Promise<boolean> => {
+      if (!requireInspectionForBindingAuthorization()) return false;
       setAuthorizationBusy(true);
       try {
         const live = ctxRef.current;
@@ -940,7 +1126,7 @@ export function RentalWizardProvider({
         setAuthorizationBusy(false);
       }
     },
-    [onRefresh, router]
+    [onRefresh, requireInspectionForBindingAuthorization, router]
   );
 
   const markPickupEvidenceReviewOpened = useCallback(async () => {
@@ -967,7 +1153,7 @@ export function RentalWizardProvider({
     if (!ctx.pickupEvidenceReadiness.renterEvidenceReady) {
       Alert.alert(
         'Photos not ready',
-        'The owner still needs to finish uploading item, serial, and live possession proof photos.'
+        'The owner still needs item, serial, and timestamp proof (Required).'
       );
       return;
     }
@@ -994,6 +1180,8 @@ export function RentalWizardProvider({
       hasPendingLifecyclePrompt,
       holdStepAutoCorrection: hasPendingLifecyclePrompt,
       acknowledgeLifecyclePrompt,
+      confirmReturnCoordinationFromPrompt,
+      dismissReturnCoordinationConfirmPrompt,
       goToWizardStep,
       openMessages,
       openAdvancedDetails,
@@ -1019,9 +1207,17 @@ export function RentalWizardProvider({
       signAndActivateRental,
       activateRentalStep,
       openAuthorizationFlow,
+      openAgreementPreview,
+      agreementPreviewOpen,
+      closeAgreementPreview,
       beginRentalAgreementIntro,
       markPhotosApproved,
       markPickupEvidenceReviewOpened,
+      pickupEvidenceReviewAfterPromptAck,
+      clearPickupEvidenceReviewAfterPromptAck,
+      submitMeetupDayPickupExtension,
+      acceptMeetupDayPickupProposal,
+      declineMeetupDayPickupProposal,
     }),
     [
       ctx,
@@ -1029,10 +1225,13 @@ export function RentalWizardProvider({
       proposalBusy,
       arrivalActionBusy,
       authorizationBusy,
+      agreementPreviewOpen,
       lifecycleGate,
       lifecyclePromptId,
       hasPendingLifecyclePrompt,
       acknowledgeLifecyclePrompt,
+      confirmReturnCoordinationFromPrompt,
+      dismissReturnCoordinationConfirmPrompt,
       goToWizardStep,
       openMessages,
       openAdvancedDetails,
@@ -1056,9 +1255,16 @@ export function RentalWizardProvider({
       signAndActivateRental,
       activateRentalStep,
       openAuthorizationFlow,
+      openAgreementPreview,
+      closeAgreementPreview,
       beginRentalAgreementIntro,
       markPhotosApproved,
       markPickupEvidenceReviewOpened,
+      pickupEvidenceReviewAfterPromptAck,
+      clearPickupEvidenceReviewAfterPromptAck,
+      submitMeetupDayPickupExtension,
+      acceptMeetupDayPickupProposal,
+      declineMeetupDayPickupProposal,
     ]
   );
 
@@ -1071,6 +1277,11 @@ export function RentalWizardProvider({
     <Ctx.Provider value={value}>
       <GuidedRentalWizardBindingsProvider value={guidedBindings}>
         {children}
+        <RentalAgreementReviewSheet
+          visible={agreementPreviewOpen}
+          ctx={ctx}
+          onClose={closeAgreementPreview}
+        />
         <WizardLifecyclePromptHost />
       </GuidedRentalWizardBindingsProvider>
     </Ctx.Provider>

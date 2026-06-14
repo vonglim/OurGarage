@@ -14,6 +14,14 @@ import {
   OWNER_TIMESTAMP_PROOF_TARGET,
   type OwnerPickupBuckets,
 } from '@/lib/pickupVerificationPhotoBuckets';
+import {
+  TIMESTAMP_POSSESSION_PROOF_EMPTY_BODY,
+  TIMESTAMP_POSSESSION_PROOF_EMPTY_TITLE,
+  TIMESTAMP_POSSESSION_PROOF_HELPER,
+  TIMESTAMP_POSSESSION_PROOF_TILE_LABEL,
+  CURRENT_CONDITION_PHOTOS_LABEL,
+  OPERATIONAL_VIDEO_LABEL,
+} from '@/lib/timestampPossessionProofCopy';
 
 const HANDOFF_ITEM_PREVIEW_MAX = 4;
 
@@ -174,10 +182,10 @@ export function PickupEvidenceReviewSections({
       </View>
 
       <EvidenceGroup
-        label="Item photos"
+        label={CURRENT_CONDITION_PHOTOS_LABEL}
         helper={`Up to ${OWNER_ITEM_PHOTO_TARGET} angles of the exact item you'll receive.`}
         photos={buckets.item}
-        emptyTitle="No item photos yet"
+        emptyTitle={`No ${CURRENT_CONDITION_PHOTOS_LABEL.toLowerCase()} yet`}
         emptyBody="The owner still needs to upload condition photos of the item."
         thumbnailSize="handoffWideHero"
         category="item"
@@ -196,50 +204,27 @@ export function PickupEvidenceReviewSections({
       />
 
       <EvidenceGroup
-        label="Live possession proof"
-        helper={`Fresh photo with @username and today's date (${OWNER_TIMESTAMP_PROOF_TARGET} required).`}
+        label={TIMESTAMP_POSSESSION_PROOF_TILE_LABEL}
+        helper={`${TIMESTAMP_POSSESSION_PROOF_HELPER} (${OWNER_TIMESTAMP_PROOF_TARGET} photo).`}
         photos={buckets.timestampProof}
-        emptyTitle="No live possession check yet"
-        emptyBody="The owner must upload a fresh verification photo with username and date visible."
+        emptyTitle={TIMESTAMP_POSSESSION_PROOF_EMPTY_TITLE}
+        emptyBody={TIMESTAMP_POSSESSION_PROOF_EMPTY_BODY}
         thumbnailSize="handoffWideHero"
         category="timestamp_proof"
         onPressPhoto={onPressPhoto}
         trustHeader
       />
 
-      {buckets.additional.length > 0 ? (
-        <View style={styles.group}>
-          <Text style={styles.groupLabel}>Video (Optional)</Text>
-          <Text style={styles.groupHelper}>Short clip showing the item operating before pickup.</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.gallery}>
-            {buckets.additional.map((p) =>
-              p.mediaKind === 'video' ? (
-                <RentalEvidenceVideoThumb
-                  key={p.id}
-                  size="handoffSquare"
-                  onPress={() => onPressPhoto(p.id)}
-                />
-              ) : (
-                <RentalEvidenceThumbnail
-                  key={p.id}
-                  uri={p.signedUrl}
-                  size="handoffSquare"
-                  category="additional"
-                  canDelete={false}
-                  onPress={() => onPressPhoto(p.id)}
-                  onDelete={() => {}}
-                />
-              )
-            )}
-          </ScrollView>
-          <Text style={styles.uploadedMeta}>
-            {buckets.additional.some((p) => p.mediaKind === 'video') ? '1 video' : `${buckets.additional.length} photo${buckets.additional.length === 1 ? '' : 's'}`}
-            {formatEvidenceUploadedAt(buckets.additional[buckets.additional.length - 1]?.createdAt)
-              ? ` · latest ${formatEvidenceUploadedAt(buckets.additional[buckets.additional.length - 1]?.createdAt)}`
-              : ''}
-          </Text>
-        </View>
-      ) : null}
+      <EvidenceGroup
+        label={OPERATIONAL_VIDEO_LABEL}
+        helper="Short clip showing the item operating before pickup."
+        photos={buckets.additional}
+        emptyTitle="No video yet"
+        emptyBody="Waiting for the owner to upload an operating video."
+        thumbnailSize="handoffWideHero"
+        category="additional"
+        onPressPhoto={onPressPhoto}
+      />
     </View>
   );
 }

@@ -5,7 +5,11 @@ import type { RentalWizardDestination, RentalWizardStep } from '@/lib/rentalWiza
 /** Transient in-wizard gates that block resolver redirects until acknowledged. */
 export type WizardLifecyclePromptId =
   | 'pickup_coordination_accepted'
-  | 'return_coordination_accepted';
+  | 'return_coordination_accepted'
+  | 'return_coordination_confirm_requested'
+  | 'pickup_evidence_ready';
+
+export const PICKUP_EVIDENCE_READY_SUSPENDED_STEP: RentalWizardStep = 'prepare_pickup';
 
 export const PICKUP_COORDINATION_ACCEPTED_SUSPENDED_STEP: RentalWizardStep = 'coordinate_pickup';
 export const RETURN_COORDINATION_ACCEPTED_SUSPENDED_STEP: RentalWizardStep = 'coordinate_return';
@@ -47,9 +51,11 @@ export function createLifecyclePromptGateState(
     suspendedStep:
       id === 'pickup_coordination_accepted'
         ? PICKUP_COORDINATION_ACCEPTED_SUSPENDED_STEP
-        : id === 'return_coordination_accepted'
+        : id === 'return_coordination_accepted' || id === 'return_coordination_confirm_requested'
           ? RETURN_COORDINATION_ACCEPTED_SUSPENDED_STEP
-          : null,
+          : id === 'pickup_evidence_ready'
+            ? PICKUP_EVIDENCE_READY_SUSPENDED_STEP
+            : null,
   };
 }
 

@@ -48,8 +48,20 @@ function formatMinutesUntil(msUntil: number): string {
 
 export function buildMeetupCountdownState(
   pickupIso: string | null | undefined,
-  nowMs: number = getEffectiveNowMs()
+  nowMs: number = getEffectiveNowMs(),
+  options?: { waitingForApproval?: boolean }
 ): MeetupCountdownState {
+  if (options?.waitingForApproval) {
+    return {
+      status: 'upcoming',
+      title: 'Waiting for approval',
+      subtitle: 'Pickup time update requested — respond below.',
+      footnote: null,
+      icon: 'time-outline',
+      useLiveCountdown: false,
+    };
+  }
+
   const iso = typeof pickupIso === 'string' ? pickupIso.trim() : '';
   if (!iso) {
     return {
@@ -80,7 +92,7 @@ export function buildMeetupCountdownState(
     return {
       status: 'overdue',
       title: 'Pickup time has passed',
-      subtitle: 'Check messages and coordinate with the other party.',
+      subtitle: 'Running late? Request a new pickup time.',
       footnote: null,
       icon: 'warning-outline',
       useLiveCountdown: false,

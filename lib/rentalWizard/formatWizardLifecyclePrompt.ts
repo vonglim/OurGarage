@@ -74,6 +74,52 @@ export function buildPickupCoordinationAcceptedPromptContent(
   };
 }
 
+export function buildPickupEvidenceReadyPromptContent(
+  ctx: RentalWizardContext
+): PickupCoordinationAcceptedPromptContent {
+  const ownerShort = formatOwnerShortLabel(ctx.ownerDisplayName);
+  return {
+    headline: 'Photos uploaded',
+    body: `${ownerShort} uploaded pickup evidence for this rental. Review the photos before meetup.`,
+    detailLines: [],
+    primaryLabel: 'Review photos',
+  };
+}
+
+export function buildReturnCoordinationConfirmRequestedPromptContent(
+  ctx: RentalWizardContext
+): ReturnCoordinationAcceptedPromptContent {
+  const returnIso = resolveRentalReturnIso(ctx.rental) ?? ctx.returnIso;
+  const location = (ctx.rental.return_location ?? ctx.rental.meetup_location ?? '').trim();
+  const scheduleLine = formatPromptMeetupDateTime(returnIso);
+
+  const detailLines: string[] = [];
+  if (scheduleLine) detailLines.push(scheduleLine);
+  if (location) detailLines.push(location);
+
+  if (ctx.viewerRole === 'owner') {
+    const renterShort = formatRenterShortLabel(ctx.counterpartyDisplayName);
+    const renterConfirmed =
+      renterShort === 'The renter'
+        ? 'The renter confirmed the return location and return time.'
+        : `${renterShort} confirmed the return location and return time.`;
+    return {
+      headline: 'Return details to review',
+      body: renterConfirmed,
+      detailLines,
+      primaryLabel: 'Confirm return details',
+    };
+  }
+
+  const ownerShort = formatOwnerShortLabel(ctx.ownerDisplayName);
+  return {
+    headline: 'Return details to review',
+    body: `${ownerShort} confirmed the return location and return time.`,
+    detailLines,
+    primaryLabel: 'Confirm return details',
+  };
+}
+
 export function buildReturnCoordinationAcceptedPromptContent(
   ctx: RentalWizardContext
 ): ReturnCoordinationAcceptedPromptContent {

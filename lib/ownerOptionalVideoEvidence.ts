@@ -7,6 +7,7 @@ import {
   bucketOwnerPickupPhotos,
   type PickupPhotoLike,
 } from '@/lib/pickupVerificationPhotoBuckets';
+import { OPERATIONAL_VIDEO_LABEL } from '@/lib/timestampPossessionProofCopy';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
 
 export const OPTIONAL_OPERATIONAL_VIDEO_MAX_SECONDS = 15;
@@ -52,7 +53,7 @@ export function navigateToOptionalOperationalVideoCapture(
   if (Platform.OS === 'web') {
     Alert.alert(
       'Video evidence',
-      'Optional operational video is available in the OurGarage mobile app.'
+      `${OPERATIONAL_VIDEO_LABEL} is available in the OurGarage mobile app.`
     );
     return;
   }
@@ -91,7 +92,7 @@ export function promptOwnerOptionalOperationalVideo(input: {
   if (Platform.OS === 'web') {
     Alert.alert(
       'Video evidence',
-      'Optional operational video is available in the OurGarage mobile app.'
+      `${OPERATIONAL_VIDEO_LABEL} is available in the OurGarage mobile app.`
     );
     return;
   }
@@ -99,13 +100,13 @@ export function promptOwnerOptionalOperationalVideo(input: {
   if (ownerOptionalVideoSlotFull(existingAdditionalCount)) {
     Alert.alert(
       'Video already added',
-      'Only one optional video is allowed. Remove the existing video before uploading another.'
+      `Only one ${OPERATIONAL_VIDEO_LABEL.toLowerCase()} is allowed. Remove the existing video before uploading another.`
     );
     return;
   }
 
   Alert.alert(
-    'Video (Optional)',
+    OPERATIONAL_VIDEO_LABEL,
     `Record or choose one short video (max ${OPTIONAL_OPERATIONAL_VIDEO_MAX_SECONDS} seconds).`,
     [
       {

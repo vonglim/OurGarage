@@ -170,6 +170,32 @@ export function resolveIncomingMeetupProposalValues(lane: MeetupPhaseCoordinatio
   };
 }
 
+export function resolveCounterpartyProposalChangeFlags(input: {
+  phase: CoordinateMeetupPhase;
+  lane: MeetupPhaseCoordinationLane;
+  ctx: RentalWizardContext;
+}): {
+  locationChanged: boolean;
+  timeChanged: boolean;
+  /** True when counterparty sent values matching the viewer baseline (confirm, not a change). */
+  confirmOnly: boolean;
+} {
+  const incoming = resolveIncomingMeetupProposalValues(input.lane);
+  const baseline = resolveViewerMeetupBaselineForDiff({
+    phase: input.phase,
+    ctx: input.ctx,
+  });
+  const locationChanged =
+    incoming.location.length > 0 && !meetupLocationsEqual(incoming.location, baseline.location);
+  const timeChanged = incoming.timeIso != null && !meetupTimesEqual(incoming.timeIso, baseline.timeIso);
+  const confirmOnly =
+    !locationChanged &&
+    !timeChanged &&
+    incoming.timeIso != null &&
+    incoming.location.length > 0;
+  return { locationChanged, timeChanged, confirmOnly };
+}
+
 export function logReturnCoordinationFieldDiff(trace: CoordinateProposalFieldDiffTrace): void {
   if (typeof __DEV__ === 'undefined' || !__DEV__) return;
   console.log('[return-field-diff]', {
@@ -238,9 +264,11 @@ export function resolveCounterpartyProposalFieldHighlights(input: {
     ctx: input.ctx,
   });
 
-  const locationChanged =
-    incoming.location.length > 0 && !meetupLocationsEqual(incoming.location, baseline.location);
-  const timeChanged = incoming.timeIso != null && !meetupTimesEqual(incoming.timeIso, baseline.timeIso);
+  const { locationChanged, timeChanged, confirmOnly } = resolveCounterpartyProposalChangeFlags({
+    phase: input.phase,
+    lane: input.lane,
+    ctx: input.ctx,
+  });
 
   const trace: CoordinateProposalFieldDiffTrace = {
     phase: input.phase,
@@ -266,8 +294,8 @@ export function resolveCounterpartyProposalFieldHighlights(input: {
   }
 
   return {
-    highlightLocation: locationChanged,
-    highlightTime: timeChanged,
+    highlightLocation: locationChanged || confirmOnly,
+    highlightTime: timeChanged || confirmOnly,
     trace,
   };
 }

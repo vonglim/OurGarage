@@ -14,9 +14,22 @@ export {
 } from '@/lib/rentalAuthorization/authorizationProgress';
 export {
   resolveAuthorizationWizardStep,
-  resolveAuthorizationDeepLinkStep,
   canAccessAuthorizationEarly,
+  bothPartiesAtMeetup,
 } from '@/lib/rentalAuthorization/resolveAuthorizationWizardStep';
+export {
+  resolveAuthorizationDeepLinkStepWithInspectionGate as resolveAuthorizationDeepLinkStep,
+  resolveNormalizedAuthorizationWizardStep,
+} from '@/lib/rentalAuthorization/pickupAuthorizationRouting';
+export {
+  INSPECTION_INCOMPLETE_AUTH_MESSAGE,
+  isBindingAuthorizationWizardStep,
+  BINDING_AUTHORIZATION_WIZARD_STEPS,
+} from '@/lib/rentalAuthorization/bindingAuthorizationGate';
+export {
+  canAccessBindingAuthorization,
+  canAccessBindingAuthorizationForContext,
+} from '@/lib/pickupHandoffCompletion';
 export {
   buildEquipmentDisplay,
   resolveAuthorizationJourneyProgress,

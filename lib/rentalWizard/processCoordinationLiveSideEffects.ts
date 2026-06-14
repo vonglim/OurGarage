@@ -42,6 +42,21 @@ export function processCoordinationLiveSideEffects(input: {
     input.armLifecyclePrompt('pickup_coordination_accepted');
     return;
   }
+  if (acceptance === 'return_coordination_confirm_requested') {
+    logCoordinationBanner({
+      event: 'confirm_request_armed',
+      rentalId: input.rentalId,
+      lane: 'return',
+      kind: 'return_proposal_received',
+      recipient: input.viewerUserId,
+      proposalCreator: String(input.next.rental.last_proposed_by ?? '').trim() || null,
+      proposal_version: input.next.rental.proposal_version ?? null,
+      bannerShown: false,
+      triggerSource: input.triggerSource,
+    });
+    input.armLifecyclePrompt('return_coordination_confirm_requested');
+    return;
+  }
   if (acceptance === 'return_coordination_accepted') {
     logCoordinationBanner({
       event: 'acceptance_armed',

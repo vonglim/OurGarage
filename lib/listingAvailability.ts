@@ -111,7 +111,12 @@ export function isDateRangeAvailable(
   return true;
 }
 
-export function dayVisualState(dayIso: string, rows: ListingAvailabilityRow[]): DayAvailabilityVisual {
+export function dayVisualState(
+  dayIso: string,
+  rows: ListingAvailabilityRow[],
+  opts?: RangeAvailabilityOptions
+): DayAvailabilityVisual {
+  const ignore = opts?.ignoreOfferId?.trim() ?? '';
   const order: Record<DayAvailabilityVisual, number> = {
     available: 0,
     blocked: 1,
@@ -121,6 +126,7 @@ export function dayVisualState(dayIso: string, rows: ListingAvailabilityRow[]): 
   let best: DayAvailabilityVisual = 'available';
   for (const r of rows) {
     if (compareIsoDate(dayIso, r.startDate) < 0 || compareIsoDate(dayIso, r.endDate) > 0) continue;
+    if (r.availabilityType === 'pending' && ignore && r.sourceOfferId === ignore) continue;
     const v: DayAvailabilityVisual =
       r.availabilityType === 'booked'
         ? 'booked'
@@ -204,6 +210,42 @@ export async function removePendingAvailabilityHold(offerId: string): Promise<{ 
   if (error) {
     if (__DEV__) console.warn('[listing_availability] delete pending', error.message);
     return { ok: false, message: error.message };
+  }
+  return { ok: true };
+}
+
+/** Drop booked calendar hold when a listing-linked rental reaches a terminal status. */
+export async function releaseBookedListingAvailabilityForRental(input: {
+  offerId?: string | null;
+  rentalRequestId?: string | null;
+}): Promise<{ ok: boolean; message?: string }> {
+  if (!isSupabaseConfigured()) return { ok: false, message: 'Server not configured.' };
+  const offerId = input.offerId?.trim() ?? '';
+  const rentalRequestId = input.rentalRequestId?.trim() ?? '';
+  if (!offerId && !rentalRequestId) return { ok: true };
+
+  const supabase = getSupabase();
+  if (rentalRequestId) {
+    const { error } = await supabase
+      .from('listing_availability')
+      .delete()
+      .eq('source_request_id', rentalRequestId)
+      .eq('availability_type', 'booked');
+    if (error) {
+      if (__DEV__) console.warn('[listing_availability] delete booked request', error.message);
+      return { ok: false, message: error.message };
+    }
+  }
+  if (offerId) {
+    const { error } = await supabase
+      .from('listing_availability')
+      .delete()
+      .eq('source_offer_id', offerId)
+      .eq('availability_type', 'booked');
+    if (error) {
+      if (__DEV__) console.warn('[listing_availability] delete booked offer', error.message);
+      return { ok: false, message: error.message };
+    }
   }
   return { ok: true };
 }

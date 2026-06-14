@@ -1,5 +1,5 @@
 import { useFocusEffect } from '@react-navigation/native';
-import { Stack, useLocalSearchParams, usePathname } from 'expo-router';
+import { Stack, useLocalSearchParams, usePathname, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
@@ -10,7 +10,14 @@ import {
 import { OwnerRentalWizardProvider } from '@/components/ownerRentalWizard/OwnerRentalWizardProvider';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
 import { useAuthUserId } from '@/lib/authUser';
-import { buildOwnerRentalWizardContextWithDiagnostics } from '@/lib/ownerRentalWizard';
+import {
+  applyOwnerRentalReceiptLivePatchToContext,
+  applyOwnerRenterHandoffPatchToContext,
+  buildOwnerRentalWizardContextWithDiagnostics,
+  evaluateOwnerWizardNavigationWithLifecycleGate,
+  resolveOwnerAuthorizationObserveAutoNavigatePath,
+  resolveOwnerCoordinationTransitionAutoNavigatePath,
+} from '@/lib/ownerRentalWizard';
 import type { OwnerRentalWizardContext } from '@/lib/ownerRentalWizard/types';
 import { isOwnerPickupEvidenceLocked } from '@/lib/pickupEvidenceLock';
 import { processPendingOwnerWizardEvidenceUploads } from '@/lib/ownerWizardEvidenceFlow';
@@ -20,6 +27,7 @@ import {
   resolvePickupHandoffPresenceState,
   type LivePresencePhase,
 } from '@/lib/pickupHandoffLive';
+import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
 import { useRentalWizardRealtimeSync } from '@/lib/rentalLifecycle/useRentalWizardRealtimeSync';
 import {
   mergeWizardContextFromRentalLivePatch,
@@ -67,6 +75,7 @@ function OwnerRentalWizardLayoutContent() {
   const { rentalId: rawId } = useLocalSearchParams<{ rentalId: string }>();
   const rentalId = typeof rawId === 'string' ? rawId : '';
   const pathname = usePathname();
+  const router = useRouter();
   const pathnameRef = useRef(pathname);
   pathnameRef.current = pathname;
   const me = useAuthUserId();
@@ -174,6 +183,9 @@ function OwnerRentalWizardLayoutContent() {
 
   useRentalWizardRealtimeSync(rentalId, refresh, {
     surface: 'owner_rental_wizard_layout',
+    skipRefreshAfterHandoffWizardPatch: true,
+    skipRefreshAfterRentalPresencePatch: (live) =>
+      Boolean(live.patch.renter_confirmed_receipt_at) && !live.coordinationChanged,
     getCoordinationBaseline: () =>
       ctxRef.current?.rental ? (ctxRef.current.rental as Record<string, unknown>) : null,
     onRentalRowLivePatch: (live, meta) => {
@@ -202,11 +214,14 @@ function OwnerRentalWizardLayoutContent() {
         previousPickupCoordStatusRef.current = mergeResult.refs.previousPickupStatus;
         previousReturnCoordStatusRef.current = mergeResult.refs.previousReturnStatus;
         previousLivePhaseRef.current = mergeResult.refs.previousLivePhase;
-        ctxRef.current = mergeResult.next as OwnerRentalWizardContext;
+        const receiptSynced = applyOwnerRentalReceiptLivePatchToContext(
+          mergeResult.next as OwnerRentalWizardContext
+        );
+        ctxRef.current = receiptSynced;
         queueMicrotask(() => {
           processCoordinationLiveSideEffects({
             prev,
-            next: mergeResult.next,
+            next: receiptSynced,
             viewerUserId: me,
             rentalId,
             pathname: pathnameRef.current,
@@ -215,21 +230,13 @@ function OwnerRentalWizardLayoutContent() {
             showBanner: (banner) => showCoordinationBannerRef.current?.(banner),
           });
         });
-        return mergeResult.next as OwnerRentalWizardContext;
+        return receiptSynced;
       });
     },
     onRenterWizardHandoffPatch: (patch, meta) => {
       setCtx((prev) => {
         if (!prev) return prev;
-        const nextProgress = {
-          ...prev.wizardProgress,
-          ...(patch.renterPickupImHereAt != null
-            ? { renter_pickup_im_here_at: patch.renterPickupImHereAt }
-            : {}),
-          ...(patch.renterApprovedPickupPhotosAt != null
-            ? { renter_approved_pickup_photos_at: patch.renterApprovedPickupPhotosAt }
-            : {}),
-        };
+        const next = applyOwnerRenterHandoffPatchToContext(prev, patch);
         const prevPresence = resolvePickupHandoffPresenceState({
           rental: prev.rental,
           renterPickupImHereAt: prev.wizardProgress.renter_pickup_im_here_at,
@@ -243,15 +250,15 @@ function OwnerRentalWizardLayoutContent() {
           viewerRole: 'owner',
         });
         const nextPresence = resolvePickupHandoffPresenceState({
-          rental: prev.rental,
-          renterPickupImHereAt: nextProgress.renter_pickup_im_here_at,
-          renterApprovedPickupPhotosAt: nextProgress.renter_approved_pickup_photos_at,
-          pickupAck: prev.pickupAck,
+          rental: next.rental,
+          renterPickupImHereAt: next.wizardProgress.renter_pickup_im_here_at,
+          renterApprovedPickupPhotosAt: next.wizardProgress.renter_approved_pickup_photos_at,
+          pickupAck: next.pickupAck,
           ownerPickupPrepComplete: true,
           handoffApprovalStarted: Boolean(
-            prev.rental.handoff_approval_started_at?.trim() || prev.rental.handoff_approved_by_owner
+            next.rental.handoff_approval_started_at?.trim() || next.rental.handoff_approved_by_owner
           ),
-          handoffCompleted: prev.pickupHandoffComplete,
+          handoffCompleted: next.pickupHandoffComplete,
           viewerRole: 'owner',
         });
         logPickupHandoffLive({
@@ -266,12 +273,30 @@ function OwnerRentalWizardLayoutContent() {
           latencyMs: Date.now() - meta.receivedAt,
         });
         previousLivePhaseRef.current = nextPresence.livePresencePhase;
-        const next = { ...prev, wizardProgress: nextProgress };
         ctxRef.current = next;
         return next;
       });
     },
   });
+
+  useEffect(() => {
+    if (!ctx || loading) return;
+    const nextPath =
+      resolveOwnerCoordinationTransitionAutoNavigatePath(ctx, pathname) ??
+      resolveOwnerAuthorizationObserveAutoNavigatePath(ctx, pathname);
+    if (nextPath) {
+      if (lifecycleGateRef.current != null) {
+        clearLifecyclePromptGate();
+      }
+      logScenario('lifecycle', {
+        event: 'owner_auto_advance_wizard',
+        rentalId: ctx.rentalId,
+        from: pathname,
+        to: nextPath,
+      });
+      router.replace(nextPath as `/owner-rental-wizard/${string}/s/${string}`);
+    }
+  }, [clearLifecyclePromptGate, ctx, loading, pathname, router]);
 
   useEffect(() => {
     if (!rentalId || !me || !ctx) return;

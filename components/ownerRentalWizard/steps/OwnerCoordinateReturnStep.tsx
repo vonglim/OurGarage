@@ -25,7 +25,10 @@ import {
   coordinateScheduleFieldTitle,
   counterpartyRoleForViewer,
 } from '@/lib/rentalWizard/coordinateProposalPresentation';
-import { resolvePickupCoordinateReviewState } from '@/lib/rentalWizard/coordinatePickupReviewState';
+import {
+  isReturnCoordinationFinalizedForWizard,
+  resolvePickupCoordinateReviewState,
+} from '@/lib/rentalWizard/coordinatePickupReviewState';
 import { OWNER_WIZARD_STEP_META } from '@/lib/ownerRentalWizard/ownerWizardStepMeta';
 import {
   buildInheritedReturnDefaults,
@@ -80,6 +83,7 @@ export function OwnerCoordinateReturnStep() {
   const [suggestingChanges, setSuggestingChanges] = useState(false);
 
   const returnCoordination = ctx.meetupCoordination.return;
+  const returnCoordinationFinalized = isReturnCoordinationFinalizedForWizard(returnCoordination);
   const review = resolvePickupCoordinateReviewState({
     lane: returnCoordination,
     lastProposedBy: ctx.rental.last_proposed_by,
@@ -109,8 +113,10 @@ export function OwnerCoordinateReturnStep() {
 
   useEffect(() => {
     const merged = mergeCoordinateReturnDraft(ctx, readCoordinateReturnDraft(ctx.wizardProgress));
+    const counterpartyProposalActive =
+      returnCoordination.isPendingThisPhase && returnCoordination.viewerCanAccept;
     const mergedDraft =
-      reviewingRenterProposal
+      counterpartyProposalActive && !suggestingChanges
         ? {
             ...merged,
             location: review.laneLocation || merged.location,
@@ -160,6 +166,9 @@ export function OwnerCoordinateReturnStep() {
     review.laneDateTimeIso,
     review.laneLocation,
     reviewingRenterProposal,
+    suggestingChanges,
+    returnCoordination.isPendingThisPhase,
+    returnCoordination.viewerCanAccept,
   ]);
 
   const persistDraft = useCallback(
@@ -214,10 +223,10 @@ export function OwnerCoordinateReturnStep() {
   );
 
   const displayLocation = reviewingRenterProposal ? proposedLocation : displayDraft.location;
-  const scheduleIso = ctx.returnCoordinationAgreed
-    ? ctx.returnIso
-    : reviewingRenterProposal
-      ? proposedScheduleIso
+  const scheduleIso = reviewingRenterProposal
+    ? proposedScheduleIso
+    : returnCoordinationFinalized
+      ? ctx.returnIso
       : displayDraft.meetupTimeIso;
 
   const canAct =
@@ -228,7 +237,7 @@ export function OwnerCoordinateReturnStep() {
   const fieldHighlights = useCoordinationProposalFieldHighlight({
     phase: 'return',
     reviewingCounterpartyProposal: reviewingRenterProposal,
-    coordinationFinalized: ctx.returnCoordinationAgreed,
+    coordinationFinalized: returnCoordinationFinalized,
     lane: returnCoordination,
     ctx,
     logSurface: 'owner_coordinate_return_review',
@@ -237,21 +246,21 @@ export function OwnerCoordinateReturnStep() {
   });
 
   const fieldsLocked =
-    ctx.returnCoordinationAgreed ||
+    returnCoordinationFinalized ||
     waitingOnCounterparty ||
     reviewingRenterProposal;
 
   const counterpartyRole = counterpartyRoleForViewer(ctx);
   const locationTitle = coordinateLocationCardTitle({
     phase: 'return',
-    coordinationFinalized: ctx.returnCoordinationAgreed,
+    coordinationFinalized: returnCoordinationFinalized,
     reviewingCounterpartyProposal: reviewingRenterProposal,
     counterpartyRole,
     waitingOnCounterparty,
   });
   const scheduleTitle = coordinateScheduleFieldTitle({
     phase: 'return',
-    coordinationFinalized: ctx.returnCoordinationAgreed,
+    coordinationFinalized: returnCoordinationFinalized,
     reviewingCounterpartyProposal: reviewingRenterProposal,
     counterpartyRole,
     waitingOnCounterparty,
@@ -277,7 +286,7 @@ export function OwnerCoordinateReturnStep() {
       return;
     }
     const ok = await w.completeReturnCoordination(payload);
-    if (ok) await w.goToResolvedNext();
+    if (ok) await w.refresh();
   }, [
     canAct,
     draft,
@@ -305,7 +314,7 @@ export function OwnerCoordinateReturnStep() {
       emphasis: 'tertiary',
     };
 
-    if (ctx.returnCoordinationAgreed) {
+    if (returnCoordinationFinalized) {
       return {
         primaryLabel: 'Continue',
         primaryDisabled: false,
@@ -370,11 +379,11 @@ export function OwnerCoordinateReturnStep() {
       inlineActions: [openMessagesAction],
       footerNote: returnChanges
         ? 'The renter will be notified of your proposed return details.'
-        : undefined,
+        : 'The renter will be asked to confirm these return details.',
     };
   }, [
     canAct,
-    ctx.returnCoordinationAgreed,
+    returnCoordinationFinalized,
     handleAccept,
     handlePrimary,
     renterProposalPending,
@@ -430,7 +439,7 @@ export function OwnerCoordinateReturnStep() {
           onPressLocation={() => setLocationOpen(true)}
           scheduleIso={scheduleIso}
           lockFields={fieldsLocked}
-          coordinationFinalized={ctx.returnCoordinationAgreed}
+          coordinationFinalized={returnCoordinationFinalized}
           reviewingCounterpartyProposal={reviewingRenterProposal}
           highlightLocation={fieldHighlights.highlightLocation}
           highlightTime={fieldHighlights.highlightTime}

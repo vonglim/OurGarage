@@ -1,24 +1,43 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { MeetupLifecycleShell } from '@/components/rentalLifecycle/MeetupLifecycleShell';
 import { useRentalWizard } from '@/components/rentalWizard/RentalWizardProvider';
 import { ui } from '@/constants/appUi';
+import { INSPECTION_INCOMPLETE_AUTH_MESSAGE } from '@/lib/rentalAuthorization/bindingAuthorizationGate';
 import { resolveAuthorizationProgress } from '@/lib/rentalAuthorization/authorizationProgress';
+import { canAccessBindingAuthorizationForContext } from '@/lib/pickupHandoffCompletion';
 
 export function DigitalSignatureStep() {
   const router = useRouter();
   const w = useRentalWizard();
   const { ctx } = w;
   const progress = useMemo(() => resolveAuthorizationProgress(ctx), [ctx]);
+  const inspectionComplete = useMemo(
+    () => canAccessBindingAuthorizationForContext(ctx),
+    [ctx]
+  );
   const [legalName, setLegalName] = useState(ctx.rental.signed_name ?? '');
 
   const canSign =
-    legalName.trim().length >= 2 && progress.securityHoldAuthorized && !progress.digitalSignatureComplete;
+    inspectionComplete &&
+    legalName.trim().length >= 2 &&
+    progress.securityHoldAuthorized &&
+    !progress.digitalSignatureComplete;
 
-  const onSignAndActivate = () => void w.signAndActivateRental(legalName.trim());
+  const onPrimary = () => {
+    if (!inspectionComplete) {
+      Alert.alert('Inspection required', INSPECTION_INCOMPLETE_AUTH_MESSAGE);
+      return;
+    }
+    if (progress.digitalSignatureComplete) {
+      void w.goToResolvedNext();
+    } else {
+      void w.signAndActivateRental(legalName.trim());
+    }
+  };
 
   return (
     <MeetupLifecycleShell
@@ -35,17 +54,21 @@ export function DigitalSignatureStep() {
             ? 'Signing…'
             : 'Sign & activate rental'
       }
-      primaryDisabled={!canSign && !progress.digitalSignatureComplete}
+      primaryDisabled={(!canSign && !progress.digitalSignatureComplete) || !inspectionComplete}
       primaryBusy={w.authorizationBusy}
-      onPrimary={() => {
-        if (progress.digitalSignatureComplete) {
-          void w.goToResolvedNext();
-        } else {
-          void onSignAndActivate();
-        }
-      }}
-      footerNote="By signing, you agree your typed name is a valid electronic signature."
+      onPrimary={onPrimary}
+      footerNote={
+        inspectionComplete
+          ? 'By signing, you agree your typed name is a valid electronic signature.'
+          : INSPECTION_INCOMPLETE_AUTH_MESSAGE
+      }
     >
+      {!inspectionComplete ? (
+        <View style={styles.inspectionGate}>
+          <Text style={styles.inspectionGateText}>{INSPECTION_INCOMPLETE_AUTH_MESSAGE}</Text>
+        </View>
+      ) : null}
+
       <View style={styles.padCard}>
         <Text style={styles.padLabel}>Signature</Text>
         <TextInput
@@ -54,7 +77,7 @@ export function DigitalSignatureStep() {
           placeholder="Full legal name"
           autoCapitalize="words"
           style={styles.padInput}
-          editable={!progress.digitalSignatureComplete}
+          editable={!progress.digitalSignatureComplete && inspectionComplete}
         />
         {legalName.trim().length >= 2 ? (
           <Text style={styles.scriptPreview}>{legalName.trim()}</Text>
@@ -74,6 +97,8 @@ export function DigitalSignatureStep() {
 }
 
 const styles = StyleSheet.create({
+  inspectionGate: { paddingBottom: 8 },
+  inspectionGateText: { fontSize: 14, color: '#9A3412', lineHeight: 20 },
   padCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,

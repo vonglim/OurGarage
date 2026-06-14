@@ -1,7 +1,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Image, StyleSheet, Text, TextInput, View, type ScrollView } from 'react-native';
+import { Image, StyleSheet, Text, TextInput, View, Alert, type ScrollView } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 
 import { BackHeader } from '@/components/AppHeaders';
@@ -17,6 +17,13 @@ import { wizardStepTitleStyle } from '@/constants/wizardCopy';
 import { useAuthUserId } from '@/lib/authUser';
 import { hydrateListingsFromSupabase } from '@/lib/hydrateListingsFromSupabase';
 import { insertRentalRequest, type HandoffPreference } from '@/lib/insertRentalRequest';
+import {
+  defaultHandoffPreferenceForOwnerHandoff,
+  listingHandoffMismatchPromptMessage,
+  parseOwnerHandoffFromListing,
+  renterHandoffPreferenceLabel,
+  renterHandoffPreferenceMatchesOwner,
+} from '@/lib/listingOwnerHandoffPreference';
 import { buildListingIntentSnapshot } from '@/lib/listingIntentSnapshot';
 import { billingDaysInclusive, isDateRangeAvailable } from '@/lib/listingAvailability';
 import { compareIsoDate, formatIsoDateMedium } from '@/lib/listingAvailabilityDates';
@@ -57,10 +64,11 @@ export default function ListingRentalIntentScreen() {
 
   const mainScrollRef = useRef<ScrollView>(null);
   const submitInFlight = useRef(false);
+  const handoffInitializedRef = useRef(false);
   const [step, setStep] = useState<WizardStep>(1);
   const [rentalStartIso, setRentalStartIso] = useState<string | null>(null);
   const [rentalEndIso, setRentalEndIso] = useState<string | null>(null);
-  const [handoff, setHandoff] = useState<HandoffPreference>('either');
+  const [handoff, setHandoff] = useState<HandoffPreference>('pickup');
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -76,6 +84,34 @@ export default function ListingRentalIntentScreen() {
   );
 
   const listing = useMemo(() => (listingId ? getListingById(listingId) : undefined), [listingId]);
+
+  const ownerHandoffMode = useMemo(
+    () => (listing ? parseOwnerHandoffFromListing(listing) : null),
+    [listing]
+  );
+
+  useEffect(() => {
+    if (!listing || handoffInitializedRef.current) return;
+    handoffInitializedRef.current = true;
+    setHandoff(defaultHandoffPreferenceForOwnerHandoff(ownerHandoffMode));
+  }, [listing, ownerHandoffMode]);
+
+  const onHandoffChange = useCallback(
+    (key: HandoffPreference) => {
+      if (
+        ownerHandoffMode != null &&
+        ownerHandoffMode !== 'both' &&
+        !renterHandoffPreferenceMatchesOwner(ownerHandoffMode, key)
+      ) {
+        Alert.alert(
+          'Handoff preference',
+          listingHandoffMismatchPromptMessage(ownerHandoffMode, renterHandoffPreferenceLabel(key))
+        );
+      }
+      setHandoff(key);
+    },
+    [ownerHandoffMode]
+  );
 
   const rows = useListingAvailabilityStore((s) => (listingId ? s.byListingId[listingId] ?? [] : []));
 
@@ -309,7 +345,7 @@ export default function ListingRentalIntentScreen() {
       return (
         <View style={styles.pad}>
           <Text style={wizardStepTitleStyle}>How would you like to get it?</Text>
-          <ThreeLinePreferenceCards options={HANDOFF_OPTIONS} value={handoff} onChange={setHandoff} />
+          <ThreeLinePreferenceCards options={HANDOFF_OPTIONS} value={handoff} onChange={onHandoffChange} />
           <WizardSubtitle outerStyle={styles.helperAfterCards}>
             Delivery availability depends on the owner&apos;s settings.
           </WizardSubtitle>
@@ -334,6 +370,7 @@ export default function ListingRentalIntentScreen() {
     onChangeDates,
     handoff,
     message,
+    onHandoffChange,
     reviewBody,
   ]);
 

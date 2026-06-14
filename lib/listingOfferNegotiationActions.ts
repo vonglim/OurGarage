@@ -178,9 +178,8 @@ export async function ownerDeclineListingOfferProposal(
     return { ok: false, message: 'Could not update negotiation. Try again.' };
   }
 
-  if (lockFromDecline) {
-    void removePendingAvailabilityHold(id);
-  }
+  // Release dates so the renter can re-select the same range while negotiation stays open.
+  await removePendingAvailabilityHold(id);
   void hydrateListingAvailability(listingId);
 
   if (renterId && renterId !== me) {

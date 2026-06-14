@@ -960,14 +960,13 @@ export function OfferLiveVerificationStepContent({ draft, updateDraft }: StepsCo
 
   return (
     <View style={styles.stepPad}>
-      <Text style={styles.centerHeading}>Live possession check</Text>
+      <Text style={styles.centerHeading}>Timestamp proof (Required)</Text>
       <WizardSubtitle>
-        One fresh photo so the host knows the item is available and in your hands right now.
+        One photo with the item and note in the same frame. On the note: @username, today&apos;s date, rental ID optional.
       </WizardSubtitle>
 
       <Text style={styles.verifyHandoffNote}>
-        Listing photos can be older. This photo is tied to your offer, keeps everyone accountable, and helps renters feel
-        confident — separate from the host&apos;s listing photos.
+        Listing photos can be older. This required proof is tied to your offer — separate from the host&apos;s gallery.
       </Text>
 
       <Text style={styles.tierLabel}>Required</Text>
@@ -977,14 +976,13 @@ export function OfferLiveVerificationStepContent({ draft, updateDraft }: StepsCo
         </View>
         <View style={styles.verifyMid}>
           <View style={styles.verifyTitleRow}>
-            <Text style={styles.verifyTitle}>Fresh verification photo</Text>
+            <Text style={styles.verifyTitle}>Timestamp proof (Required)</Text>
             <View style={styles.badgeReq}>
               <Text style={styles.badgeReqText}>REQUIRED</Text>
             </View>
           </View>
           <Text style={styles.verifyDesc}>
-            The actual item in frame with your handwritten @username and today&apos;s date — held next to it like the
-            sample below.
+            Item + note in one photo. Note: @username, today&apos;s date, rental ID optional.
           </Text>
           <Text style={styles.verifyCaptureHint}>
             {Platform.OS === 'web'
@@ -1038,9 +1036,9 @@ export function OfferLiveVerificationStepContent({ draft, updateDraft }: StepsCo
 
       <View style={styles.verifQuickTips}>
         <Text style={styles.verifQuickTipsTitle}>Quick checklist</Text>
-        <Text style={styles.verifQuickTipLine}>Whole item visible</Text>
-        <Text style={styles.verifQuickTipLine}>@username + today&apos;s date on a note</Text>
-        <Text style={styles.verifQuickTipLine}>Bright, even light</Text>
+        <Text style={styles.verifQuickTipLine}>Item + note in same photo</Text>
+        <Text style={styles.verifQuickTipLine}>@username and today&apos;s date on note</Text>
+        <Text style={styles.verifQuickTipLine}>Rental ID optional</Text>
       </View>
 
       <View style={styles.exampleExplain}>
@@ -1049,7 +1047,7 @@ export function OfferLiveVerificationStepContent({ draft, updateDraft }: StepsCo
           <Text style={styles.exampleExplainTitle}>Sample layout</Text>
         </View>
         <Text style={styles.exampleExplainBody}>
-          A simple note next to the gear is all you need — it keeps the marketplace friendly and transparent.
+          Required: item and note in one frame. Note shows @username and today&apos;s date.
         </Text>
         <View style={styles.exampleRow}>
           <Image source={POSSESSION_VERIFICATION_EXAMPLE} style={styles.exampleImg} contentFit="cover" />
@@ -1166,7 +1164,7 @@ export function buildReviewRows(draft: WizardDraft): { label: string; value: str
       }`,
     },
     {
-      label: 'Live possession check',
+      label: 'Timestamp proof (Required)',
       value: draft.verificationPhoto?.remoteUrl ? 'Captured ✓' : '—',
     },
   ];

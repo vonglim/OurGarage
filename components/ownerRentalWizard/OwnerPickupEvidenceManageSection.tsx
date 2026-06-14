@@ -6,6 +6,11 @@ import { RentalEvidenceThumbnail } from '@/components/RentalEvidenceThumbnail';
 import { ui } from '@/constants/appUi';
 import type { PickupEvidencePhoto } from '@/lib/pickupEvidenceDisplay';
 import { bucketOwnerPickupPhotos } from '@/lib/pickupVerificationPhotoBuckets';
+import {
+  CURRENT_CONDITION_PHOTOS_LABEL,
+  OPERATIONAL_VIDEO_LABEL,
+  TIMESTAMP_POSSESSION_PROOF_TILE_LABEL,
+} from '@/lib/timestampPossessionProofCopy';
 
 export type OwnerPickupEvidenceManageSectionProps = {
   photos: readonly PickupEvidencePhoto[];
@@ -26,10 +31,10 @@ export function OwnerPickupEvidenceManageSection({
   const groups = useMemo((): GroupDef[] => {
     const buckets = bucketOwnerPickupPhotos([...photos]);
     return [
-      { label: 'Item photos', photos: buckets.item },
+      { label: CURRENT_CONDITION_PHOTOS_LABEL, photos: buckets.item },
       { label: 'Serial / model', photos: buckets.serial },
-      { label: 'Live possession', photos: buckets.timestampProof },
-      { label: 'Video (Optional)', photos: buckets.additional },
+      { label: TIMESTAMP_POSSESSION_PROOF_TILE_LABEL, photos: buckets.timestampProof },
+      { label: OPERATIONAL_VIDEO_LABEL, photos: buckets.additional },
     ].filter((g) => g.photos.length > 0);
   }, [photos]);
 

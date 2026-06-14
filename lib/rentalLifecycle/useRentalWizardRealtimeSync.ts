@@ -49,6 +49,10 @@ export type UseRentalWizardRealtimeSyncOptions = {
     patch: RenterWizardHandoffPatch,
     meta: RentalWizardRealtimeSyncMeta
   ) => void;
+  /** Local handler applied ctx; skip immediate full refresh after renter handoff wizard patch. */
+  skipRefreshAfterHandoffWizardPatch?: boolean;
+  /** When true, skip immediate full refresh after rental presence live patch. */
+  skipRefreshAfterRentalPresencePatch?: (live: RentalsLiveUpdateResult) => boolean;
   debounceMs?: number;
   getCoordinationBaseline?: () => Record<string, unknown> | null;
 };
@@ -198,7 +202,10 @@ export function useRentalWizardRealtimeSync(
               });
             }
           }
-          if (live.presenceChanged) {
+          if (
+            live.presenceChanged &&
+            !optionsRef.current?.skipRefreshAfterRentalPresencePatch?.(live)
+          ) {
             runImmediateRefresh(liveMeta);
           } else if (live.coordinationChanged && !optionsRef.current?.onRentalRowLivePatch) {
             scheduleDebouncedRefresh(liveMeta);
@@ -219,7 +226,9 @@ export function useRentalWizardRealtimeSync(
           wizPatch?.renterConfirmedPickupReceiptAt
         ) {
           optionsRef.current?.onRenterWizardHandoffPatch?.(wizPatch, meta);
-          runImmediateRefresh(meta);
+          if (!optionsRef.current?.skipRefreshAfterHandoffWizardPatch) {
+            runImmediateRefresh(meta);
+          }
           return;
         }
         scheduleDebouncedRefresh(meta);

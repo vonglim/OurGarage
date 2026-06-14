@@ -13,6 +13,16 @@ export type PickupCoordinateReviewState = {
   laneDateTimeIso: string | null;
 };
 
+/**
+ * Return wizard UI finalization — uses lane state, not row-only `agreed_return_datetime`.
+ * Stays false while a pending return proposal is active even after a prior direct confirm.
+ */
+export function isReturnCoordinationFinalizedForWizard(
+  lane: MeetupPhaseCoordinationLane
+): boolean {
+  return lane.coordinationComplete;
+}
+
 export function resolvePickupCoordinateReviewState(input: {
   lane: MeetupPhaseCoordinationLane;
   lastProposedBy?: string | null;

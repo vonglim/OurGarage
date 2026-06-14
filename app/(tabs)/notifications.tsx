@@ -8,6 +8,7 @@ import { FlatList, RectButton, Swipeable } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { cardChrome, ui } from '@/constants/appUi';
+import { useAuthUserId } from '@/lib/authUser';
 import { KeyboardDismissScreen } from '@/components/KeyboardDismissScreen';
 import { MainTabFab, useMainTabFabBottomReserve } from '@/components/MainTabFab';
 import { ScreenWrapper } from '@/components/ScreenWrapper';
@@ -16,11 +17,13 @@ import { openChatForRequest } from '@/lib/openRequestChat';
 import type { AppNotification } from '@/store/notificationsStore';
 import { resolveRequestFromRouteId } from '@/store/requestsStore';
 import { markNotificationAsRead } from '@/lib/markNotificationsRead';
+import { enrichRentalRequestNotificationMessage } from '@/lib/formatRentalRequestNotification';
 import { isRentalJourneyNotificationType, pushRentalFromNotification } from '@/lib/rentalNavigation';
 import {
   useNotificationsList,
   useNotificationsStore,
 } from '@/store/notificationsStore';
+import { usePendingRentalRequestsActivityStore } from '@/store/pendingRentalRequestsActivityStore';
 
 function typePillStyle(t: AppNotification['type']) {
   switch (t) {
@@ -170,8 +173,29 @@ function NotificationMessage({ text }: { text: string }) {
   return <Text style={styles.message}>{text}</Text>;
 }
 
+function RentalRequestNotificationMessage({
+  notification,
+}: {
+  notification: AppNotification;
+}) {
+  const pendingRows = usePendingRentalRequestsActivityStore((s) => s.rows);
+  const pendingRow =
+    notification.rentalRequestId != null
+      ? pendingRows.find((row) => row.id === notification.rentalRequestId) ?? null
+      : null;
+  const copy = enrichRentalRequestNotificationMessage(notification, pendingRow);
+  return (
+    <View style={styles.messageBlock}>
+      <Text style={styles.messagePrimary}>{copy.headline}</Text>
+      {copy.detail ? <Text style={styles.messageSecondary}>{copy.detail}</Text> : null}
+      <Text style={styles.messageAction}>{copy.action}</Text>
+    </View>
+  );
+}
+
 export default function NotificationsScreen() {
   const router = useRouter();
+  const me = useAuthUserId();
   const insets = useSafeAreaInsets();
   const fabBottomReserve = useMainTabFabBottomReserve();
   const list = useNotificationsList();
@@ -179,7 +203,10 @@ export default function NotificationsScreen() {
   useFocusEffect(
     useCallback(() => {
       useNotificationsStore.getState().cleanupStaleNotifications();
-    }, []),
+      if (me.trim()) {
+        void usePendingRentalRequestsActivityStore.getState().refreshFromServer(me.trim());
+      }
+    }, [me]),
   );
 
   const handleDelete = useCallback((id: string) => {
@@ -201,9 +228,16 @@ export default function NotificationsScreen() {
     }
 
     if (n.type === 'rental_request') {
+      const rentalRequestId =
+        typeof n.rentalRequestId === 'string' && n.rentalRequestId.trim() !== ''
+          ? n.rentalRequestId.trim()
+          : undefined;
       router.push({
         pathname: '/activity-my-shop',
-        params: { section: 'inbox' },
+        params: {
+          section: 'inbox',
+          ...(rentalRequestId ? { rentalRequestId } : {}),
+        },
       });
       return;
     }
@@ -398,7 +432,11 @@ export default function NotificationsScreen() {
                     </Text>
                     <Text style={styles.time}>{formatWhen(n.timestamp)}</Text>
                   </View>
-                  <NotificationMessage text={n.message} />
+                  {n.type === 'rental_request' ? (
+                    <RentalRequestNotificationMessage notification={n} />
+                  ) : (
+                    <NotificationMessage text={n.message} />
+                  )}
                 </Pressable>
               </View>
             </Swipeable>
@@ -547,5 +585,12 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontWeight: '400',
     color: ui.textSubtle,
+  },
+  messageAction: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '600',
+    color: ui.primary,
+    marginTop: 2,
   },
 });

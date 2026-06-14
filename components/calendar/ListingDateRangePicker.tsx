@@ -86,7 +86,10 @@ export function ListingDateRangePicker({
     [startDate, endDate, rows, ignoreOfferId, onChange]
   );
 
-  const getDayVisual = useCallback((iso: string) => dayVisualState(iso, rows), [rows]);
+  const getDayVisual = useCallback(
+    (iso: string) => dayVisualState(iso, rows, { ignoreOfferId: ignoreOfferId ?? undefined }),
+    [rows, ignoreOfferId]
+  );
   const getRangeRole = useCallback(
     (iso: string) => rangeRoleFor(iso, startDate, endDate),
     [startDate, endDate]

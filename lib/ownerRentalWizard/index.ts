@@ -3,6 +3,16 @@ export {
   buildOwnerRentalWizardContextWithDiagnostics,
 } from '@/lib/ownerRentalWizard/buildOwnerRentalWizardContext';
 export {
+  applyOwnerRentalReceiptLivePatchToContext,
+  applyOwnerRenterHandoffPatchToContext,
+  mergeRenterWizardHandoffProgress,
+  ownerCtxHasRenterConfirmedReceipt,
+  ownerHandoffReceiptPatchIsLocallySufficient,
+} from '@/lib/ownerRentalWizard/ownerHandoffLivePatch';
+export { resolveOwnerAuthorizationObserveAutoNavigatePath } from '@/lib/ownerRentalWizard/ownerHandoffWizardSync';
+export { resolveOwnerCoordinationTransitionAutoNavigatePath } from '@/lib/ownerRentalWizard/ownerCoordinationWizardSync';
+export { evaluateOwnerWizardNavigationWithLifecycleGate } from '@/lib/ownerRentalWizard/ownerWizardLifecyclePromptGate';
+export {
   resolveOwnerLogicalWizardStep,
   resolveOwnerMeetupPresentation,
   resolveOwnerRentalWizardDestination,

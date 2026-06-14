@@ -4,6 +4,7 @@ import {
   resolveAcceptedMeetupLocation,
   resolveAcceptedRentalPickupIso,
 } from '@/lib/rentalWizard/acceptedPickupCoordination';
+import { isPickupCoordinationComplete } from '@/lib/rentalWizard/rentalWizardGates';
 import {
   applyTimeToLockedMeetupDate,
   ymdFromIso,
@@ -26,6 +27,7 @@ export type ReturnMeetupDateSource =
   | 'return_datetime'
   | 'return_time'
   | 'pickup_clock_on_return_end_day'
+  | 'same_as_pickup'
   | 'display_schedule_return'
   | 'none';
 
@@ -111,6 +113,25 @@ function isoFromRentalEndSchedule(ctx: RentalWizardContext): ResolvedReturnMeetu
  * Never uses agreed_pickup_datetime or pickup meetup date as the return day anchor.
  */
 export function resolveReturnMeetupTimeIso(ctx: RentalWizardContext): ResolvedReturnMeetupTime {
+  const agreed = parseValidIso(ctx.rental.agreed_return_datetime);
+  if (agreed && !isOperationalReturnPollutedByPickupDay(ctx, agreed)) {
+    return { iso: agreed, source: 'agreed_return_datetime' };
+  }
+
+  const pickupIso = resolveAcceptedRentalPickupIso(ctx.rental);
+  if (pickupIso && isPickupCoordinationComplete(ctx)) {
+    if (!rentalSpansMultipleCalendarDays(ctx)) {
+      return { iso: pickupIso, source: 'same_as_pickup' };
+    }
+    const endYmd = rentalEndYmd(ctx);
+    if (endYmd) {
+      return {
+        iso: applyTimeToLockedMeetupDate(endYmd, pickupIso),
+        source: 'pickup_clock_on_return_end_day',
+      };
+    }
+  }
+
   const display = resolveMeetupDisplaySchedule({
     rental: ctx.rental,
     requestSchedulingMeta: ctx.requestSchedulingMeta,
@@ -118,11 +139,6 @@ export function resolveReturnMeetupTimeIso(ctx: RentalWizardContext): ResolvedRe
   });
   if (display.returnIso && !isOperationalReturnPollutedByPickupDay(ctx, display.returnIso)) {
     return { iso: display.returnIso, source: 'display_schedule_return' };
-  }
-
-  const agreed = parseValidIso(ctx.rental.agreed_return_datetime);
-  if (agreed && !isOperationalReturnPollutedByPickupDay(ctx, agreed)) {
-    return { iso: agreed, source: 'agreed_return_datetime' };
   }
 
   const fromSchedule = isoFromRentalEndSchedule(ctx);

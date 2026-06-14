@@ -15,8 +15,30 @@ import {
 import { isPickupHandoffBilaterallyComplete } from '@/lib/rentalOperationalAttention';
 import type { RentalWizardContext, RentalWizardRentalRow, RentalWizardStep } from '@/lib/rentalWizard/types';
 import type { RentalVerificationRow } from '@/lib/rentalVerification';
-import { resolveAuthorizationStepForPickupHandoff } from '@/lib/rentalAuthorization/resolveAuthorizationWizardStep';
+import { resolveAuthorizationWizardStep } from '@/lib/rentalAuthorization/resolveAuthorizationWizardStep';
 import { canShowWizardActiveRental } from '@/lib/rentalWizard/rentalWizardGates';
+
+export { INSPECTION_INCOMPLETE_AUTH_MESSAGE } from '@/lib/rentalAuthorization/bindingAuthorizationGate';
+
+/** Binding authorization requires in-person inspection to be complete. */
+export function canAccessBindingAuthorization(completion: PickupHandoffCompletionState): boolean {
+  return completion.pickupInspectionComplete || completion.renterConfirmedReceipt;
+}
+
+export function canAccessBindingAuthorizationForContext(ctx: RentalWizardContext): boolean {
+  const completion = resolvePickupHandoffCompletionState(
+    buildPickupHandoffCompletionInputFromWizard(ctx)
+  );
+  return canAccessBindingAuthorization(completion);
+}
+
+function resolveAuthorizationStepAfterInspection(
+  ctx: RentalWizardContext,
+  completion: PickupHandoffCompletionState
+): RentalWizardStep | null {
+  if (!canAccessBindingAuthorization(completion)) return null;
+  return resolveAuthorizationWizardStep(ctx);
+}
 
 export type PickupHandoffNextOperationalStep =
   | 'active_rental'
@@ -399,56 +421,6 @@ export function resolveWizardPickupHandoffStep(ctx: RentalWizardContext): {
     };
   }
 
-  if (completion.physicalPossessionConfirmed && !activation.rentalActivated) {
-    const authStep = resolveAuthorizationStepForPickupHandoff(ctx);
-    if (authStep) {
-      return {
-        step: authStep,
-        reason: `authorization_${authStep}`,
-        completion,
-        activation,
-      };
-    }
-  }
-
-  if (completion.signaturesRequired && !completion.signaturesComplete) {
-    const authStep = resolveAuthorizationStepForPickupHandoff(ctx);
-    if (authStep) {
-      return {
-        step: authStep,
-        reason: 'signatures_required',
-        completion,
-        activation,
-      };
-    }
-  }
-
-  if (completion.renterConfirmedReceipt || completion.ownerConfirmedHandoff) {
-    const authStep = resolveAuthorizationStepForPickupHandoff(ctx);
-    if (authStep) {
-      return {
-        step: authStep,
-        reason: completion.renterConfirmedReceipt
-          ? 'renter_confirmed_receipt'
-          : 'owner_confirmed_handoff',
-        completion,
-        activation,
-      };
-    }
-  }
-
-  if (!isMeetupPresenceRoutingActive(completion)) {
-    const authStep = resolveAuthorizationStepForPickupHandoff(ctx);
-    if (authStep) {
-      return {
-        step: authStep,
-        reason: 'presence_deactivated',
-        completion,
-        activation,
-      };
-    }
-  }
-
   const renterAtMeetup = Boolean(
     ctx.wizardProgress.renter_pickup_im_here_at?.trim() || ctx.rental.renter_arrived_at?.trim()
   );
@@ -464,7 +436,7 @@ export function resolveWizardPickupHandoffStep(ctx: RentalWizardContext): {
       };
     }
     if (!activation.rentalActivated) {
-      const authStep = resolveAuthorizationStepForPickupHandoff(ctx);
+      const authStep = resolveAuthorizationStepAfterInspection(ctx, completion);
       if (authStep) {
         return {
           step: authStep,
@@ -474,24 +446,27 @@ export function resolveWizardPickupHandoffStep(ctx: RentalWizardContext): {
         };
       }
     }
-    const authStep = resolveAuthorizationStepForPickupHandoff(ctx);
+  }
+
+  if (renterAtMeetup && !ownerAtMeetup) {
+    return { step: 'meetup_day', reason: 'renter_arrived_waiting_owner', completion, activation };
+  }
+
+  if (canAccessBindingAuthorization(completion) && !activation.rentalActivated) {
+    const authStep = resolveAuthorizationStepAfterInspection(ctx, completion);
     if (authStep) {
+      const reason = completion.renterConfirmedReceipt
+        ? 'inspection_complete_authorization'
+        : completion.physicalPossessionConfirmed
+          ? `authorization_${authStep}`
+          : 'post_inspection_authorization';
       return {
         step: authStep,
-        reason: 'both_present_authorization',
+        reason,
         completion,
         activation,
       };
     }
-    return {
-      step: 'equipment_confirmation',
-      reason: 'both_present_receipt_confirmed',
-      completion,
-      activation,
-    };
-  }
-  if (renterAtMeetup && !ownerAtMeetup) {
-    return { step: 'meetup_day', reason: 'renter_arrived_waiting_owner', completion, activation };
   }
   if (ctx.pickupEvidenceReadiness.renterEvidenceReady || ctx.ownerPickupPhotoCount > 0) {
     if (ctx.pickupAck.renter || ctx.wizardProgress.renter_approved_pickup_photos_at) {

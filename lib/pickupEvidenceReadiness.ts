@@ -7,7 +7,7 @@ import {
 } from '@/lib/pickupVerificationPhotoBuckets';
 
 export type PickupEvidenceReadiness = {
-  /** Owner uploaded required item + serial + live possession proof. */
+  /** Owner uploaded required item + serial + timestamp proof. */
   ownerEvidenceReady: boolean;
   /** Renter can open review (same threshold as ownerEvidenceReady). */
   renterEvidenceReady: boolean;

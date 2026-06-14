@@ -6,6 +6,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Pressable } from '@/components/Pressable';
 import { ui } from '@/constants/appUi';
 import type { PickupPhotoCategory } from '@/lib/pickupVerificationPhotoBuckets';
+import { TIMESTAMP_POSSESSION_PROOF_TILE_LABEL } from '@/lib/timestampPossessionProofCopy';
 
 const TILE_ICON: Record<PickupPhotoCategory, keyof typeof Ionicons.glyphMap> = {
   item: 'cube-outline',
@@ -17,7 +18,7 @@ const TILE_ICON: Record<PickupPhotoCategory, keyof typeof Ionicons.glyphMap> = {
 const TILE_LABEL: Record<PickupPhotoCategory, string> = {
   item: 'Item Photos',
   serial: 'Serial / Model',
-  timestamp_proof: 'Verification Photo',
+  timestamp_proof: TIMESTAMP_POSSESSION_PROOF_TILE_LABEL,
   additional: 'Additional Photos',
 };
 

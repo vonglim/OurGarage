@@ -21,7 +21,7 @@ import { CancelledSummaryStep } from '@/components/rentalWizard/steps/CancelledS
 import { RentalConfirmedTransitionStep } from '@/components/rentalWizard/steps/RentalConfirmedTransitionStep';
 import { CoordinateReturnStep } from '@/components/rentalWizard/steps/CoordinateReturnStep';
 import { WizardCoordinateStep } from '@/components/rentalWizard/WizardCoordinateStep';
-import { MeetupCountdownCard } from '@/components/rentalWizard/shared/MeetupCountdownCard';
+import { MeetupDayScheduleSection } from '@/components/rentalWizard/shared/MeetupDayScheduleSection';
 import { WizardDarkMeetupCards } from '@/components/rentalWizard/shared/WizardMeetupCards';
 import { WizardTransitionConfirmedDetails } from '@/components/rentalWizard/shared/WizardTransitionConfirmedDetails';
 import { ui } from '@/constants/appUi';
@@ -156,6 +156,13 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
           primaryDisabled={w.arrivalActionBusy}
         >
           <WizardDarkMeetupCards ctx={ctx} />
+          <MeetupDayScheduleSection
+            ctx={ctx}
+            proposalBusy={w.proposalBusy}
+            onSubmitExtension={w.submitMeetupDayPickupExtension}
+            onAcceptProposal={w.acceptMeetupDayPickupProposal}
+            onDeclineProposal={w.declineMeetupDayPickupProposal}
+          />
           <View style={styles.statusPill}>
             <Ionicons name="time-outline" size={16} color="#A5B4FC" />
             <Text style={styles.statusPillText}>
@@ -178,8 +185,8 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
           }
           onPrimary={waitingForOwner ? () => {} : () => void w.markImHerePickup()}
           primaryDisabled={waitingForOwner || w.arrivalActionBusy}
-          secondaryLabel="Review rental agreement"
-          onSecondary={w.openAuthorizationFlow}
+          secondaryLabel="Preview rental agreement"
+          onSecondary={w.openAgreementPreview}
           footerInlineActions={[
             {
               label: 'Message owner',
@@ -195,7 +202,13 @@ export function RentalWizardStepView({ step }: RentalWizardStepViewProps) {
             actionLabel="View map"
           />
           <InfoPanel icon="calendar-outline" title="Pickup time" value={formatWizardDateTime(ctx.pickupIso)} />
-          <MeetupCountdownCard pickupIso={ctx.pickupIso} />
+          <MeetupDayScheduleSection
+            ctx={ctx}
+            proposalBusy={w.proposalBusy}
+            onSubmitExtension={w.submitMeetupDayPickupExtension}
+            onAcceptProposal={w.acceptMeetupDayPickupProposal}
+            onDeclineProposal={w.declineMeetupDayPickupProposal}
+          />
           {waitingForOwner ? (
             <StatusBanner
               tone="info"

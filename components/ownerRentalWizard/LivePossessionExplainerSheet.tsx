@@ -5,30 +5,19 @@ import { StyleSheet, Text, View } from 'react-native';
 import { Pressable } from '@/components/Pressable';
 import { WizardFormSheet } from '@/components/wizard/WizardFormSheet';
 import { ui } from '@/constants/appUi';
+import {
+  TIMESTAMP_POSSESSION_PROOF_EXPLAINER_LEAD,
+  TIMESTAMP_POSSESSION_PROOF_GOOD_PHOTO_BULLETS,
+  TIMESTAMP_POSSESSION_PROOF_LABEL,
+  TIMESTAMP_POSSESSION_PROOF_TIPS,
+  TIMESTAMP_POSSESSION_PROOF_VERIFY_BULLETS,
+} from '@/lib/timestampPossessionProofCopy';
 
 export type LivePossessionExplainerSheetProps = {
   visible: boolean;
   onContinue: (dontShowAgain: boolean) => void;
   onCancel: () => void;
 };
-
-const VERIFY_BULLETS = [
-  'You had possession of the item before handoff',
-  'The item was present at pickup time',
-  'The photo reflects the current condition of the item',
-] as const;
-
-const TIPS = [
-  'Include the entire item in the frame',
-  'Take the photo near the meetup time',
-  'Ensure the item is clearly visible and well lit',
-] as const;
-
-const GOOD_PHOTO_BULLETS = [
-  'Entire item visible',
-  'Taken near pickup time',
-  'Clear and well lit',
-] as const;
 
 export function LivePossessionExplainerSheet({
   visible,
@@ -44,7 +33,7 @@ export function LivePossessionExplainerSheet({
   return (
     <WizardFormSheet
       visible={visible}
-      title="Live possession photo"
+      title={TIMESTAMP_POSSESSION_PROOF_LABEL}
       onClose={onCancel}
       hideCancelButton
       sheetStyle={styles.sheet}
@@ -67,13 +56,11 @@ export function LivePossessionExplainerSheet({
         </View>
       }
     >
-      <Text style={styles.lead}>
-        Take a photo of the item shortly before handing it to the renter.
-      </Text>
+      <Text style={styles.lead}>{TIMESTAMP_POSSESSION_PROOF_EXPLAINER_LEAD}</Text>
 
       <Text style={styles.sectionTitle}>This photo helps verify that:</Text>
       <View style={styles.bulletList}>
-        {VERIFY_BULLETS.map((bullet) => (
+        {TIMESTAMP_POSSESSION_PROOF_VERIFY_BULLETS.map((bullet) => (
           <View key={bullet} style={styles.bulletRow}>
             <Text style={styles.bulletMark}>•</Text>
             <Text style={styles.bulletText}>{bullet}</Text>
@@ -83,7 +70,7 @@ export function LivePossessionExplainerSheet({
 
       <Text style={styles.sectionTitle}>For best results:</Text>
       <View style={styles.bulletList}>
-        {TIPS.map((tip) => (
+        {TIMESTAMP_POSSESSION_PROOF_TIPS.map((tip) => (
           <View key={tip} style={styles.bulletRow}>
             <Text style={styles.bulletMark}>•</Text>
             <Text style={styles.bulletText}>{tip}</Text>
@@ -94,7 +81,7 @@ export function LivePossessionExplainerSheet({
       <View style={styles.exampleCallout}>
         <Text style={styles.exampleTitle}>📷 Good photo:</Text>
         <View style={styles.exampleBulletList}>
-          {GOOD_PHOTO_BULLETS.map((bullet) => (
+          {TIMESTAMP_POSSESSION_PROOF_GOOD_PHOTO_BULLETS.map((bullet) => (
             <View key={bullet} style={styles.bulletRow}>
               <Text style={styles.bulletMark}>•</Text>
               <Text style={styles.exampleBulletText}>{bullet}</Text>

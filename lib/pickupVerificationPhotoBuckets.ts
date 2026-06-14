@@ -12,7 +12,7 @@ export const OWNER_ITEM_PHOTO_TARGET = 4;
 export const OWNER_SERIAL_PHOTO_TARGET = 1;
 export const OWNER_TIMESTAMP_PROOF_TARGET = 1;
 
-/** Minimum counts required before pickup handoff can proceed (item + serial + timestamp proof). */
+/** Minimum counts required before pickup handoff can proceed. */
 export const OWNER_PICKUP_REQUIRED_ITEM_MIN = 1;
 export const OWNER_PICKUP_REQUIRED_SERIAL_MIN = 1;
 export const OWNER_PICKUP_REQUIRED_TIMESTAMP_MIN = 1;
@@ -94,7 +94,7 @@ export function bucketOwnerPickupPhotos<T extends PickupPhotoLike>(ownerPickup: 
   return buckets;
 }
 
-/** Owner must have at least one item, serial, and timestamp-proof photo (each explicitly categorized or legacy-filled). */
+/** Owner must have current condition, serial, timestamp proof, and operational video. */
 export function ownerPickupPhotoTargetsMet<T extends PickupPhotoLike>(ownerPickup: T[]): boolean {
   const b = bucketOwnerPickupPhotos(ownerPickup);
   return (

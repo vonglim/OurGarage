@@ -14,6 +14,7 @@ import {
   signedUrlForEvidencePath,
   type PartyRole,
 } from '@/lib/rentalVerification';
+import { TIMESTAMP_POSSESSION_PROOF_CAMERA_HINT } from '@/lib/timestampPossessionProofCopy';
 import { useCameraSessionStore } from '@/store/cameraSessionStore';
 
 export function openOwnerPickupEvidenceCamera(
@@ -68,7 +69,7 @@ export async function processPendingOwnerWizardEvidenceUploads(input: {
     st.setCapturedPhotoUris([]);
     Alert.alert(
       'Category required',
-      'Open the camera from Item, Serial, or Live possession so each photo is saved to the right group.'
+      TIMESTAMP_POSSESSION_PROOF_CAMERA_HINT
     );
     return { uploadedCount: 0 };
   }

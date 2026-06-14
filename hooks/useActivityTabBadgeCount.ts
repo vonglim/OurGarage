@@ -10,6 +10,7 @@ import { useOffersStore } from '@/store/offersStore';
 import { getAuthUserIdSync } from '@/lib/authUser';
 import { getEffectiveRentalStatus, useRequestsStore } from '@/store/requestsStore';
 import { useListingOffersActivityStore } from '@/store/listingOffersActivityStore';
+import { usePendingRentalRequestsActivityStore } from '@/store/pendingRentalRequestsActivityStore';
 
 /**
  * Attention count for the Activity tab: unread request/rental notifications (not chat),
@@ -20,6 +21,7 @@ export function useActivityTabBadgeCount(): number {
   const requests = useRequestsStore((s) => s.requests);
   const offers = useOffersStore((s) => s.offers);
   const listingOfferRows = useListingOffersActivityStore((s) => s.rows);
+  const pendingRentalRequestRows = usePendingRentalRequestsActivityStore((s) => s.rows);
 
   return useMemo(() => {
     const me = getAuthUserIdSync();
@@ -72,6 +74,25 @@ export function useActivityTabBadgeCount(): number {
       total += 1;
     }
 
+    const hasUnreadRentalRequestNotif = new Set(
+      notifications
+        .filter(
+          (x) =>
+            visibleUnread(x) &&
+            x.type === 'rental_request' &&
+            typeof x.rentalRequestId === 'string' &&
+            x.rentalRequestId.trim() !== ''
+        )
+        .map((x) => String(x.rentalRequestId).trim())
+    );
+
+    for (const row of pendingRentalRequestRows) {
+      if (row.owner_user_id != null && row.owner_user_id !== me) continue;
+      if (row.status !== 'pending') continue;
+      if (hasUnreadRentalRequestNotif.has(row.id)) continue;
+      total += 1;
+    }
+
     return total;
-  }, [notifications, requests, offers, listingOfferRows]);
+  }, [notifications, requests, offers, listingOfferRows, pendingRentalRequestRows]);
 }

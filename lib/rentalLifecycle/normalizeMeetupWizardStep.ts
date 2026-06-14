@@ -1,4 +1,8 @@
-import { resolveAuthorizationWizardStep } from '@/lib/rentalAuthorization/resolveAuthorizationWizardStep';
+import {
+  resolveNormalizedAuthorizationWizardStep,
+} from '@/lib/rentalAuthorization/pickupAuthorizationRouting';
+import { isBindingAuthorizationWizardStep } from '@/lib/rentalAuthorization/bindingAuthorizationGate';
+import { canAccessBindingAuthorizationForContext } from '@/lib/pickupHandoffCompletion';
 import type { RentalWizardContext, RentalWizardStep } from '@/lib/rentalWizard/types';
 
 const AUTH_MILESTONE_STEPS = new Set<RentalWizardStep>([
@@ -16,17 +20,21 @@ export function normalizeMeetupWizardStep(
   step: RentalWizardStep,
   ctx: RentalWizardContext
 ): RentalWizardStep {
+  if (isBindingAuthorizationWizardStep(step) && !canAccessBindingAuthorizationForContext(ctx)) {
+    return resolveNormalizedAuthorizationWizardStep(ctx);
+  }
+
   if (AUTH_MILESTONE_STEPS.has(step)) {
-    return resolveAuthorizationWizardStep(ctx);
+    return resolveNormalizedAuthorizationWizardStep(ctx);
   }
 
   switch (step) {
     case 'rental_agreement_intro':
     case 'liability_disclosures':
-      return resolveAuthorizationWizardStep(ctx);
+      return resolveNormalizedAuthorizationWizardStep(ctx);
     case 'equipment_confirmation':
     case 'rental_authorization':
-      return resolveAuthorizationWizardStep(ctx);
+      return resolveNormalizedAuthorizationWizardStep(ctx);
     default:
       return step;
   }

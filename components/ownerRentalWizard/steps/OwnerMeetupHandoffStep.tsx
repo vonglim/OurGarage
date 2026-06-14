@@ -3,7 +3,7 @@ import { StyleSheet, Text } from 'react-native';
 
 import { useOwnerRentalWizard } from '@/components/ownerRentalWizard/OwnerRentalWizardProvider';
 import { OwnerMeetupLifecyclePanel } from '@/components/rentalLifecycle/OwnerMeetupLifecyclePanel';
-import { MeetupCountdownCard } from '@/components/rentalWizard/shared/MeetupCountdownCard';
+import { MeetupDayScheduleSection } from '@/components/rentalWizard/shared/MeetupDayScheduleSection';
 import { WizardDarkMeetupCards } from '@/components/rentalWizard/shared/WizardMeetupCards';
 import { WizardMeetupStatusBanner } from '@/components/rentalWizard/shared/WizardMeetupDayPanels';
 import { WizardItemCard } from '@/components/rentalWizard/WizardItemCard';
@@ -125,7 +125,13 @@ export function OwnerMeetupHandoffStep() {
         thumbUri={ctx.heroImageUrl}
       />
       <WizardDarkMeetupCards ctx={ctx} />
-      <MeetupCountdownCard pickupIso={ctx.pickupIso} />
+      <MeetupDayScheduleSection
+        ctx={ctx}
+        proposalBusy={w.proposalBusy}
+        onSubmitExtension={w.submitMeetupDayPickupExtension}
+        onAcceptProposal={w.acceptMeetupDayPickupProposal}
+        onDeclineProposal={w.declineMeetupDayPickupProposal}
+      />
       {statusBanner ? (
         <WizardMeetupStatusBanner
           tone={statusBanner.tone}

@@ -30,6 +30,7 @@ import { markAllNonMessageNotificationsAsRead } from '@/lib/markNotificationsRea
 import { hydrateListingAvailability, useListingAvailabilityStore } from '@/store/listingAvailabilityStore';
 import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
 import { useListingOffersActivityStore } from '@/store/listingOffersActivityStore';
+import { usePendingRentalRequestsActivityStore } from '@/store/pendingRentalRequestsActivityStore';
 import { useUnreadMessagesTotal } from '@/store/messageUnreadStore';
 import {
   getEffectiveRentalStatus,
@@ -174,6 +175,7 @@ export default function ActivityScreen() {
       markAllNonMessageNotificationsAsRead();
       void mergeRecentNotificationsFromServer();
       void refreshListingRentalRequests();
+      void usePendingRentalRequestsActivityStore.getState().refreshFromServer(me.trim());
       void refreshUnifiedRentals();
       void hydrateListingsFromSupabase();
       return () => {
@@ -300,7 +302,8 @@ export default function ActivityScreen() {
         kind: 'listing_booking' as const,
         title: pendingListingTitle(row),
         meta: `${Number.isFinite(Number(row.price)) ? formatUsd(Number(row.price)) : '—'} · ${listingRentalDurationLabel(row.duration_type)}`,
-        hero: null as string | null,
+        hero: row.listing_snapshot?.hero_image_url?.trim() ?? null,
+        rentalRequestId: row.id,
       };
     }
     const offer = shopIncomingActionableOffers[0];
@@ -375,6 +378,18 @@ export default function ActivityScreen() {
                   onPress={() => {
                     if (needsAttentionPrimary.kind === 'listing_offer' && needsAttentionPrimary.offerId) {
                       openListingOfferDetail(needsAttentionPrimary.offerId);
+                      return;
+                    }
+                    if (needsAttentionPrimary.kind === 'listing_booking') {
+                      router.push({
+                        pathname: '/activity-my-shop',
+                        params: {
+                          section: 'inbox',
+                          ...(needsAttentionPrimary.rentalRequestId
+                            ? { rentalRequestId: needsAttentionPrimary.rentalRequestId }
+                            : {}),
+                        },
+                      });
                       return;
                     }
                     router.push('/activity-my-shop');

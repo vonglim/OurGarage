@@ -22,6 +22,7 @@ export type MeetupLifecycleProgressIndex = 0 | 1 | 2;
 
 export type OwnerMeetupSubstate =
   | 'awaiting_renter_arrival'
+  | 'awaiting_owner_arrival'
   | 'renter_inspecting'
   | 'inspection_complete'
   | 'renter_reviewing_agreement'
@@ -89,7 +90,7 @@ export function resolveOwnerMeetupSubstate(ctx: RentalWizardContext): OwnerMeetu
   const inspectionDone = completion.renterConfirmedReceipt;
 
   if (!both) {
-    if (completion.renterArrived) return 'renter_inspecting';
+    if (completion.renterArrived) return 'awaiting_owner_arrival';
     return 'awaiting_renter_arrival';
   }
 
@@ -175,7 +176,7 @@ function resolveOwnerMeetupSubstateFromParts(
   if (activation.rentalActivated) return 'rental_active';
   const both = bothAtMeetup;
   if (!both) {
-    if (completion.renterArrived) return 'renter_inspecting';
+    if (completion.renterArrived) return 'awaiting_owner_arrival';
     return 'awaiting_renter_arrival';
   }
   if (!completion.renterConfirmedReceipt) return 'renter_inspecting';
@@ -299,12 +300,44 @@ function buildOwnerProgressItems(
   substate: OwnerMeetupSubstate,
   auth: ReturnType<typeof resolveAuthorizationProgress>
 ): MeetupLifecyclePresentation['ownerProgressItems'] {
-  if (substate === 'awaiting_renter_arrival' || substate === 'renter_inspecting') {
+  if (substate === 'awaiting_renter_arrival') {
+    return [
+      {
+        id: 'arrival',
+        label: 'Waiting for renter to arrive',
+        status: 'active',
+      },
+      {
+        id: 'possession',
+        label: 'Renter confirms possession',
+        status: 'pending',
+      },
+      { id: 'done', label: 'Inspection complete', status: 'pending' },
+    ];
+  }
+
+  if (substate === 'awaiting_owner_arrival') {
+    return [
+      {
+        id: 'renter',
+        label: 'Renter checked in',
+        status: 'done',
+      },
+      {
+        id: 'owner',
+        label: 'Mark your arrival to begin inspection',
+        status: 'active',
+      },
+      { id: 'done', label: 'Inspection complete', status: 'pending' },
+    ];
+  }
+
+  if (substate === 'renter_inspecting') {
     return [
       {
         id: 'started',
         label: 'Renter is reviewing the item',
-        status: substate === 'renter_inspecting' ? 'active' : 'pending',
+        status: 'active',
       },
       {
         id: 'possession',

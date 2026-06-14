@@ -84,6 +84,7 @@ import { ownerSetListingOfferStatus } from '@/lib/listingOfferLifecycleActions';
 import { formatListingPriceWithUnit, useListingsStore } from '@/store/listingsStore';
 import { hydrateListingAvailability } from '@/store/listingAvailabilityStore';
 import { useListingOffersActivityStore } from '@/store/listingOffersActivityStore';
+import { usePendingRentalRequestsActivityStore } from '@/store/pendingRentalRequestsActivityStore';
 import { useMessageUnreadStore, useUnreadMessagesTotal } from '@/store/messageUnreadStore';
 import type { AppNotification } from '@/store/notificationsStore';
 import { useNotificationsStore } from '@/store/notificationsStore';
@@ -612,6 +613,7 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
       void refreshActivityScreenFromSupabase();
       void mergeRecentNotificationsFromServer();
       void refreshListingRentalRequests();
+      void usePendingRentalRequestsActivityStore.getState().refreshFromServer(me.trim());
       void refreshUnifiedRentals();
       void hydrateListingsFromSupabase();
       if (__DEV__) {
@@ -621,7 +623,7 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
         cancelled = true;
         activityRentalsIntentPendingSyncRef.current = false;
       };
-    }, [mode, refreshListingRentalRequests, refreshUnifiedRentals, router])
+    }, [me, mode, refreshListingRentalRequests, refreshUnifiedRentals, router])
   );
 
   /** Close open swipe rows when leaving this screen so rows do not stay stuck after navigation or refresh. */
@@ -649,10 +651,19 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
     [unifiedRentals, me]
   );
 
-  const params = useLocalSearchParams<{ section?: string | string[] }>();
+  const params = useLocalSearchParams<{ section?: string | string[]; rentalRequestId?: string | string[] }>();
+  const focusRentalRequestId = useMemo(() => {
+    const raw = params.rentalRequestId;
+    const v = Array.isArray(raw) ? raw[0] : raw;
+    return typeof v === 'string' && v.trim() !== '' ? v.trim() : null;
+  }, [params.rentalRequestId]);
   const activeWorkspaceSection = useMemo(
-    () => parseWorkspaceSection(mode, firstWorkspaceParam(params.section)),
-    [mode, params.section]
+    () =>
+      parseWorkspaceSection(
+        mode,
+        focusRentalRequestId ? 'inbox' : firstWorkspaceParam(params.section)
+      ),
+    [mode, params.section, focusRentalRequestId]
   );
   const unreadMessagesTotal = useUnreadMessagesTotal();
 
@@ -1813,6 +1824,7 @@ export function ActivityWorkspaceScreen({ mode }: { mode: ActivityWorkspaceMode 
                           <ActivityOwnerBookingRequestCard
                             key={row.id}
                             row={row}
+                            highlighted={focusRentalRequestId === row.id}
                             busy={busyRentalRequestId === row.id}
                             onApprove={() => void onApproveListingRental(row.id)}
                             onDecline={() => void onDeclineListingRental(row.id)}

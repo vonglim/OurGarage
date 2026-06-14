@@ -28,6 +28,7 @@ import {
   type WizardCoordinationPatchRefs,
 } from '@/lib/rentalWizard/applyWizardCoordinationLivePatch';
 import { processCoordinationLiveSideEffects } from '@/lib/rentalWizard/processCoordinationLiveSideEffects';
+import { processPickupEvidenceLiveSideEffects } from '@/lib/rentalWizard/processPickupEvidenceLiveSideEffects';
 import {
   coordinationSyncSnapshotFromRow,
   logCoordinationSyncTrace,
@@ -37,6 +38,7 @@ import {
   type CoordinationFreshnessMeta,
 } from '@/lib/meetupCoordinationFreshness';
 import { logScenario } from '@/lib/rentalLifecycle/scenarioDevLog';
+import { resolveRenterPickupInspectionAutoNavigatePath } from '@/lib/pickupHandoffWizardSync';
 import {
   createLifecyclePromptGateState,
   type WizardLifecyclePromptGateState,
@@ -97,6 +99,7 @@ function RentalWizardLayoutContent() {
     source: 'fetch_refresh',
   });
   const coordinationRevisionRef = useRef(0);
+  const prevCtxForEvidenceRef = useRef<RentalWizardContext | null>(null);
 
   const clearLifecyclePromptGate = useCallback(() => {
     lifecycleGateRef.current = null;
@@ -327,6 +330,17 @@ function RentalWizardLayoutContent() {
   });
 
   useEffect(() => {
+    if (!ctx) return;
+    processPickupEvidenceLiveSideEffects({
+      prev: prevCtxForEvidenceRef.current,
+      next: ctx,
+      pathname: pathnameRef.current,
+      armLifecyclePrompt,
+    });
+    prevCtxForEvidenceRef.current = ctx;
+  }, [armLifecyclePrompt, ctx]);
+
+  useEffect(() => {
     if (!rentalId || !me || !ctx) return;
     syncReturnProposalWaitingLatch({
       rentalId,
@@ -359,6 +373,20 @@ function RentalWizardLayoutContent() {
     lifecycleGateRef.current = null;
     setLifecycleGate(createLifecyclePromptGateState(null));
   }, [rentalId]);
+
+  useEffect(() => {
+    if (!ctx || loading) return;
+    const nextPath = resolveRenterPickupInspectionAutoNavigatePath(ctx, pathname);
+    if (nextPath) {
+      logScenario('lifecycle', {
+        event: 'renter_auto_advance_inspection',
+        rentalId: ctx.rentalId,
+        from: pathname,
+        to: nextPath,
+      });
+      router.replace(nextPath as `/rental-wizard/${string}/s/${string}`);
+    }
+  }, [ctx, loading, pathname, router]);
 
   const simulatePickupAcceptedOverlay = useCallback(() => {
     if (!rentalId) return;

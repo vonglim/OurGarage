@@ -273,6 +273,27 @@ import {
   ownerPickupPhotoTargetsMet,
   type PickupPhotoCategory,
 } from '@/lib/pickupVerificationPhotoBuckets';
+import {
+  pickupPhotoCategoryDisplayLabel,
+  TIMESTAMP_POSSESSION_PROOF_CAMERA_HINT,
+  TIMESTAMP_POSSESSION_PROOF_CHECKLIST_OWNER,
+  TIMESTAMP_POSSESSION_PROOF_CHECKLIST_OWNER_AUTO,
+  TIMESTAMP_POSSESSION_PROOF_CHECKLIST_RENTER_AUTO,
+  TIMESTAMP_POSSESSION_PROOF_EMPTY_OWNER,
+  TIMESTAMP_POSSESSION_PROOF_EMPTY_RENTER_BODY,
+  TIMESTAMP_POSSESSION_PROOF_EMPTY_RENTER_WAITING,
+  TIMESTAMP_POSSESSION_PROOF_EMPTY_TITLE,
+  TIMESTAMP_POSSESSION_PROOF_EXAMPLE_ACCESSIBILITY,
+  TIMESTAMP_POSSESSION_PROOF_EXAMPLE_PANEL_BODY,
+  TIMESTAMP_POSSESSION_PROOF_MODAL_CAPTION_OWNER,
+  TIMESTAMP_POSSESSION_PROOF_MODAL_CAPTION_RENTER,
+  TIMESTAMP_POSSESSION_PROOF_OWNER_PREP,
+  TIMESTAMP_POSSESSION_PROOF_OWNER_PREP_BANNER,
+  TIMESTAMP_POSSESSION_PROOF_OWNER_WAITING_RENTER,
+  TIMESTAMP_POSSESSION_PROOF_RENTER_REVIEW,
+  TIMESTAMP_POSSESSION_PROOF_SECTION_SUB,
+  TIMESTAMP_POSSESSION_PROOF_TILE_LABEL,
+} from '@/lib/timestampPossessionProofCopy';
 import { mapSupabaseRequestSelectRowToApp } from '@/lib/supabaseRequests';
 import {
   deriveDualConfirmation,
@@ -493,7 +514,7 @@ const OWNER_PICKUP_ITEMS = [
   },
   {
     id: 'op-upload-verification',
-    label: 'Live possession photo',
+    label: TIMESTAMP_POSSESSION_PROOF_CHECKLIST_OWNER,
     required: true as const,
     control: 'auto' as const,
   },
@@ -546,12 +567,11 @@ function buildOwnerPickupDoneEffective(
 function pickupAutoRowHelper(itemId: string, role: 'owner' | 'renter'): string | undefined {
   if (role === 'renter') return renterPickupAutoRowHelper(itemId);
   if (role === 'owner') {
-    if (itemId === 'op-upload-verification')
-      return "A fresh verification photo for this handoff (listing gallery may be older). Include @username + today's date.";
+    if (itemId === 'op-upload-verification') return TIMESTAMP_POSSESSION_PROOF_CHECKLIST_OWNER_AUTO;
     return 'Completed automatically when requirements are met.';
   }
   if (itemId === 'rp-review-photos') return 'Automatically checked when you view owner photos';
-  if (itemId === 'rp-verify-note') return 'Automatically checked when you open the live possession photo';
+  if (itemId === 'rp-verify-note') return TIMESTAMP_POSSESSION_PROOF_CHECKLIST_RENTER_AUTO;
   return undefined;
 }
 
@@ -612,7 +632,7 @@ function VerificationPhotoSectionHeader({ showTrustBadge }: { showTrustBadge: bo
       <View style={styles.handoffTimestampSectionTitleRow}>
         <View style={styles.handoffVerificationHeadingTitleCluster}>
           <Ionicons name="shield-checkmark" size={16} color="#166534" />
-          <Text style={styles.handoffEvidenceGroupLabelHeading}>Live possession check</Text>
+          <Text style={styles.handoffEvidenceGroupLabelHeading}>{TIMESTAMP_POSSESSION_PROOF_TILE_LABEL}</Text>
         </View>
         {showTrustBadge ? (
           <View style={styles.handoffTimestampTrustPillWrap}>
@@ -623,10 +643,7 @@ function VerificationPhotoSectionHeader({ showTrustBadge }: { showTrustBadge: bo
           </View>
         ) : null}
       </View>
-      <Text style={styles.handoffVerificationSectionSub}>
-        Showcase photos can age; this fresh photo is for pickup so you and the renter share the same current-item view —
-        separate from the listing&apos;s original photo.
-      </Text>
+      <Text style={styles.handoffVerificationSectionSub}>{TIMESTAMP_POSSESSION_PROOF_SECTION_SUB}</Text>
     </View>
   );
 }
@@ -2730,7 +2747,7 @@ export default function RentalScreen() {
         setCapturedPhotoUris([]);
         Alert.alert(
           'Category required',
-          'Open the camera from Item, Serial, Live possession check, or Additional so each photo is saved to the right group.'
+          TIMESTAMP_POSSESSION_PROOF_CAMERA_HINT
         );
         return;
       }
@@ -2834,9 +2851,7 @@ export default function RentalScreen() {
       const c = normalizePickupPhotoCategory(p?.pickupPhotoCategory ?? null);
       if (c === 'item') return 'Item';
       if (c === 'serial') return 'Serial';
-      if (c === 'timestamp_proof') return 'Live possession check';
-      if (c === 'additional') return 'Video (Optional)';
-      return 'Photo';
+      return pickupPhotoCategoryDisplayLabel(c);
     },
     [photoViewerPhase, pickupEvidenceDisplay, returnEvidenceDisplay]
   );
@@ -4875,7 +4890,7 @@ export default function RentalScreen() {
         pickupPrimaryLabel = 'Confirm Item Ready';
         pickupPrimaryDisabled = true;
         pickupPrimaryFootnote = !ownerPickupPrepComplete
-          ? 'Capture condition, serial, and your live possession check photo, then finish your prep checklist.'
+          ? TIMESTAMP_POSSESSION_PROOF_OWNER_PREP
           : handoffCompleted
             ? 'Pickup is already complete for this rental.'
             : '';
@@ -4935,7 +4950,7 @@ export default function RentalScreen() {
   const pickupRequirementsBannerText =
     viewerRole === 'renter'
       ? 'Review owner photos, approve evidence, mark arrival at the meetup, then confirm receipt when both parties are present.'
-      : 'Capture condition, serial, and your live possession check photo, finish your prep checklist, then confirm when the item is ready.';
+      : TIMESTAMP_POSSESSION_PROOF_OWNER_PREP_BANNER;
 
   let workspaceGuidanceLine: string | null = null;
   if (workspaceStage === 'agreement') {
@@ -5336,8 +5351,9 @@ export default function RentalScreen() {
                         <Text style={styles.handoffSectionTitle}>Pickup & handoff photos</Text>
                       </View>
                       <Text style={styles.handoffSectionHelper}>
-                        Listing photos can be older — these tiles are current-item photos for this rental. Each tile saves
-                        to a fixed spot so nothing gets mixed up; preview below matches what the renter sees.
+                        Listing photos can be older — item and serial show today&apos;s condition; timestamp proof
+                        (Required) needs item + note in one photo (@username + date on note). Each tile saves to a fixed spot;
+                        preview below matches what the renter sees.
                       </Text>
                       <View style={styles.handoffTileRow}>
                         <Pressable
@@ -5412,7 +5428,7 @@ export default function RentalScreen() {
                           ) : (
                             <Ionicons name="videocam-outline" size={22} color="#166534" />
                           )}
-                          <Text style={styles.handoffTileLabel}>Live possession check</Text>
+                          <Text style={styles.handoffTileLabel}>{TIMESTAMP_POSSESSION_PROOF_TILE_LABEL}</Text>
                           <Text
                             style={[
                               styles.handoffTileCount,
@@ -5447,8 +5463,8 @@ export default function RentalScreen() {
                           <View style={styles.handoffExampleLeft}>
                             <Text style={styles.handoffExampleTitle}>How your fresh photo should look</Text>
                             <Text style={styles.handoffExampleBody}>
-                              Hold a handwritten note with your @username and today&apos;s date next to the full item.
-                              Listing photos may be older — this helps everyone agree what&apos;s on hand before handoff.
+                              {TIMESTAMP_POSSESSION_PROOF_EXAMPLE_PANEL_BODY} Listing photos may be older — this
+                              proves what you had in hand on the rental date right before handoff.
                             </Text>
                             <Text style={styles.handoffExampleMuted}>
                               Small step that keeps rentals transparent and helps renters feel confident.
@@ -5462,7 +5478,7 @@ export default function RentalScreen() {
                               pressed && styles.handoffExampleImageWrapPressed,
                             ]}
                             accessibilityRole="button"
-                            accessibilityLabel="View enlarged live possession check example"
+                            accessibilityLabel={TIMESTAMP_POSSESSION_PROOF_EXAMPLE_ACCESSIBILITY}
                           >
                             <Image
                               source={PICKUP_VERIFICATION_EXAMPLE}
@@ -5482,7 +5498,7 @@ export default function RentalScreen() {
                       <Text style={styles.handoffOwnerPreviewHead}>Preview</Text>
                       <Text style={styles.handoffOwnerPreviewSub}>
                         Same sections and order as the renter&apos;s &quot;Owner Pickup Evidence&quot; — item,
-                        serial/model, live possession check, then any additional photos.
+                        serial/model, timestamp proof (Required), then any additional photos.
                       </Text>
 
                       <Text style={styles.handoffEvidenceGroupLabel}>Item Photos</Text>
@@ -5553,10 +5569,9 @@ export default function RentalScreen() {
                         </ScrollView>
                       ) : (
                         <View style={styles.handoffEvidenceEmptyBlock}>
-                          <Text style={styles.handoffEvidenceEmptyTitle}>No live possession check yet</Text>
+                          <Text style={styles.handoffEvidenceEmptyTitle}>{TIMESTAMP_POSSESSION_PROOF_EMPTY_TITLE}</Text>
                           <Text style={styles.handoffEvidenceEmptyBody}>
-                            Use the Live possession check tile (required). It stays in this section — a fresh photo with
-                            @username + date, separate from listing gallery shots.
+                            {TIMESTAMP_POSSESSION_PROOF_EMPTY_OWNER}
                           </Text>
                         </View>
                       )}
@@ -5866,10 +5881,11 @@ export default function RentalScreen() {
                             <Ionicons name="shield-checkmark" size={22} color="#166534" />
                           </View>
                           <View style={styles.handoffExampleRenterCompactTextCol}>
-                            <Text style={styles.handoffExampleRenterCompactTitle}>Live possession check</Text>
+                            <Text style={styles.handoffExampleRenterCompactTitle}>
+                              {TIMESTAMP_POSSESSION_PROOF_TILE_LABEL}
+                            </Text>
                             <Text style={styles.handoffExampleRenterCompactBody} numberOfLines={3}>
-                              Listing photos can be older; this should be a fresh current-item photo. Double-check @username
-                              and today&apos;s date match this rental before you confirm receipt.
+                              {TIMESTAMP_POSSESSION_PROOF_RENTER_REVIEW}
                             </Text>
                           </View>
                           <Pressable
@@ -5880,7 +5896,7 @@ export default function RentalScreen() {
                               pressed && styles.handoffExampleRenterCompactThumbPressed,
                             ]}
                             accessibilityRole="button"
-                            accessibilityLabel="View enlarged live possession check example"
+                            accessibilityLabel={TIMESTAMP_POSSESSION_PROOF_EXAMPLE_ACCESSIBILITY}
                           >
                             <Image
                               source={PICKUP_VERIFICATION_EXAMPLE}
@@ -5915,10 +5931,11 @@ export default function RentalScreen() {
                         </ScrollView>
                       ) : (
                         <View style={styles.handoffEvidenceEmptyBlock}>
-                          <Text style={styles.handoffEvidenceEmptyTitle}>Waiting for live possession check</Text>
+                          <Text style={styles.handoffEvidenceEmptyTitle}>
+                            {TIMESTAMP_POSSESSION_PROOF_EMPTY_RENTER_WAITING}
+                          </Text>
                           <Text style={styles.handoffEvidenceEmptyBody}>
-                            The owner needs a fresh current-item photo with @username and today&apos;s date visible before
-                            pickup can be confirmed — listing photos alone aren&apos;t enough for this step.
+                            {TIMESTAMP_POSSESSION_PROOF_EMPTY_RENTER_BODY}
                           </Text>
                         </View>
                       )}
@@ -5935,8 +5952,7 @@ export default function RentalScreen() {
                         <View style={styles.handoffEvidenceEmptyBlock}>
                           <Text style={styles.handoffEvidenceEmptyTitle}>Waiting for owner photos</Text>
                           <Text style={styles.handoffEvidenceEmptyBody}>
-                            The owner still needs condition, serial, and their live possession check photo before pickup can
-                            be confirmed.
+                            {TIMESTAMP_POSSESSION_PROOF_OWNER_WAITING_RENTER}
                           </Text>
                         </View>
                       )}
@@ -7024,8 +7040,8 @@ export default function RentalScreen() {
               />
               <Text style={styles.exampleModalCaption}>
                 {viewerRole === 'owner'
-                  ? "Take a fresh verification photo: the full item with your handwritten @username and today's date visible beside it. Listing photos can be older — this one confirms the gear is with you now for this handoff."
-                  : 'Confirm the @username and date look handwritten, current, and match what you expect before you sign off.'}
+                  ? TIMESTAMP_POSSESSION_PROOF_MODAL_CAPTION_OWNER
+                  : TIMESTAMP_POSSESSION_PROOF_MODAL_CAPTION_RENTER}
               </Text>
             </View>
           </View>

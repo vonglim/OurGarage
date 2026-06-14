@@ -48,7 +48,7 @@ export function verificationStatusLine(draft: ListingWizardDraft): string {
   const p = draft.verificationPossession?.remoteUrl ? 1 : 0;
   const s = draft.verificationSerial?.remoteUrl ? 1 : 0;
   const r = draft.verificationReceipt?.remoteUrl ? 1 : 0;
-  if (!p && !s && !r) return 'Add a quick live possession check';
+  if (!p && !s && !r) return 'Add timestamp proof (Required)';
   const parts: string[] = [];
   parts.push(p ? 'Fresh photo ✓' : 'Fresh photo —');
   if (s) parts.push('Serial ✓');
@@ -72,7 +72,7 @@ export function listingPhotosStepReady(draft: ListingWizardDraft): boolean {
   return listingCoverAndGalleryUrlsReady(draft);
 }
 
-/** Live possession photo (item + @username + date) uploaded and persisted — required before publish. */
+/** Timestamp proof (Required) uploaded — required before publish. */
 export function listingLiveVerificationStepReady(draft: ListingWizardDraft): boolean {
   const p = draft.verificationPossession;
   return !!(p?.remoteUrl && !p.uploading && isPersistedRemoteImageUrl(p.remoteUrl));

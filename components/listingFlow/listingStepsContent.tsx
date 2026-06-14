@@ -233,7 +233,7 @@ export function ListingPhotosStepContent({ draft, updateDraft }: ListingStepsCon
   );
 }
 
-/** Step 2 — Live possession verification (required) + optional supporting shots */
+/** Step 2 — Timestamp proof (Required) + optional supporting shots */
 export function ListingLiveVerificationStepContent({ draft, updateDraft }: ListingStepsContentProps) {
   const pickSlot = useCallback(
     async (key: 'verificationPossession' | 'verificationSerial' | 'verificationReceipt') => {
@@ -256,11 +256,10 @@ export function ListingLiveVerificationStepContent({ draft, updateDraft }: Listi
 
   return (
     <View style={styles.pad}>
-      <Text style={styles.liveVerEyebrow}>Live possession check</Text>
-      <Text style={styles.h1}>Show renters it&apos;s really yours</Text>
+      <Text style={styles.liveVerEyebrow}>Timestamp proof (Required)</Text>
+      <Text style={styles.h1}>Prove you have the item today</Text>
       <WizardSubtitle>
-        A quick current-item photo with your handwritten @username and today&apos;s date helps the community stay
-        trustworthy and helps renters feel confident — same upload flow you already use.
+        One photo with item and note in the same frame. On the note: @username, today&apos;s date, rental ID optional.
       </WizardSubtitle>
 
       <View style={styles.possessionExampleCard}>
@@ -285,15 +284,15 @@ export function ListingLiveVerificationStepContent({ draft, updateDraft }: Listi
       <View style={styles.verifShell}>
         <View style={styles.verifShellHeader}>
           <Ionicons name="shield-checkmark-outline" size={18} color="#7C6AE8" />
-          <Text style={styles.verifShellTitle}>Your fresh verification photo</Text>
+          <Text style={styles.verifShellTitle}>Timestamp proof (Required)</Text>
         </View>
         <Text style={styles.verifShellBody}>
           {live
-            ? 'Renters see this as a current-item photo from your camera — no gallery picks on the app.'
-            : 'Choose one clear image with @username and today&apos;s date visible beside the item.'}
+            ? 'Camera only — item and note in one photo (@username + date on note; rental ID optional).'
+            : 'One image: item + note in frame (@username, today&apos;s date on note).'}
         </Text>
         <VerifPhotoRow
-          label="Current item photo (required)"
+          label="Timestamp proof (Required)"
           slot={draft.verificationPossession}
           onPick={() => void pickSlot('verificationPossession')}
           hintOverride={
@@ -760,7 +759,7 @@ export function ListingProtectionStepContent({ draft, updateDraft }: ListingStep
     <View style={styles.pad}>
       <Text style={styles.h1}>Protection & value</Text>
       <WizardSubtitle>
-        Estimated value helps set fair holds. Your fresh verification photo from step 2 is already on file.
+        Estimated value helps set fair holds. Your timestamp proof (Required) from step 2 is already on file.
       </WizardSubtitle>
 
       <Text style={styles.fieldLabel}>Estimated market value</Text>

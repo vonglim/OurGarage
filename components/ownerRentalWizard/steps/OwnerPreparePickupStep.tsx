@@ -42,6 +42,7 @@ import {
   mergeChecklistMapsFromRows,
   persistChecklistState,
 } from '@/lib/rentalVerification';
+import { TIMESTAMP_POSSESSION_PROOF_OWNER_PREP, OPERATIONAL_VIDEO_LABEL } from '@/lib/timestampPossessionProofCopy';
 import { formatWizardDateTime, formatWizardLocation } from '@/lib/rentalWizard/formatWizardSchedule';
 import { StyleSheet, Text, View } from 'react-native';
 import { ui } from '@/constants/appUi';
@@ -176,7 +177,7 @@ export function OwnerPreparePickupStep() {
           const existing = additionalEvidence[0]!;
           const noun = existing.mediaKind === 'video' ? 'video' : 'photo';
           Alert.alert(
-            'Video (Optional)',
+            OPERATIONAL_VIDEO_LABEL,
             `Remove the existing ${noun} to record or choose a new one.`,
             [
               {
@@ -241,7 +242,7 @@ export function OwnerPreparePickupStep() {
     <>
     <WizardLightShell
       title={meta.title}
-      subtitle="Upload verification photos and prepare your item before meetup day."
+      subtitle={TIMESTAMP_POSSESSION_PROOF_OWNER_PREP}
       onBack={() => w.goToResolvedNext()}
       onOpenMessages={w.openMessages}
       primaryLabel={primaryLabel}
@@ -308,16 +309,8 @@ export function OwnerPreparePickupStep() {
                   : () => setItemReadyConfirmed(true),
             };
           }
-          if (item.id === 'prep-photos' && !done && !ownerReady) {
-            return {
-              id: item.id,
-              label: item.label,
-              detail: item.detail,
-              done,
-              onPress: pickupEvidenceLocked
-                ? () => alertOwnerPickupEvidenceLocked()
-                : () => openCamera('item'),
-            };
+          if (item.id === 'prep-photos') {
+            return { id: item.id, label: item.label, detail: item.detail, done };
           }
           return { id: item.id, label: item.label, detail: item.detail, done };
         })}

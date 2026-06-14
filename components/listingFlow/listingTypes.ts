@@ -30,7 +30,7 @@ export type ListingWizardDraft = {
   serviceArea: string;
   dailyRate: string;
   marketValue: string;
-  /** Live possession proof: full item + handwritten @username + current date (camera capture). */
+  /** Timestamp proof (Required): item + note in one photo (@username + date on note). */
   verificationPossession: ListingPhotoSlot | null;
   /** Optional: serial/model plate for disputes, recovery, extra trust. */
   verificationSerial: ListingPhotoSlot | null;
